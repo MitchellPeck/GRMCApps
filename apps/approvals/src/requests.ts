@@ -242,7 +242,7 @@ export async function addVersion(
       [id, next, file.fileName, file.mimeType, file.buffer.length, file.buffer, note.trim(), actorEmail]
     );
     await client.query(
-      "UPDATE requests SET status = 'pending', current_version = $2, updated_at = now() WHERE id = $1",
+      "UPDATE requests SET status = 'pending', current_version = $2, updated_at = now(), decided_at = NULL WHERE id = $1",
       [id, next]
     );
     await client.query(

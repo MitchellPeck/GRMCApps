@@ -27,6 +27,19 @@ async function readMultipart(req: FastifyRequest): Promise<{
   return { fields, file };
 }
 
+// Map an unexpected error to a clean response. @fastify/multipart throws
+// FST_REQ_FILE_TOO_LARGE when a part exceeds the configured fileSize limit;
+// surface that as the same 400 the validator would have produced rather than
+// leaking a 500 + internal message.
+function uploadErrorResponse(reply: FastifyReply, e: unknown): { ok: false; error: string } {
+  if ((e as { code?: string })?.code === "FST_REQ_FILE_TOO_LARGE") {
+    reply.code(400);
+    return { ok: false, error: "File is too large (max 10 MB)." };
+  }
+  reply.code(500);
+  return { ok: false, error: (e as Error).message };
+}
+
 export async function requestsRoutes(app: FastifyInstance): Promise<void> {
   // List inbox or sent.
   app.get("/api/requests", async (req) => {
@@ -56,7 +69,7 @@ export async function requestsRoutes(app: FastifyInstance): Promise<void> {
     if (!r.ok) { reply.code(r.status); return { ok: false, error: r.error }; }
     reply
       .header("Content-Type", r.mimeType)
-      .header("Content-Disposition", `inline; filename="${r.fileName.replace(/"/g, "")}"`)
+      .header("Content-Disposition", `inline; filename="${r.fileName.replace(/[^\x20-\x7e]/g, "_").replace(/"/g, "")}"`)
       .header("Cache-Control", "private, max-age=300");
     return reply.send(r.image);
   });
@@ -81,8 +94,7 @@ export async function requestsRoutes(app: FastifyInstance): Promise<void> {
       if (!r.ok) reply.code(r.status);
       return r;
     } catch (e) {
-      reply.code(500);
-      return { ok: false, error: (e as Error).message };
+      return uploadErrorResponse(reply, e);
     }
   });
 
@@ -114,8 +126,7 @@ export async function requestsRoutes(app: FastifyInstance): Promise<void> {
       if (!r.ok) reply.code(r.status);
       return r;
     } catch (e) {
-      reply.code(500);
-      return { ok: false, error: (e as Error).message };
+      return uploadErrorResponse(reply, e);
     }
   });
 }

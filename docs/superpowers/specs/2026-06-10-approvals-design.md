@@ -15,7 +15,7 @@ Graphics is the first asset type. The data model and UI are kept generic enough 
 | Decision | Choice |
 |---|---|
 | Where it runs | New app container `apps/approvals/`, gated by hub forwardAuth |
-| Host | `app-approvals.lvh.me` |
+| Host | `approvals.lvh.me` (registry `subdomain` = `approvals`; the hub serves `<subdomain>.${BASE_DOMAIN}`) |
 | Registry slug | `approvals` |
 | Database | Own `approvals` Postgres DB + isolated role (per-app pattern) |
 | Stack | Node + TypeScript + Fastify + `pg` (matches social-posts) |
