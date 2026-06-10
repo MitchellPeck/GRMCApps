@@ -33,4 +33,11 @@ export class PgSessionStore {
       .then(() => cb(null))
       .catch((e) => cb(e));
   }
+
+  // Delete sessions whose expiry has passed. get() already ignores expired
+  // rows; this reclaims the storage so the table doesn't grow unbounded.
+  async pruneExpired(): Promise<number> {
+    const r = await this.pool.query("DELETE FROM session WHERE expire < now()");
+    return r.rowCount ?? 0;
+  }
 }

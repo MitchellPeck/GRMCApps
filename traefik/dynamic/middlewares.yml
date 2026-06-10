@@ -4,6 +4,10 @@ http:
       forwardAuth:
         address: "http://hub:3000/auth/verify"
         trustForwardHeader: true
+        # SECURITY: every X-Auth-* header the hub emits MUST be listed here.
+        # Traefik strips these from the client request and re-adds them only
+        # from the auth response — that is what prevents header spoofing. A
+        # hub-emitted identity header NOT listed here would be client-spoofable.
         authResponseHeaders:
           - X-Auth-User-Id
           - X-Auth-Email

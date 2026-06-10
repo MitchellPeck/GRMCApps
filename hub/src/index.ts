@@ -26,10 +26,16 @@ app.register(fastifyView, {
   engine: { ejs },
   root: join(__dirname, "views"),
 });
+const sessionStore = new PgSessionStore(pool);
 app.register(fastifySession, {
   secret: config.sessionSecret,
-  store: new PgSessionStore(pool),
+  store: sessionStore,
   cookieName: "sid",
+  // Don't persist sessions that were never written to. Without this, every
+  // unauthenticated forwardAuth check (/auth/verify) would create an orphan
+  // session row on the gateway hot path. The login flow mutates the session
+  // (PKCE/state, then userId), so real sessions are still saved.
+  saveUninitialized: false,
   cookie: {
     domain: config.cookieDomain,
     path: "/",
@@ -47,7 +53,17 @@ app.get("/healthz", async () => ({ ok: true }));
 
 app
   .listen({ host: "0.0.0.0", port: config.port })
-  .then(() => app.log.info(`hub listening on ${config.port}`))
+  .then(() => {
+    app.log.info(`hub listening on ${config.port}`);
+    // Periodically reclaim expired session rows (hourly).
+    const prune = setInterval(() => {
+      sessionStore
+        .pruneExpired()
+        .then((n) => n > 0 && app.log.info(`pruned ${n} expired sessions`))
+        .catch((err) => app.log.warn({ err }, "session prune failed"));
+    }, 60 * 60 * 1000);
+    prune.unref();
+  })
   .catch((err) => {
     app.log.error(err);
     process.exit(1);
