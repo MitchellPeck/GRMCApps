@@ -56,6 +56,24 @@ services:
       - "traefik.http.routers.whoami.middlewares=hub-forward-auth@file"
       - "traefik.http.services.whoami.loadbalancer.server.port=3000"
 
+  social-posts:
+    build: ./apps/social-posts
+    environment:
+      SOCIALPOSTS_DB_USER: "${SOCIALPOSTS_DB_USER}"
+      SOCIALPOSTS_DB_PASSWORD: "${SOCIALPOSTS_DB_PASSWORD}"
+      SOCIALPOSTS_DB_NAME: "${SOCIALPOSTS_DB_NAME}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [hubnet]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.social.rule=Host(`app-social.lvh.me`)"
+      - "traefik.http.routers.social.entrypoints=websecure"
+      - "traefik.http.routers.social.tls=true"
+      - "traefik.http.routers.social.middlewares=hub-forward-auth@file"
+      - "traefik.http.services.social.loadbalancer.server.port=3000"
+
 networks:
   hubnet:
 
