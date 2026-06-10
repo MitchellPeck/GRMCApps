@@ -1,8 +1,14 @@
 import { FastifyInstance } from "fastify";
+import type { AuthorizationParameters } from "openid-client";
 import { getOidcClient, generators } from "./oidc";
 import { config } from "../config";
 import { pool } from "../db";
 import { getAppByHost, getUser } from "../apps/registry";
+
+// Short-lived marker cookie set on logout. It survives the destroyed session
+// cookie and tells the next /auth/login to force a Google prompt instead of
+// letting Google silently re-authenticate the still-active account session.
+const REAUTH_COOKIE = "grmc_reauth";
 
 export async function authRoutes(app: FastifyInstance): Promise<void> {
   app.get("/auth/login", async (req, reply) => {
@@ -18,13 +24,21 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     req.session.returnTo =
       (req.query as { redirect?: string }).redirect ?? config.publicUrl;
 
-    const url = client.authorizationUrl({
+    const authParams: AuthorizationParameters = {
       scope: "openid email profile",
       code_challenge: codeChallenge,
       code_challenge_method: "S256",
       state,
-    });
-    reply.redirect(url);
+    };
+
+    // If the user just logged out, force Google to show the account chooser
+    // rather than silently re-authenticating, then consume the marker.
+    if (req.cookies[REAUTH_COOKIE]) {
+      authParams.prompt = "select_account";
+      reply.clearCookie(REAUTH_COOKIE, { domain: config.cookieDomain, path: "/" });
+    }
+
+    reply.redirect(client.authorizationUrl(authParams));
   });
 
   app.get("/auth/callback", async (req, reply) => {
@@ -74,6 +88,19 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
 
   app.get("/auth/logout", async (req, reply) => {
     await req.session.destroy();
+    // @fastify/session sets request.session = null on destroy, so its onSend
+    // hook skips clearing the cookie — clear it explicitly so the browser
+    // drops the dangling sid cookie.
+    reply.clearCookie("sid", { domain: config.cookieDomain, path: "/" });
+    // Mark this as an explicit logout so the next login forces a Google prompt.
+    reply.setCookie(REAUTH_COOKIE, "1", {
+      domain: config.cookieDomain,
+      path: "/",
+      httpOnly: true,
+      secure: true,
+      sameSite: "lax",
+      maxAge: 600,
+    });
     reply.redirect(config.publicUrl);
   });
 
