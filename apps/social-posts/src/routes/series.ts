@@ -1,6 +1,6 @@
 import { FastifyInstance } from "fastify";
 import { pool } from "../db";
-import { getAllSeries, getSeriesPosts, createSeries, updateSeriesPostField, updateSeriesMeta } from "../series";
+import { getAllSeries, getSeriesPosts, createSeries, updateSeriesPostField, updateSeriesMeta, draftSeriesPost, generateSeriesPostsWithClaude } from "../series";
 
 export async function seriesRoutes(app: FastifyInstance): Promise<void> {
   app.get("/api/series", async () => getAllSeries(pool));
@@ -23,5 +23,14 @@ export async function seriesRoutes(app: FastifyInstance): Promise<void> {
   app.patch("/api/series/:id", async (req) => {
     const { id } = req.params as { id: string };
     return updateSeriesMeta(pool, id, (req.body ?? {}) as Record<string, string>);
+  });
+
+  app.post("/api/series/plan", async (req) => {
+    return generateSeriesPostsWithClaude(pool, (req.body ?? {}) as any);
+  });
+
+  app.post("/api/series/:id/posts/:idx/draft", async (req) => {
+    const { id, idx } = req.params as { id: string; idx: string };
+    return draftSeriesPost(pool, id, Number(idx));
   });
 }

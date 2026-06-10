@@ -1,5 +1,6 @@
 import { Pool } from "pg";
-import { HISTORY_SERIES_POSTS } from "./voice";
+import { HISTORY_SERIES_POSTS, VOICE } from "./voice";
+import { callClaude, stripJsonFences } from "./claude";
 
 export interface SeriesRow {
   id: string; name: string; description: string; context: string;
@@ -118,6 +119,65 @@ export async function updateSeriesMeta(pool: Pool, seriesId: string, fields: Rec
     const r = await pool.query(`UPDATE series SET ${sets.join(", ")} WHERE id = $${vals.length}`, vals);
     if (r.rowCount === 0) return { ok: false, error: "Series not found" };
     return { ok: true };
+  } catch (e) { return { ok: false, error: (e as Error).message }; }
+}
+
+export async function draftSeriesPost(pool: Pool, seriesId: string, postIdx: number): Promise<{ ok: true; post: string; seriesName: string } | { ok: false; error: string }> {
+  try {
+    const all = await getAllSeries(pool);
+    if (!all.ok) throw new Error(all.error);
+    const series = all.series.find((s) => s.id === seriesId);
+    if (!series) throw new Error("Series not found: " + seriesId);
+
+    const pr = await getSeriesPosts(pool, seriesId);
+    if (!pr.ok) throw new Error(pr.error);
+    const post = pr.posts.find((p) => p.postIdx === postIdx);
+    if (!post) throw new Error("Post not found");
+
+    const lines = [
+      `Draft a GRMC social media post for the "${series.name}" series.`, "", VOICE, "",
+      "SERIES NAME: " + series.name,
+      "SERIES DESCRIPTION: " + series.description,
+      "SERIES CONTEXT: " + series.context,
+      "", "THIS POST: " + (postIdx + 1) + " of " + pr.posts.length,
+      "SCHEDULED DATE: " + (post.date || "TBD"),
+      "TITLE: " + post.title,
+      "ANGLE: " + (post.sub || ""),
+    ];
+    if (post.phase) lines.push("PHASE: " + post.phase);
+    lines.push("", "Write it as the next chapter in an unfolding story, not a standalone fact post.");
+    lines.push("Tone: educational but not lecture-y, warm, inviting, makes people want to follow along.");
+
+    const sys = 'You draft social media posts for Grace Resurrection Methodist Church (GRMC) in Marietta, GA. Return ONLY a JSON object with key "post" containing the post text string. No markdown fences, just valid JSON.';
+    const raw = stripJsonFences(await callClaude(pool, sys, lines.join("\n")));
+    const result = JSON.parse(raw);
+    await updateSeriesPostField(pool, seriesId, postIdx, "status", "drafted");
+    await updateSeriesPostField(pool, seriesId, postIdx, "draft", result.post);
+    return { ok: true, post: result.post, seriesName: series.name };
+  } catch (e) { return { ok: false, error: (e as Error).message }; }
+}
+
+export interface GeneratePlanParams {
+  name: string; description?: string; context?: string;
+  count: number; cadence?: string; startDate?: string;
+}
+export async function generateSeriesPostsWithClaude(pool: Pool, params: GeneratePlanParams): Promise<{ ok: true; posts: any[] } | { ok: false; error: string }> {
+  try {
+    const lines = [
+      `Generate a post schedule for a social media series called "${params.name}".`,
+      "Description: " + params.description,
+      "Context: " + params.context,
+      "Number of posts: " + params.count,
+      "Cadence: " + (params.cadence || "weekly"),
+      "Start date: " + (params.startDate || "TBD"),
+      "",
+      "Return ONLY a JSON array of objects, each with: date (string), phase (string, group label or empty), title (short post title), sub (angle/description for this post, 1-2 sentences).",
+      "Plan the arc: build toward a conclusion, group into 2-3 phases if it makes sense.",
+      "No markdown fences, just valid JSON array.",
+    ];
+    const sys = "You are a social media content strategist for Grace Resurrection Methodist Church (GRMC) in Marietta, GA.";
+    const raw = stripJsonFences(await callClaude(pool, sys, lines.join("\n")));
+    return { ok: true, posts: JSON.parse(raw) };
   } catch (e) { return { ok: false, error: (e as Error).message }; }
 }
 
