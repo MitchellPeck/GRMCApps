@@ -5,12 +5,14 @@ import { config } from "./config";
 import { ensureSchema } from "./db";
 import { meRoutes } from "./routes/me";
 import { settingsRoutes } from "./routes/settings";
+import { mailchimpRoutes } from "./routes/mailchimp";
 
 const app = Fastify({ logger: true, trustProxy: true });
 
 app.register(fastifyStatic, { root: join(__dirname, "public"), prefix: "/" });
 app.register(meRoutes);
 app.register(settingsRoutes);
+app.register(mailchimpRoutes);
 
 app.get("/healthz", async () => ({ ok: true }));
 
