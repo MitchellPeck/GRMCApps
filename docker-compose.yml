@@ -1,4 +1,18 @@
 services:
+  traefik:
+    image: traefik:v3.6
+    command: ["--configfile=/etc/traefik/traefik.yml"]
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080"   # Traefik dashboard (local only)
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./traefik/dynamic:/etc/traefik/dynamic:ro
+      - ./certs:/certs:ro
+    networks: [hubnet]
+
   postgres:
     image: postgres:16
     env_file: .env

@@ -1,0 +1,9 @@
+tls:
+  certificates:
+    - certFile: /certs/_wildcard.lvh.me.pem
+      keyFile: /certs/_wildcard.lvh.me-key.pem
+  stores:
+    default:
+      defaultCertificate:
+        certFile: /certs/_wildcard.lvh.me.pem
+        keyFile: /certs/_wildcard.lvh.me-key.pem
