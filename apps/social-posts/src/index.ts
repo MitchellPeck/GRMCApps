@@ -1,8 +1,14 @@
 import Fastify from "fastify";
+import fastifyStatic from "@fastify/static";
+import { join } from "node:path";
 import { config } from "./config";
 import { ensureSchema } from "./db";
+import { meRoutes } from "./routes/me";
 
 const app = Fastify({ logger: true, trustProxy: true });
+
+app.register(fastifyStatic, { root: join(__dirname, "public"), prefix: "/" });
+app.register(meRoutes);
 
 app.get("/healthz", async () => ({ ok: true }));
 
