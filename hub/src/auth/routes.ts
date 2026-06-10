@@ -2,6 +2,7 @@ import { FastifyInstance } from "fastify";
 import { getOidcClient, generators } from "./oidc";
 import { config } from "../config";
 import { pool } from "../db";
+import { getAppByHost, getUser } from "../apps/registry";
 
 export async function authRoutes(app: FastifyInstance): Promise<void> {
   app.get("/auth/login", async (req, reply) => {
@@ -74,5 +75,38 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   app.get("/auth/logout", async (req, reply) => {
     await req.session.destroy();
     reply.redirect(config.publicUrl);
+  });
+
+  // Called by Traefik's forwardAuth before routing to any app.
+  app.get("/auth/verify", async (req, reply) => {
+    const forwardedHost = (req.headers["x-forwarded-host"] as string) ?? "";
+    const forwardedUri = (req.headers["x-forwarded-uri"] as string) ?? "/";
+    const forwardedProto = (req.headers["x-forwarded-proto"] as string) ?? "https";
+
+    if (!req.session.userId) {
+      const original = `${forwardedProto}://${forwardedHost}${forwardedUri}`;
+      return reply.redirect(
+        `${config.publicUrl}/auth/login?redirect=${encodeURIComponent(original)}`
+      );
+    }
+
+    const appRow = await getAppByHost(forwardedHost);
+    if (!appRow || !appRow.enabled) {
+      return reply.code(403).send("Forbidden: unknown or disabled app");
+    }
+
+    const user = await getUser(req.session.userId);
+    if (!user) {
+      return reply.code(403).send("Forbidden: unknown user");
+    }
+
+    // v1: any authenticated user may access any enabled app.
+    reply
+      .header("X-Auth-User-Id", user.id)
+      .header("X-Auth-Email", user.email)
+      .header("X-Auth-Name", user.name ?? "")
+      .header("X-Auth-Roles", "user")
+      .code(200)
+      .send("ok");
   });
 }
