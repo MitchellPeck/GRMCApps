@@ -4,11 +4,13 @@ import { join } from "node:path";
 import { config } from "./config";
 import { ensureSchema } from "./db";
 import { meRoutes } from "./routes/me";
+import { settingsRoutes } from "./routes/settings";
 
 const app = Fastify({ logger: true, trustProxy: true });
 
 app.register(fastifyStatic, { root: join(__dirname, "public"), prefix: "/" });
 app.register(meRoutes);
+app.register(settingsRoutes);
 
 app.get("/healthz", async () => ({ ok: true }));
 
