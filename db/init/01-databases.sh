@@ -15,5 +15,6 @@ SQL
   echo "created database ${db} owned by ${user}"
 }
 
-create_app_db "$HUB_DB_NAME"    "$HUB_DB_USER"    "$HUB_DB_PASSWORD"
-create_app_db "$WHOAMI_DB_NAME" "$WHOAMI_DB_USER" "$WHOAMI_DB_PASSWORD"
+create_app_db "$HUB_DB_NAME"         "$HUB_DB_USER"         "$HUB_DB_PASSWORD"
+create_app_db "$WHOAMI_DB_NAME"      "$WHOAMI_DB_USER"      "$WHOAMI_DB_PASSWORD"
+create_app_db "$SOCIALPOSTS_DB_NAME" "$SOCIALPOSTS_DB_USER" "$SOCIALPOSTS_DB_PASSWORD"

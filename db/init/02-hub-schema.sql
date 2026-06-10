@@ -35,4 +35,7 @@ CREATE INDEX session_expire_idx ON session (expire);
 INSERT INTO apps (slug, name, host, icon)
 VALUES ('whoami', 'Who Am I', 'app-whoami.lvh.me', '👤');
 
+INSERT INTO apps (slug, name, host, icon)
+VALUES ('social-posts', 'Social Posts', 'app-social.lvh.me', '📣');
+
 RESET ROLE;
