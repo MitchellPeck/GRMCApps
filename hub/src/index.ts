@@ -4,6 +4,7 @@ import fastifySession from "@fastify/session";
 import { config } from "./config";
 import { pool } from "./db";
 import { PgSessionStore } from "./session-store";
+import { authRoutes } from "./auth/routes";
 
 declare module "fastify" {
   interface Session {
@@ -30,6 +31,8 @@ app.register(fastifySession, {
     maxAge: 24 * 60 * 60 * 1000,
   },
 });
+
+app.register(authRoutes);
 
 app.get("/healthz", async () => ({ ok: true }));
 
