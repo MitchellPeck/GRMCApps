@@ -1,0 +1,746 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GRMC Social Posts</title>
+<style>
+:root{--navy:#1a2744;--navy-light:#243058;--gold:#c9a84c;--gold-light:#e8c97a;--gold-muted:#f5ead4;--white:#fff;--off:#f8f6f1;--text:#1a2744;--muted:#5a6480;--hint:#9aa0b4;--border:#dde0ea;--r:8px;--rlg:12px}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:var(--off);color:var(--text);min-height:100vh}
+header{background:var(--navy);padding:14px 24px;display:flex;align-items:center;justify-content:space-between;border-bottom:2px solid var(--gold)}
+.logo{display:flex;align-items:center;gap:12px}
+.mark{width:32px;height:32px;border-radius:50%;background:var(--gold);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:var(--navy);flex-shrink:0}
+header h1{font-size:14px;font-weight:600;color:var(--white)}
+header p{font-size:11px;color:var(--gold-light);margin-top:1px}
+.hright{display:flex;align-items:center;gap:8px}
+.dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.dot-ok{background:#5DCAA5}.dot-err{background:#F09595}
+.hlabel{font-size:12px;color:rgba(255,255,255,.7)}
+.btn-hdr{padding:5px 12px;font-size:12px;font-weight:600;cursor:pointer;border-radius:var(--r);border:1px solid rgba(255,255,255,.3);background:transparent;color:var(--white)}
+.btn-hdr:hover{background:rgba(255,255,255,.1)}
+.layout{max-width:760px;margin:0 auto;padding:24px 20px 80px}
+.tabs{display:flex;gap:2px;background:var(--white);border:1px solid var(--border);border-radius:var(--rlg);padding:4px;margin-bottom:20px;flex-wrap:wrap}
+.tab{flex:1;min-width:80px;padding:8px 10px;font-size:13px;font-weight:500;text-align:center;cursor:pointer;border:none;background:none;color:var(--muted);border-radius:var(--r);transition:background .15s,color .15s}
+.tab.active{background:var(--navy);color:var(--white)}
+.tab:hover:not(.active){background:var(--off);color:var(--text)}
+.panel{display:none}.panel.active{display:block}
+.card{background:var(--white);border:1px solid var(--border);border-radius:var(--rlg);padding:20px;margin-bottom:14px}
+.ct{font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--gold);margin-bottom:14px;display:flex;align-items:center;gap:6px}
+.ct::after{content:"";flex:1;height:1px;background:var(--gold-muted)}
+.field{margin-bottom:14px}.field:last-child{margin-bottom:0}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+label{display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:4px;letter-spacing:.02em}
+.hint{font-size:11px;color:var(--hint);margin-top:3px;line-height:1.5}
+input[type=text],input[type=date],input[type=number],textarea,select{width:100%;border:1px solid var(--border);border-radius:var(--r);padding:8px 11px;font-size:13px;font-family:inherit;color:var(--text);background:var(--white);transition:border-color .15s}
+input:focus,textarea:focus,select:focus{outline:none;border-color:var(--gold);box-shadow:0 0 0 3px rgba(201,168,76,.12)}
+textarea{resize:vertical;min-height:76px;line-height:1.55}
+.btn-row{display:flex;gap:8px;align-items:center;margin-top:16px;flex-wrap:wrap}
+.btn{display:inline-flex;align-items:center;gap:6px;padding:9px 18px;font-size:13px;font-weight:600;cursor:pointer;border-radius:var(--r);transition:background .15s,transform .1s;border:none}
+.btn-primary{background:var(--navy);color:var(--white)}.btn-primary:hover{background:var(--navy-light)}.btn-primary:active{transform:scale(.98)}.btn-primary:disabled{opacity:.5;cursor:not-allowed}
+.btn-secondary{background:var(--white);color:var(--text);border:1px solid var(--border)}.btn-secondary:hover{background:var(--off)}
+.btn-gold{background:var(--gold);color:var(--navy);border:none}.btn-gold:hover{background:var(--gold-light)}
+.spin{display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.results{margin-top:16px}
+.pcard{background:var(--white);border:1px solid var(--border);border-radius:var(--rlg);padding:16px;margin-bottom:10px}
+.plabel{font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;gap:8px}
+.lbl-mon{color:#185FA5}.lbl-tue{color:#3B6D11}.lbl-thu{color:#854F0B}.lbl-wed{color:#534AB7}.lbl-sat{color:#993C1D}
+.ptext{font-size:13px;line-height:1.75;color:var(--text);white-space:pre-wrap;background:var(--off);border-radius:var(--r);padding:11px;border:1px solid var(--border)}
+.btn-sm{padding:4px 10px;font-size:11px;font-weight:600;cursor:pointer;border-radius:var(--r);border:1px solid var(--border);background:var(--white);color:var(--text);transition:background .15s;white-space:nowrap}
+.btn-sm:hover{background:var(--off)}.btn-sm:disabled{opacity:.5;cursor:not-allowed}
+.btn-sm-gold{background:var(--gold);color:var(--navy);border-color:var(--gold)}.btn-sm-gold:hover{background:var(--gold-light)}
+.btn-sm-gold.copied{background:#d4edda;color:#1a5c2a;border-color:#d4edda}
+.alert{padding:10px 14px;border-radius:var(--r);font-size:12.5px;line-height:1.6;margin-bottom:12px}
+.alert-info{background:#E6F1FB;color:#0C447C}
+.alert-warn{background:#FAEEDA;color:#633806}
+.alert-err{background:#FCEBEB;color:#791F1F}
+.alert-ok{background:#EAF3DE;color:#27500A}
+/* Series list */
+.series-card{background:var(--white);border:1px solid var(--border);border-radius:var(--rlg);margin-bottom:12px;overflow:hidden}
+.series-header{padding:14px 16px;display:flex;align-items:center;gap:12px;cursor:pointer;user-select:none}
+.series-header:hover{background:var(--off)}
+.series-chevron{font-size:16px;color:var(--muted);transition:transform .2s;flex-shrink:0}
+.series-chevron.open{transform:rotate(180deg)}
+.series-name{font-size:14px;font-weight:600;color:var(--text);flex:1}
+.series-meta{font-size:11px;color:var(--muted);margin-top:2px}
+.series-badges{display:flex;gap:6px;align-items:center;flex-shrink:0}
+.sbadge{font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px}
+.sb-active{background:#EAF3DE;color:#27500A}
+.sb-paused{background:#FAEEDA;color:#633806}
+.sb-complete{background:#F1EFE8;color:#5F5E5A}
+.series-body{display:none;border-top:1px solid var(--border)}
+.series-body.open{display:block}
+.series-actions{padding:10px 16px;display:flex;gap:8px;background:var(--off);border-bottom:1px solid var(--border);flex-wrap:wrap;align-items:center}
+.post-row{display:grid;grid-template-columns:70px 1fr 90px 110px;gap:10px;align-items:center;padding:9px 16px;border-bottom:1px solid var(--border)}
+.post-row:last-child{border-bottom:none}
+.post-row.has-draft{background:#f8fbff}
+.post-date{font-size:12px;font-weight:600;color:var(--muted)}
+.post-title{font-size:13px;font-weight:600;color:var(--text)}
+.post-sub{font-size:11px;color:var(--muted);margin-top:1px;line-height:1.4}
+.post-phase{font-size:9px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--gold);margin-bottom:2px}
+.pbadge{display:inline-block;font-size:10px;font-weight:700;padding:2px 7px;border-radius:20px}
+.pb-pending{background:#F1EFE8;color:#5F5E5A}
+.pb-drafted{background:#E6F1FB;color:#0C447C}
+.pb-posted{background:#EAF3DE;color:#27500A}
+.post-btns{display:flex;gap:4px;justify-content:flex-end;flex-wrap:wrap}
+.post-draft-preview{padding:8px 16px 12px 86px;border-bottom:1px solid var(--border)}
+.post-draft-preview .ptext{font-size:12px}
+/* New series form */
+.new-series-form{display:none;border-top:1px solid var(--border);padding:20px;background:var(--off)}
+.new-series-form.open{display:block}
+.post-plan-row{display:grid;grid-template-columns:80px 120px 1fr auto;gap:8px;align-items:start;margin-bottom:8px}
+.post-plan-row input{padding:6px 10px;font-size:12px}
+@media(max-width:540px){.row2,.row3{grid-template-columns:1fr}.post-row{grid-template-columns:60px 1fr}.post-row .post-btns{grid-column:2}.layout{padding:16px 14px 64px}header{padding:12px 16px}.post-plan-row{grid-template-columns:1fr 1fr}}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <div class="mark">GR</div>
+    <div><h1>Social Posts</h1><p>Grace Resurrection Methodist Church</p></div>
+  </div>
+  <div class="hright">
+    <div class="dot dot-err" id="auth-dot"></div>
+    <span class="hlabel" id="auth-label">No API key</span>
+    <button class="btn-hdr" onclick="switchTab('settings')">Settings</button>
+  </div>
+</header>
+
+<div class="layout">
+  <div class="tabs">
+    <button class="tab active" data-tab="mon">Monday run</button>
+    <button class="tab" data-tab="wed">Wednesday run</button>
+    <button class="tab" data-tab="fri">Friday run</button>
+    <button class="tab" data-tab="series">Series</button>
+    <button class="tab" data-tab="drafts">Drafts</button>
+    <button class="tab" data-tab="settings">Settings</button>
+  </div>
+
+  <!-- MONDAY -->
+  <div id="p-mon" class="panel active">
+    <div class="card">
+      <div class="ct">Service info</div>
+      <div class="row2">
+        <div class="field"><label>Sunday date</label><input type="date" id="m-date"></div>
+        <div class="field"><label>Sermon title</label><input type="text" id="m-sermon" placeholder="e.g. Faithful in the Middle"></div>
+      </div>
+      <div class="field"><label>Pulpit AI summary</label><textarea id="m-pulpit" style="min-height:90px" placeholder="Paste Pulpit AI summary here"></textarea></div>
+    </div>
+    <div class="card">
+      <div class="ct">Events and highlights</div>
+      <div class="field"><label>Upcoming events</label><textarea id="m-events" placeholder="One per line: name, date, time, location"></textarea><div class="hint">Include 2-3. Claude picks best 1-2.</div></div>
+      <div class="field"><label>People / highlights (optional)</label><textarea id="m-highlights" style="min-height:52px" placeholder="e.g. Rev. Bacon preaching first solo sermon"></textarea></div>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-primary" id="btn-mon" data-default="Draft posts" onclick="runMonday()">Draft posts</button>
+      <button class="btn btn-secondary" onclick="clearPanel('mon')">Clear</button>
+    </div>
+    <div id="results-mon" class="results"></div>
+  </div>
+
+  <!-- WEDNESDAY -->
+  <div id="p-wed" class="panel">
+    <div class="card">
+      <div class="ct">Upcoming Sunday</div>
+      <div class="row2">
+        <div class="field"><label>Sunday date</label><input type="date" id="w-sunday"><div class="hint">Used to pull the correct Grace Notes issue.</div></div>
+        <div class="field" style="display:flex;align-items:flex-end;padding-bottom:1px">
+          <button class="btn btn-secondary" style="width:100%" id="btn-fetch-gn" onclick="fetchGraceNotesPreview()">Preview Grace Notes</button>
+        </div>
+      </div>
+      <div id="gn-preview" style="display:none;margin-top:10px">
+        <div id="gn-badge" class="alert alert-ok" style="margin-bottom:8px"></div>
+        <div class="field"><label>Grace Notes content (auto-filled, edit if needed)</label><textarea id="w-content" style="min-height:90px"></textarea></div>
+        <div class="field"><label>Archive URL</label><input type="text" id="w-url"></div>
+      </div>
+      <div id="gn-manual" style="margin-top:10px">
+        <div class="hint" style="margin-bottom:8px">Or paste manually:</div>
+        <div class="field"><label>Archive URL (manual)</label><input type="text" id="w-url-manual" placeholder="https://mailchimp.com/..."></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="ct">Sunday service preview</div>
+      <div class="field"><label>Sermon / service info</label><textarea id="w-service" placeholder="e.g. Rev. Williams on Acts 2, communion Sunday, guest musician"></textarea><div class="hint">Used for the Saturday invite and preview post.</div></div>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-primary" id="btn-wed" data-default="Draft Wed + Sat posts" onclick="runWed()">Draft Wed + Sat posts</button>
+      <button class="btn btn-secondary" onclick="clearWed()">Clear</button>
+    </div>
+    <div id="results-wed" class="results"></div>
+  </div>
+
+  <!-- FRIDAY -->
+  <div id="p-fri" class="panel">
+    <div class="card">
+      <div class="ct">Blog post</div>
+      <div class="row2">
+        <div class="field"><label>Date</label><input type="date" id="f-date"></div>
+        <div class="field" style="display:flex;align-items:flex-end;padding-bottom:1px">
+          <button class="btn btn-secondary" style="width:100%" id="btn-fetch-blog" onclick="fetchBlogPreview()">Fetch blog post</button>
+        </div>
+      </div>
+      <div id="blog-preview" style="display:none;margin-top:10px">
+        <div id="blog-badge" class="alert alert-ok" style="margin-bottom:8px"></div>
+        <div class="field"><label>Blog content (auto-filled, edit if needed)</label><textarea id="f-content" style="min-height:90px"></textarea></div>
+        <div class="field"><label>Archive URL</label><input type="text" id="f-url"></div>
+      </div>
+      <div id="blog-manual" style="margin-top:10px">
+        <div class="hint" style="margin-bottom:8px">Or paste manually:</div>
+        <div class="field"><label>Subject / title</label><input type="text" id="f-subject" placeholder="e.g. Rev. Williams' Weekly Blog - June 5, 2026"></div>
+        <div class="field"><label>Archive URL (manual)</label><input type="text" id="f-url-manual" placeholder="https://mailchimp.com/..."></div>
+        <div class="field"><label>Blog content (manual)</label><textarea id="f-content-manual" style="min-height:90px" placeholder="Paste blog text here"></textarea></div>
+      </div>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-primary" id="btn-fri" data-default="Draft Friday post" onclick="runFriday()">Draft Friday post</button>
+      <button class="btn btn-secondary" onclick="clearFriday()">Clear</button>
+    </div>
+    <div id="results-fri" class="results"></div>
+  </div>
+
+  <!-- SERIES -->
+  <div id="p-series" class="panel">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+      <div style="font-size:13px;color:var(--muted)" id="series-count"></div>
+      <button class="btn btn-primary" onclick="toggleNewSeriesForm()">+ New series</button>
+    </div>
+
+    <!-- New series form -->
+    <div class="card" id="new-series-card" style="display:none">
+      <div class="ct">New series</div>
+      <div class="row2">
+        <div class="field"><label>Series name</label><input type="text" id="ns-name" placeholder="e.g. Advent 2026"></div>
+        <div class="row2" style="gap:8px">
+          <div class="field"><label>Cadence</label>
+            <select id="ns-cadence">
+              <option value="weekly">Weekly</option>
+              <option value="biweekly">Biweekly</option>
+              <option value="monthly">Monthly</option>
+            </select>
+          </div>
+          <div class="field"><label>Start date</label><input type="date" id="ns-start"></div>
+        </div>
+      </div>
+      <div class="field"><label>Description</label><textarea id="ns-desc" style="min-height:60px" placeholder="What is this series about?"></textarea></div>
+      <div class="field"><label>Context for Claude</label><textarea id="ns-context" style="min-height:72px" placeholder="Background info Claude should know when drafting posts — key facts, tone, goals"></textarea></div>
+      <div class="row2">
+        <div class="field"><label>Number of posts</label><input type="number" id="ns-count" value="6" min="1" max="52"></div>
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-primary" id="btn-gen-plan" onclick="generatePlan()">Generate post plan</button>
+        <div class="hint" style="margin:0">Claude will draft the post titles and angles. You can edit before saving.</div>
+      </div>
+      <div id="ns-plan-area" style="margin-top:16px;display:none">
+        <div class="ct">Post plan <span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:11px;color:var(--muted)">(edit before saving)</span></div>
+        <div id="ns-plan-rows"></div>
+        <div class="btn-row" style="margin-top:12px">
+          <button class="btn btn-primary" id="btn-save-series" onclick="saveSeries()">Save series</button>
+          <button class="btn btn-secondary" onclick="addPlanRow()">+ Add post</button>
+          <button class="btn btn-secondary" onclick="cancelNewSeries()">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="series-list"><div class="hint" style="padding:8px 0">Loading series...</div></div>
+  </div>
+
+  <!-- DRAFTS -->
+  <div id="p-drafts" class="panel">
+    <div class="card">
+      <div class="ct">Recent drafts</div>
+      <div id="drafts-list"><div class="hint" style="padding:8px 0">Loading...</div></div>
+    </div>
+  </div>
+
+  <!-- SETTINGS -->
+  <div id="p-settings" class="panel">
+    <div class="card">
+      <div class="ct">Claude API</div>
+      <div class="field"><label>Anthropic API key</label><input type="text" id="s-ak" placeholder="sk-ant-..." autocomplete="off"><div class="hint" id="s-ak-hint">Loading...</div></div>
+    </div>
+    <div class="card">
+      <div class="ct">Mailchimp</div>
+      <div class="row2">
+        <div class="field"><label>Mailchimp API key</label><input type="text" id="s-mk" placeholder="xxxxxxxx-us21" autocomplete="off"></div>
+        <div class="field"><label>Server prefix</label><input type="text" id="s-ms" placeholder="e.g. us21"><div class="hint">From your Mailchimp API URL</div></div>
+      </div>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-primary" id="btn-settings" onclick="saveSettings()">Save settings</button>
+    </div>
+    <div id="results-settings" class="results"></div>
+  </div>
+</div>
+
+<script>
+// ── Utilities ─────────────────────────────────────────────────────────────────
+function v(id){ return document.getElementById(id).value.trim(); }
+function esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+function setBtn(id, loading, label) {
+  var b = document.getElementById(id);
+  if (!b) return;
+  if (loading) { b.disabled=true; b.innerHTML='<span class="spin"></span> '+(label||'Working...'); }
+  else { b.disabled=false; b.textContent=b.getAttribute('data-default')||label||'Submit'; }
+}
+
+function copyText(btn, text) {
+  navigator.clipboard.writeText(text).then(function(){
+    var o=btn.textContent; btn.textContent='Copied!'; btn.classList.add('copied');
+    setTimeout(function(){ btn.textContent=o; btn.classList.remove('copied'); },2000);
+  });
+}
+
+function clearPanel(id) {
+  document.getElementById('p-'+id).querySelectorAll('input,textarea').forEach(function(el){ el.value=''; });
+  var r=document.getElementById('results-'+id); if(r) r.innerHTML='';
+}
+
+function switchTab(id) {
+  document.querySelectorAll('.tab').forEach(function(t){ t.classList.remove('active'); });
+  document.querySelectorAll('.panel').forEach(function(p){ p.classList.remove('active'); });
+  var t=document.querySelector('[data-tab="'+id+'"]');
+  if(t) t.classList.add('active');
+  var p=document.getElementById('p-'+id);
+  if(p) p.classList.add('active');
+  if(id==='series') loadSeries();
+  if(id==='drafts') loadDrafts();
+  if(id==='settings') checkAuthStatus();
+}
+
+document.querySelectorAll('.tab').forEach(function(t){
+  t.addEventListener('click', function(){ switchTab(t.getAttribute('data-tab')); });
+});
+
+function postCard(label, cls, text, uid) {
+  return '<div class="pcard"><div class="plabel"><span class="'+cls+'">'+esc(label)+'</span>'
+    +'<button class="btn-sm btn-sm-gold" onclick="copyText(this,document.getElementById(\''+uid+'\').textContent)">Copy</button></div>'
+    +'<div class="ptext" id="'+uid+'">'+esc(text)+'</div></div>';
+}
+
+// ── Auth / Settings ───────────────────────────────────────────────────────────
+function checkAuthStatus() {
+  google.script.run.withSuccessHandler(function(s){
+    var dot=document.getElementById('auth-dot'), lbl=document.getElementById('auth-label');
+    if (s.hasAnthropicKey) { dot.className='dot dot-ok'; lbl.textContent='API key set'; }
+    else { dot.className='dot dot-err'; lbl.textContent='No API key'; }
+    var hint=document.getElementById('s-ak-hint');
+    if(hint) hint.textContent = s.hasAnthropicKey ? 'Current: '+s.anthropicKeyHint : 'No key saved.';
+    var ms=document.getElementById('s-ms');
+    if(ms && s.mailchimpServer) ms.value=s.mailchimpServer;
+  }).getSettings();
+}
+
+function saveSettings() {
+  setBtn('btn-settings', true, 'Saving...');
+  google.script.run
+    .withSuccessHandler(function(res){
+      setBtn('btn-settings', false, 'Save settings');
+      var el=document.getElementById('results-settings');
+      if(res.ok){ el.innerHTML='<div class="alert alert-ok">Settings saved.</div>'; document.getElementById('s-ak').value=''; document.getElementById('s-mk').value=''; checkAuthStatus(); }
+      else el.innerHTML='<div class="alert alert-err">'+esc(res.error)+'</div>';
+    })
+    .withFailureHandler(function(e){ setBtn('btn-settings',false,'Save settings'); document.getElementById('results-settings').innerHTML='<div class="alert alert-err">'+esc(e.message)+'</div>'; })
+    .saveSettings({ anthropicKey:v('s-ak'), mailchimpKey:v('s-mk'), mailchimpServer:v('s-ms') });
+}
+
+// ── Monday ────────────────────────────────────────────────────────────────────
+function runMonday() {
+  if(!v('m-sermon')){ alert('Please enter the sermon title.'); return; }
+  setBtn('btn-mon', true, 'Drafting...');
+  document.getElementById('results-mon').innerHTML='';
+  google.script.run
+    .withSuccessHandler(function(res){
+      setBtn('btn-mon',false);
+      var el=document.getElementById('results-mon');
+      if(!res.ok){ el.innerHTML='<div class="alert alert-err">'+esc(res.error)+'</div>'; return; }
+      var html='';
+      if(res.seriesLabel) html+='<div class="alert alert-ok" style="font-size:12px">'+esc(res.seriesLabel)+' — saved to drafts</div>';
+      html+=postCard('Monday - Service recap','lbl-mon',res.posts.monday||'','pm-mon');
+      html+=postCard('Tuesday - Upcoming events','lbl-tue',res.posts.tuesday||'','pm-tue');
+      html+=postCard('Thursday - Series post','lbl-thu',res.posts.thursday||'','pm-thu');
+      el.innerHTML=html;
+    })
+    .withFailureHandler(function(e){ setBtn('btn-mon',false); document.getElementById('results-mon').innerHTML='<div class="alert alert-err">'+esc(e.message)+'</div>'; })
+    .draftMondayPosts({ date:v('m-date'), sermon:v('m-sermon'), pulpit:v('m-pulpit'), events:v('m-events'), highlights:v('m-highlights') });
+}
+
+// ── Wednesday ─────────────────────────────────────────────────────────────────
+function fetchGraceNotesPreview() {
+  var sunday = v('w-sunday');
+  var btn = document.getElementById('btn-fetch-gn');
+  btn.disabled=true; btn.textContent='Fetching...';
+  google.script.run
+    .withSuccessHandler(function(res){
+      btn.disabled=false; btn.textContent='Preview Grace Notes';
+      if(!res.ok){
+        document.getElementById('gn-badge').className='alert alert-warn';
+        document.getElementById('gn-badge').textContent='Could not fetch: '+res.error;
+        document.getElementById('gn-preview').style.display='block';
+        return;
+      }
+      var dateLabel = res.sentAt ? new Date(res.sentAt).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '';
+      var isDraft = res.status === 'draft' || res.status === 'paused';
+      document.getElementById('gn-badge').className = isDraft ? 'alert alert-warn' : 'alert alert-ok';
+      document.getElementById('gn-badge').innerHTML = (isDraft ? '<strong>DRAFT</strong> &mdash; ' : '')
+        +'<strong>'+esc(res.subject)+'</strong>'+(dateLabel?' &mdash; '+(isDraft?'created ':'sent ')+dateLabel:'')
+        +(res.archiveUrl ? '<br><a href="'+esc(res.archiveUrl)+'" target="_blank" style="font-size:11px;color:inherit">'+esc(res.archiveUrl)+'</a>' : '');
+      document.getElementById('w-content').value=res.preview||'';
+      document.getElementById('w-url').value=res.archiveUrl||'';
+      document.getElementById('gn-preview').style.display='block';
+      document.getElementById('gn-manual').style.display='none';
+    })
+    .withFailureHandler(function(e){
+      btn.disabled=false; btn.textContent='Preview Grace Notes';
+      alert('Error: '+e.message);
+    })
+    .fetchGraceNotes(sunday||null);
+}
+
+function runWed() {
+  var url = v('w-url') || v('w-url-manual');
+  var content = v('w-content');
+  var sunday = v('w-sunday');
+  setBtn('btn-wed', true, 'Drafting...');
+  document.getElementById('results-wed').innerHTML='';
+  google.script.run
+    .withSuccessHandler(function(res){
+      setBtn('btn-wed',false);
+      var el=document.getElementById('results-wed');
+      if(!res.ok){ el.innerHTML='<div class="alert alert-err">'+esc(res.error)+'</div>'; return; }
+      var html='';
+      if(res.mailchimpFetched){
+        var sentDate = res.sentAt ? new Date(res.sentAt).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '';
+        html+='<div class="alert alert-ok">Grace Notes fetched: <strong>'+esc(res.subject)+'</strong>'+(sentDate?' &mdash; sent '+sentDate:'')+'</div>';
+      } else if(res.mailchimpError) {
+        html+='<div class="alert alert-warn">Mailchimp unavailable: '+esc(res.mailchimpError)+'. Drafted from manual input.</div>';
+      }
+      html+=postCard('Wednesday - Grace Notes','lbl-wed',res.posts.wednesday||'','pw-wed');
+      html+=postCard('Saturday - Invite and preview','lbl-sat',res.posts.saturday||'','pw-sat');
+      el.innerHTML=html;
+    })
+    .withFailureHandler(function(e){ setBtn('btn-wed',false); document.getElementById('results-wed').innerHTML='<div class="alert alert-err">'+esc(e.message)+'</div>'; })
+    .draftWedPosts({ sundayDate:sunday, manualUrl:url, content:content, service:v('w-service') });
+}
+
+function clearWed() {
+  ['w-sunday','w-url','w-url-manual','w-content','w-service'].forEach(function(id){ var el=document.getElementById(id); if(el) el.value=''; });
+  document.getElementById('gn-preview').style.display='none';
+  document.getElementById('gn-manual').style.display='block';
+  document.getElementById('results-wed').innerHTML='';
+}
+
+// ── Friday ────────────────────────────────────────────────────────────────────
+function fetchBlogPreview() {
+  var btn = document.getElementById('btn-fetch-blog');
+  btn.disabled=true; btn.textContent='Fetching...';
+  google.script.run
+    .withSuccessHandler(function(res){
+      btn.disabled=false; btn.textContent='Fetch blog post';
+      if(!res.ok){
+        document.getElementById('blog-badge').className='alert alert-warn';
+        document.getElementById('blog-badge').textContent='Could not fetch: '+res.error;
+        document.getElementById('blog-preview').style.display='block';
+        return;
+      }
+      var dateLabel = res.sentAt ? new Date(res.sentAt).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '';
+      var isDraft = res.status === 'draft' || res.status === 'paused';
+      document.getElementById('blog-badge').className = isDraft ? 'alert alert-warn' : 'alert alert-ok';
+      document.getElementById('blog-badge').innerHTML = (isDraft ? '<strong>DRAFT</strong> &mdash; ' : '')
+        +'<strong>'+esc(res.subject)+'</strong>'+(dateLabel?' &mdash; '+(isDraft?'created ':'sent ')+dateLabel:'')
+        +(res.archiveUrl ? '<br><a href="'+esc(res.archiveUrl)+'" target="_blank" style="font-size:11px;color:inherit">'+esc(res.archiveUrl)+'</a>' : '');
+      document.getElementById('f-content').value=res.preview||'';
+      document.getElementById('f-url').value=res.archiveUrl||'';
+      document.getElementById('blog-preview').style.display='block';
+      document.getElementById('blog-manual').style.display='none';
+    })
+    .withFailureHandler(function(e){
+      btn.disabled=false; btn.textContent='Fetch blog post';
+      alert('Error: '+e.message);
+    })
+    .fetchBlog();
+}
+
+function runFriday() {
+  var url = v('f-url') || v('f-url-manual');
+  var content = v('f-content') || v('f-content-manual');
+  var subject = v('f-subject');
+  setBtn('btn-fri', true, 'Drafting...');
+  document.getElementById('results-fri').innerHTML='';
+  google.script.run
+    .withSuccessHandler(function(res){
+      setBtn('btn-fri',false);
+      var el=document.getElementById('results-fri');
+      if(!res.ok){ el.innerHTML='<div class="alert alert-err">'+esc(res.error)+'</div>'; return; }
+      var html='';
+      if(res.mailchimpFetched){
+        var sentDate = res.sentAt ? new Date(res.sentAt).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '';
+        html+='<div class="alert alert-ok">Blog fetched: <strong>'+esc(res.subject)+'</strong>'+(sentDate?' &mdash; sent '+sentDate:'')+'</div>';
+      } else if(res.mailchimpError){
+        html+='<div class="alert alert-warn">Mailchimp unavailable: '+esc(res.mailchimpError)+'. Drafted from manual input.</div>';
+      }
+      html+=postCard('Friday - Weekly blog','lbl-thu',res.posts.friday||'','pf-fri');
+      el.innerHTML=html;
+    })
+    .withFailureHandler(function(e){ setBtn('btn-fri',false); document.getElementById('results-fri').innerHTML='<div class="alert alert-err">'+esc(e.message)+'</div>'; })
+    .draftFridayPost({ date:v('f-date'), manualUrl:url, content:content, subject:subject });
+}
+
+function clearFriday() {
+  ['f-date','f-url','f-url-manual','f-content','f-content-manual','f-subject'].forEach(function(id){ var el=document.getElementById(id); if(el) el.value=''; });
+  document.getElementById('blog-preview').style.display='none';
+  document.getElementById('blog-manual').style.display='block';
+  document.getElementById('results-fri').innerHTML='';
+}
+
+// ── Series ────────────────────────────────────────────────────────────────────
+var _seriesData = {};
+
+function loadSeries() {
+  document.getElementById('series-list').innerHTML='<div class="hint" style="padding:8px 0">Loading series...</div>';
+  google.script.run
+    .withSuccessHandler(function(res){
+      if(!res.ok){ document.getElementById('series-list').innerHTML='<div class="alert alert-err">'+esc(res.error)+'</div>'; return; }
+      document.getElementById('series-count').textContent=res.series.length+' series';
+      var html='';
+      res.series.forEach(function(s){
+        var statusCls='sb-'+s.status;
+        html+='<div class="series-card" id="sc-'+s.id+'">'
+          +'<div class="series-header" onclick="toggleSeries(\''+s.id+'\')">'
+          +'<span class="series-chevron" id="chev-'+s.id+'">&#8964;</span>'
+          +'<div><div class="series-name">'+esc(s.name)+'</div><div class="series-meta">'+esc(s.description)+'</div></div>'
+          +'<div class="series-badges"><span class="sbadge '+statusCls+'">'+esc(s.status)+'</span>'
+          +'<button class="btn-sm" onclick="event.stopPropagation();pauseSeries(\''+s.id+'\',\''+s.status+'\')">'+( s.status==='active'?'Pause':'Resume')+'</button>'
+          +'</div></div>'
+          +'<div class="series-body" id="sb-'+s.id+'">'
+          +'<div class="series-actions">'
+          +'<button class="btn-sm" onclick="loadSeriesPosts(\''+s.id+'\')">Refresh posts</button>'
+          +'<button class="btn-sm btn-sm-gold" onclick="draftAllPending(\''+s.id+'\')">Draft next pending</button>'
+          +'</div>'
+          +'<div id="sp-'+s.id+'"><div class="hint" style="padding:12px 16px">Click to expand, then Refresh posts.</div></div>'
+          +'</div></div>';
+      });
+      document.getElementById('series-list').innerHTML=html;
+    })
+    .withFailureHandler(function(e){ document.getElementById('series-list').innerHTML='<div class="alert alert-err">'+esc(e.message)+'</div>'; })
+    .getAllSeries();
+}
+
+function toggleSeries(id) {
+  var body=document.getElementById('sb-'+id);
+  var chev=document.getElementById('chev-'+id);
+  var isOpen=body.classList.contains('open');
+  body.classList.toggle('open');
+  chev.classList.toggle('open');
+  if(!isOpen) loadSeriesPosts(id);
+}
+
+function loadSeriesPosts(seriesId) {
+  document.getElementById('sp-'+seriesId).innerHTML='<div class="hint" style="padding:12px 16px">Loading posts...</div>';
+  google.script.run
+    .withSuccessHandler(function(res){ renderSeriesPosts(seriesId, res); })
+    .withFailureHandler(function(e){ document.getElementById('sp-'+seriesId).innerHTML='<div class="alert alert-err" style="margin:12px 16px">'+esc(e.message)+'</div>'; })
+    .getSeriesPosts(seriesId);
+}
+
+function renderSeriesPosts(seriesId, res) {
+  if(!res.ok){ document.getElementById('sp-'+seriesId).innerHTML='<div class="alert alert-err" style="margin:12px 16px">'+esc(res.error)+'</div>'; return; }
+  _seriesData[seriesId]=res.posts;
+  var posted=res.posts.filter(function(p){return p.status==='posted';}).length;
+  var html='<div style="padding:8px 16px;font-size:11px;color:var(--muted)">'+posted+' of '+res.posts.length+' posted</div>';
+  var lastPhase='';
+  res.posts.forEach(function(p){
+    if(p.phase && p.phase!==lastPhase){
+      html+='<div style="padding:6px 16px 2px;font-size:9px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--gold)">'+esc(p.phase)+'</div>';
+      lastPhase=p.phase;
+    }
+    var bcls='pb-'+(p.status||'pending');
+    var hasDraft=p.draft && p.draft.length>0;
+    html+='<div class="post-row'+(hasDraft?' has-draft':'')+'" id="pr-'+seriesId+'-'+p.postIdx+'">'
+      +'<div class="post-date">'+esc(p.date)+'</div>'
+      +'<div>'+(p.phase&&p.phase!==lastPhase?'<div class="post-phase">'+esc(p.phase)+'</div>':'')+' <div class="post-title">'+esc(p.title)+'</div><div class="post-sub">'+esc(p.sub)+'</div></div>'
+      +'<div><span class="pbadge '+bcls+'">'+esc(p.status)+'</span></div>'
+      +'<div class="post-btns">';
+    if(p.status!=='posted'){
+      html+='<button class="btn-sm" id="dbtn-'+seriesId+'-'+p.postIdx+'" onclick="draftSeriesPost(\''+seriesId+'\','+p.postIdx+')">Draft</button>';
+    }
+    if(hasDraft){
+      html+='<button class="btn-sm" onclick="toggleDraftPreview(\''+seriesId+'\','+p.postIdx+')">View</button>';
+      html+='<button class="btn-sm" onclick="markPosted(\''+seriesId+'\','+p.postIdx+')">Posted</button>';
+    }
+    html+='<button class="btn-sm" onclick="editPostNotes(\''+seriesId+'\','+p.postIdx+')">Notes</button>';
+    html+='</div></div>';
+    if(hasDraft){
+      var uid='draft-'+seriesId+'-'+p.postIdx;
+      html+='<div class="post-draft-preview" id="pdp-'+seriesId+'-'+p.postIdx+'" style="display:none">'
+        +'<div class="ptext" id="'+uid+'">'+esc(p.draft)+'</div>'
+        +'<div style="display:flex;gap:6px;margin-top:6px">'
+        +'<button class="btn-sm btn-sm-gold" onclick="copyText(this,document.getElementById(\''+uid+'\').textContent)">Copy</button>'
+        +'</div></div>';
+    }
+    if(p.notes){
+      html+='<div style="padding:0 16px 8px;font-size:11px;color:var(--muted);font-style:italic">Note: '+esc(p.notes)+'</div>';
+    }
+  });
+  document.getElementById('sp-'+seriesId).innerHTML=html;
+}
+
+function toggleDraftPreview(seriesId, postIdx) {
+  var el=document.getElementById('pdp-'+seriesId+'-'+postIdx);
+  if(el) el.style.display=el.style.display==='none'?'block':'none';
+}
+
+function draftSeriesPost(seriesId, postIdx) {
+  var btn=document.getElementById('dbtn-'+seriesId+'-'+postIdx);
+  if(btn){ btn.disabled=true; btn.textContent='...'; }
+  google.script.run
+    .withSuccessHandler(function(res){
+      if(btn){ btn.disabled=false; btn.textContent='Draft'; }
+      if(!res.ok){ alert('Error: '+res.error); return; }
+      loadSeriesPosts(seriesId);
+    })
+    .withFailureHandler(function(e){ if(btn){ btn.disabled=false; btn.textContent='Draft'; } alert('Error: '+e.message); })
+    .draftSeriesPost(seriesId, postIdx);
+}
+
+function draftAllPending(seriesId) {
+  var posts=_seriesData[seriesId];
+  if(!posts){ alert('Load the series posts first.'); return; }
+  var pending=posts.filter(function(p){ return p.status==='pending'; });
+  if(!pending.length){ alert('No pending posts in this series.'); return; }
+  draftSeriesPost(seriesId, pending[0].postIdx);
+}
+
+function markPosted(seriesId, postIdx) {
+  google.script.run
+    .withSuccessHandler(function(res){ if(res.ok) loadSeriesPosts(seriesId); })
+    .updateSeriesPostField(seriesId, postIdx, 'status', 'posted');
+}
+
+function editPostNotes(seriesId, postIdx) {
+  var posts=_seriesData[seriesId]||[];
+  var post=posts.filter(function(p){ return p.postIdx===postIdx; })[0];
+  var current=post?post.notes:'';
+  var notes=prompt('Notes for this post:', current);
+  if(notes===null) return;
+  google.script.run
+    .withSuccessHandler(function(res){ if(res.ok) loadSeriesPosts(seriesId); })
+    .updateSeriesPostField(seriesId, postIdx, 'notes', notes);
+}
+
+function pauseSeries(seriesId, currentStatus) {
+  var newStatus=currentStatus==='active'?'paused':'active';
+  google.script.run
+    .withSuccessHandler(function(res){ if(res.ok) loadSeries(); })
+    .updateSeriesMeta(seriesId, { status: newStatus });
+}
+
+// ── New series form ───────────────────────────────────────────────────────────
+var _planPosts = [];
+
+function toggleNewSeriesForm() {
+  var card=document.getElementById('new-series-card');
+  card.style.display=card.style.display==='none'?'block':'none';
+}
+
+function cancelNewSeries() {
+  document.getElementById('new-series-card').style.display='none';
+  document.getElementById('ns-plan-area').style.display='none';
+  _planPosts=[];
+}
+
+function generatePlan() {
+  var name=v('ns-name'), desc=v('ns-desc'), count=parseInt(v('ns-count')||'6');
+  if(!name){ alert('Please enter a series name.'); return; }
+  setBtn('btn-gen-plan', true, 'Generating plan...');
+  google.script.run
+    .withSuccessHandler(function(res){
+      setBtn('btn-gen-plan', false, 'Generate post plan');
+      if(!res.ok){ alert('Error: '+res.error); return; }
+      _planPosts=res.posts;
+      renderPlanRows();
+      document.getElementById('ns-plan-area').style.display='block';
+    })
+    .withFailureHandler(function(e){ setBtn('btn-gen-plan',false,'Generate post plan'); alert('Error: '+e.message); })
+    .generateSeriesPostsWithClaude({ name:name, description:desc, context:v('ns-context'), count:count, cadence:v('ns-cadence'), startDate:v('ns-start') });
+}
+
+function renderPlanRows() {
+  var html='';
+  _planPosts.forEach(function(p, i){
+    html+='<div class="post-plan-row" id="planrow-'+i+'">'
+      +'<input type="text" value="'+esc(p.date||'')+'" placeholder="Date" onchange="_planPosts['+i+'].date=this.value">'
+      +'<input type="text" value="'+esc(p.phase||'')+'" placeholder="Phase (optional)" onchange="_planPosts['+i+'].phase=this.value">'
+      +'<input type="text" value="'+esc(p.title)+'" placeholder="Title" onchange="_planPosts['+i+'].title=this.value" style="font-weight:600">'
+      +'<button class="btn-sm" onclick="removePlanRow('+i+')" style="color:#E24B4A;border-color:#E24B4A">✕</button>'
+      +'</div>'
+      +'<div style="padding:0 0 8px '+(80+120+8+8)+'px"><input type="text" value="'+esc(p.sub||'')+'" placeholder="Angle / description" onchange="_planPosts['+i+'].sub=this.value" style="font-size:12px;color:var(--muted)"></div>';
+  });
+  document.getElementById('ns-plan-rows').innerHTML=html;
+}
+
+function addPlanRow() {
+  _planPosts.push({date:'',phase:'',title:'New post',sub:''});
+  renderPlanRows();
+}
+
+function removePlanRow(i) {
+  _planPosts.splice(i,1);
+  renderPlanRows();
+}
+
+function saveSeries() {
+  var name=v('ns-name');
+  if(!name){ alert('Series name required.'); return; }
+  if(!_planPosts.length){ alert('Add at least one post.'); return; }
+  setBtn('btn-save-series', true, 'Saving...');
+  google.script.run
+    .withSuccessHandler(function(res){
+      setBtn('btn-save-series', false, 'Save series');
+      if(!res.ok){ alert('Error: '+res.error); return; }
+      cancelNewSeries();
+      loadSeries();
+    })
+    .withFailureHandler(function(e){ setBtn('btn-save-series',false,'Save series'); alert('Error: '+e.message); })
+    .createSeries({ name:name, description:v('ns-desc'), context:v('ns-context'), cadence:v('ns-cadence'), posts:_planPosts });
+}
+
+// ── Drafts ────────────────────────────────────────────────────────────────────
+function loadDrafts() {
+  document.getElementById('drafts-list').innerHTML='<div class="hint" style="padding:8px 0">Loading...</div>';
+  google.script.run
+    .withSuccessHandler(function(res){
+      if(!res.ok){ document.getElementById('drafts-list').innerHTML='<div class="alert alert-err">'+esc(res.error)+'</div>'; return; }
+      if(!res.rows.length){ document.getElementById('drafts-list').innerHTML='<div class="hint" style="padding:8px 0">No drafts yet.</div>'; return; }
+      var m={monday:'lbl-mon',tuesday:'lbl-tue',thursday:'lbl-thu',wednesday:'lbl-wed',saturday:'lbl-sat'};
+      var html='';
+      res.rows.forEach(function(r,i){
+        var uid='dr-'+i;
+        html+='<div class="pcard"><div class="plabel"><span class="'+(m[r.key]||'lbl-mon')+'">'+esc(r.key)+' — '+esc(r.postDate||String(r.dateDrafted).split('T')[0])+'</span>'
+          +'<div style="display:flex;gap:6px;align-items:center"><span class="pbadge pb-'+esc(r.status)+'">'+esc(r.status)+'</span>'
+          +'<button class="btn-sm btn-sm-gold" onclick="copyText(this,document.getElementById(\''+uid+'\').textContent)">Copy</button></div></div>'
+          +'<div class="ptext" id="'+uid+'">'+esc(r.text)+'</div></div>';
+      });
+      document.getElementById('drafts-list').innerHTML=html;
+    })
+    .withFailureHandler(function(e){ document.getElementById('drafts-list').innerHTML='<div class="alert alert-err">'+esc(e.message)+'</div>'; })
+    .getRecentDrafts();
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+document.getElementById('m-date').value=new Date().toISOString().split('T')[0];
+document.getElementById('f-date').value=new Date().toISOString().split('T')[0];
+// Default w-sunday to next Sunday
+(function(){
+  var d=new Date(); var day=d.getDay(); var diff=day===0?7:7-day;
+  d.setDate(d.getDate()+diff);
+  var el=document.getElementById('w-sunday'); if(el) el.value=d.toISOString().split('T')[0];
+})();
+document.getElementById('ns-start').value=new Date().toISOString().split('T')[0];
+checkAuthStatus();
+</script>
+</body>
+</html>
