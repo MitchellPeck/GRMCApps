@@ -28,6 +28,15 @@ single Postgres with one database per app.
 - whoami app:    https://app-whoami.lvh.me
 - Traefik dashboard (local only): http://localhost:8080
 
+## Apps
+
+- **whoami** (`app-whoami.lvh.me`) — validation app echoing identity headers.
+- **Social Posts** (`app-social.lvh.me`) — drafts GRMC social posts with Claude,
+  pulls Grace Notes / blog from Mailchimp, manages multi-week post series.
+  Configure the Anthropic + Mailchimp keys in its Settings tab (stored in the
+  `socialposts` database). Source ported from the Apps Script tool in
+  `docs/reference/social-posts/`.
+
 ## Adding an app
 
 1. Create `apps/<name>/` (its own container listening on port 3000).
