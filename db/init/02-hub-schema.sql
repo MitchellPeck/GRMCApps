@@ -38,4 +38,7 @@ VALUES ('whoami', 'Who Am I', 'whoami', '👤');
 INSERT INTO apps (slug, name, subdomain, icon)
 VALUES ('social-posts', 'Social Posts', 'social', '📣');
 
+INSERT INTO apps (slug, name, subdomain, icon)
+VALUES ('approvals', 'Approvals', 'approvals', '✅');
+
 RESET ROLE;

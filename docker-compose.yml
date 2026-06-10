@@ -74,6 +74,24 @@ services:
       - "traefik.http.routers.social.middlewares=hub-forward-auth@file"
       - "traefik.http.services.social.loadbalancer.server.port=3000"
 
+  approvals:
+    build: ./apps/approvals
+    environment:
+      APPROVALS_DB_USER: "${APPROVALS_DB_USER}"
+      APPROVALS_DB_PASSWORD: "${APPROVALS_DB_PASSWORD}"
+      APPROVALS_DB_NAME: "${APPROVALS_DB_NAME}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [hubnet]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.approvals.rule=Host(`approvals.${BASE_DOMAIN}`)"
+      - "traefik.http.routers.approvals.entrypoints=websecure"
+      - "traefik.http.routers.approvals.tls=true"
+      - "traefik.http.routers.approvals.middlewares=hub-forward-auth@file"
+      - "traefik.http.services.approvals.loadbalancer.server.port=3000"
+
 networks:
   hubnet:
 

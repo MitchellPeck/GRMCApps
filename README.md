@@ -25,23 +25,29 @@ single Postgres with one database per app.
 ## URLs
 
 - Hub dashboard: https://hub.lvh.me
-- whoami app:    https://app-whoami.lvh.me
+- whoami app:    https://whoami.lvh.me
 - Traefik dashboard (local only): http://localhost:8080
 
 ## Apps
 
-- **whoami** (`app-whoami.lvh.me`) — validation app echoing identity headers.
-- **Social Posts** (`app-social.lvh.me`) — drafts GRMC social posts with Claude,
+- **whoami** (`whoami.lvh.me`) — validation app echoing identity headers.
+- **Social Posts** (`social.lvh.me`) — drafts GRMC social posts with Claude,
   pulls Grace Notes / blog from Mailchimp, manages multi-week post series.
   Configure the Anthropic + Mailchimp keys in its Settings tab (stored in the
   `socialposts` database). Source ported from the Apps Script tool in
   `docs/reference/social-posts/`.
+- **Approvals** (`approvals.lvh.me`) — request and grant sign-off on graphics.
+  Submitters upload an image and pick an approver from a roster (managed in
+  Settings); the approver approves, rejects, or requests changes. Change
+  requests bounce back to the submitter, who uploads a new version. Every
+  version and decision is kept; data and image bytes live in the `approvals`
+  database.
 
 ## Adding an app
 
 1. Create `apps/<name>/` (its own container listening on port 3000).
 2. Add a `<name>` database in `db/init/01-databases.sh`.
 3. Add a row to `apps` in `db/init/02-hub-schema.sql` (`slug`, `name`,
-   `host` = `app-<name>.lvh.me`).
+   `subdomain` = `<name>`, which the hub serves at `<name>.lvh.me`).
 4. Add a service to `docker-compose.yml` with the Traefik labels and the
    `hub-forward-auth@file` middleware (copy the `whoami` service).
