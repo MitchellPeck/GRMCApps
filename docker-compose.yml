@@ -26,6 +26,20 @@ services:
       retries: 10
     networks: [hubnet]
 
+  hub:
+    build: ./hub
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [hubnet]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.hub.rule=Host(`hub.lvh.me`)"
+      - "traefik.http.routers.hub.entrypoints=websecure"
+      - "traefik.http.routers.hub.tls=true"
+      - "traefik.http.services.hub.loadbalancer.server.port=3000"
+
 networks:
   hubnet:
 
