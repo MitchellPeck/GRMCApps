@@ -1,3 +1,280 @@
-<!doctype html>
-<html><head><meta charset="utf-8"><title>GRMC Social Posts</title></head>
-<body><p>Social Posts — UI loads in Task 10.</p></body></html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GRMC Social Posts</title>
+<style>
+:root{--navy:#1a2744;--navy-light:#243058;--gold:#c9a84c;--gold-light:#e8c97a;--gold-muted:#f5ead4;--white:#fff;--off:#f8f6f1;--text:#1a2744;--muted:#5a6480;--hint:#9aa0b4;--border:#dde0ea;--r:8px;--rlg:12px}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:var(--off);color:var(--text);min-height:100vh}
+header{background:var(--navy);padding:14px 24px;display:flex;align-items:center;justify-content:space-between;border-bottom:2px solid var(--gold)}
+.logo{display:flex;align-items:center;gap:12px}
+.mark{width:32px;height:32px;border-radius:50%;background:var(--gold);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:var(--navy);flex-shrink:0}
+header h1{font-size:14px;font-weight:600;color:var(--white)}
+header p{font-size:11px;color:var(--gold-light);margin-top:1px}
+.hright{display:flex;align-items:center;gap:8px}
+.dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.dot-ok{background:#5DCAA5}.dot-err{background:#F09595}
+.hlabel{font-size:12px;color:rgba(255,255,255,.7)}
+.btn-hdr{padding:5px 12px;font-size:12px;font-weight:600;cursor:pointer;border-radius:var(--r);border:1px solid rgba(255,255,255,.3);background:transparent;color:var(--white)}
+.btn-hdr:hover{background:rgba(255,255,255,.1)}
+.layout{max-width:760px;margin:0 auto;padding:24px 20px 80px}
+.tabs{display:flex;gap:2px;background:var(--white);border:1px solid var(--border);border-radius:var(--rlg);padding:4px;margin-bottom:20px;flex-wrap:wrap}
+.tab{flex:1;min-width:80px;padding:8px 10px;font-size:13px;font-weight:500;text-align:center;cursor:pointer;border:none;background:none;color:var(--muted);border-radius:var(--r);transition:background .15s,color .15s}
+.tab.active{background:var(--navy);color:var(--white)}
+.tab:hover:not(.active){background:var(--off);color:var(--text)}
+.panel{display:none}.panel.active{display:block}
+.card{background:var(--white);border:1px solid var(--border);border-radius:var(--rlg);padding:20px;margin-bottom:14px}
+.ct{font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--gold);margin-bottom:14px;display:flex;align-items:center;gap:6px}
+.ct::after{content:"";flex:1;height:1px;background:var(--gold-muted)}
+.field{margin-bottom:14px}.field:last-child{margin-bottom:0}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+label{display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:4px;letter-spacing:.02em}
+.hint{font-size:11px;color:var(--hint);margin-top:3px;line-height:1.5}
+input[type=text],input[type=date],input[type=number],textarea,select{width:100%;border:1px solid var(--border);border-radius:var(--r);padding:8px 11px;font-size:13px;font-family:inherit;color:var(--text);background:var(--white);transition:border-color .15s}
+input:focus,textarea:focus,select:focus{outline:none;border-color:var(--gold);box-shadow:0 0 0 3px rgba(201,168,76,.12)}
+textarea{resize:vertical;min-height:76px;line-height:1.55}
+.btn-row{display:flex;gap:8px;align-items:center;margin-top:16px;flex-wrap:wrap}
+.btn{display:inline-flex;align-items:center;gap:6px;padding:9px 18px;font-size:13px;font-weight:600;cursor:pointer;border-radius:var(--r);transition:background .15s,transform .1s;border:none}
+.btn-primary{background:var(--navy);color:var(--white)}.btn-primary:hover{background:var(--navy-light)}.btn-primary:active{transform:scale(.98)}.btn-primary:disabled{opacity:.5;cursor:not-allowed}
+.btn-secondary{background:var(--white);color:var(--text);border:1px solid var(--border)}.btn-secondary:hover{background:var(--off)}
+.btn-gold{background:var(--gold);color:var(--navy);border:none}.btn-gold:hover{background:var(--gold-light)}
+.spin{display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.results{margin-top:16px}
+.pcard{background:var(--white);border:1px solid var(--border);border-radius:var(--rlg);padding:16px;margin-bottom:10px}
+.plabel{font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;gap:8px}
+.lbl-mon{color:#185FA5}.lbl-tue{color:#3B6D11}.lbl-thu{color:#854F0B}.lbl-wed{color:#534AB7}.lbl-sat{color:#993C1D}
+.ptext{font-size:13px;line-height:1.75;color:var(--text);white-space:pre-wrap;background:var(--off);border-radius:var(--r);padding:11px;border:1px solid var(--border)}
+.btn-sm{padding:4px 10px;font-size:11px;font-weight:600;cursor:pointer;border-radius:var(--r);border:1px solid var(--border);background:var(--white);color:var(--text);transition:background .15s;white-space:nowrap}
+.btn-sm:hover{background:var(--off)}.btn-sm:disabled{opacity:.5;cursor:not-allowed}
+.btn-sm-gold{background:var(--gold);color:var(--navy);border-color:var(--gold)}.btn-sm-gold:hover{background:var(--gold-light)}
+.btn-sm-gold.copied{background:#d4edda;color:#1a5c2a;border-color:#d4edda}
+.alert{padding:10px 14px;border-radius:var(--r);font-size:12.5px;line-height:1.6;margin-bottom:12px}
+.alert-info{background:#E6F1FB;color:#0C447C}
+.alert-warn{background:#FAEEDA;color:#633806}
+.alert-err{background:#FCEBEB;color:#791F1F}
+.alert-ok{background:#EAF3DE;color:#27500A}
+/* Series list */
+.series-card{background:var(--white);border:1px solid var(--border);border-radius:var(--rlg);margin-bottom:12px;overflow:hidden}
+.series-header{padding:14px 16px;display:flex;align-items:center;gap:12px;cursor:pointer;user-select:none}
+.series-header:hover{background:var(--off)}
+.series-chevron{font-size:16px;color:var(--muted);transition:transform .2s;flex-shrink:0}
+.series-chevron.open{transform:rotate(180deg)}
+.series-name{font-size:14px;font-weight:600;color:var(--text);flex:1}
+.series-meta{font-size:11px;color:var(--muted);margin-top:2px}
+.series-badges{display:flex;gap:6px;align-items:center;flex-shrink:0}
+.sbadge{font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px}
+.sb-active{background:#EAF3DE;color:#27500A}
+.sb-paused{background:#FAEEDA;color:#633806}
+.sb-complete{background:#F1EFE8;color:#5F5E5A}
+.series-body{display:none;border-top:1px solid var(--border)}
+.series-body.open{display:block}
+.series-actions{padding:10px 16px;display:flex;gap:8px;background:var(--off);border-bottom:1px solid var(--border);flex-wrap:wrap;align-items:center}
+.post-row{display:grid;grid-template-columns:70px 1fr 90px 110px;gap:10px;align-items:center;padding:9px 16px;border-bottom:1px solid var(--border)}
+.post-row:last-child{border-bottom:none}
+.post-row.has-draft{background:#f8fbff}
+.post-date{font-size:12px;font-weight:600;color:var(--muted)}
+.post-title{font-size:13px;font-weight:600;color:var(--text)}
+.post-sub{font-size:11px;color:var(--muted);margin-top:1px;line-height:1.4}
+.post-phase{font-size:9px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--gold);margin-bottom:2px}
+.pbadge{display:inline-block;font-size:10px;font-weight:700;padding:2px 7px;border-radius:20px}
+.pb-pending{background:#F1EFE8;color:#5F5E5A}
+.pb-drafted{background:#E6F1FB;color:#0C447C}
+.pb-posted{background:#EAF3DE;color:#27500A}
+.post-btns{display:flex;gap:4px;justify-content:flex-end;flex-wrap:wrap}
+.post-draft-preview{padding:8px 16px 12px 86px;border-bottom:1px solid var(--border)}
+.post-draft-preview .ptext{font-size:12px}
+/* New series form */
+.new-series-form{display:none;border-top:1px solid var(--border);padding:20px;background:var(--off)}
+.new-series-form.open{display:block}
+.post-plan-row{display:grid;grid-template-columns:80px 120px 1fr auto;gap:8px;align-items:start;margin-bottom:8px}
+.post-plan-row input{padding:6px 10px;font-size:12px}
+@media(max-width:540px){.row2,.row3{grid-template-columns:1fr}.post-row{grid-template-columns:60px 1fr}.post-row .post-btns{grid-column:2}.layout{padding:16px 14px 64px}header{padding:12px 16px}.post-plan-row{grid-template-columns:1fr 1fr}}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <div class="mark">GR</div>
+    <div><h1>Social Posts</h1><p>Grace Resurrection Methodist Church</p></div>
+  </div>
+  <div class="hright">
+    <div class="dot dot-err" id="auth-dot"></div>
+    <span class="hlabel" id="auth-label">No API key</span>
+    <button class="btn-hdr" onclick="switchTab('settings')">Settings</button>
+  </div>
+</header>
+
+<div class="layout">
+  <div class="tabs">
+    <button class="tab active" data-tab="mon">Monday run</button>
+    <button class="tab" data-tab="wed">Wednesday run</button>
+    <button class="tab" data-tab="fri">Friday run</button>
+    <button class="tab" data-tab="series">Series</button>
+    <button class="tab" data-tab="drafts">Drafts</button>
+    <button class="tab" data-tab="settings">Settings</button>
+  </div>
+
+  <!-- MONDAY -->
+  <div id="p-mon" class="panel active">
+    <div class="card">
+      <div class="ct">Service info</div>
+      <div class="row2">
+        <div class="field"><label>Sunday date</label><input type="date" id="m-date"></div>
+        <div class="field"><label>Sermon title</label><input type="text" id="m-sermon" placeholder="e.g. Faithful in the Middle"></div>
+      </div>
+      <div class="field"><label>Pulpit AI summary</label><textarea id="m-pulpit" style="min-height:90px" placeholder="Paste Pulpit AI summary here"></textarea></div>
+    </div>
+    <div class="card">
+      <div class="ct">Events and highlights</div>
+      <div class="field"><label>Upcoming events</label><textarea id="m-events" placeholder="One per line: name, date, time, location"></textarea><div class="hint">Include 2-3. Claude picks best 1-2.</div></div>
+      <div class="field"><label>People / highlights (optional)</label><textarea id="m-highlights" style="min-height:52px" placeholder="e.g. Rev. Bacon preaching first solo sermon"></textarea></div>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-primary" id="btn-mon" data-default="Draft posts" onclick="runMonday()">Draft posts</button>
+      <button class="btn btn-secondary" onclick="clearPanel('mon')">Clear</button>
+    </div>
+    <div id="results-mon" class="results"></div>
+  </div>
+
+  <!-- WEDNESDAY -->
+  <div id="p-wed" class="panel">
+    <div class="card">
+      <div class="ct">Upcoming Sunday</div>
+      <div class="row2">
+        <div class="field"><label>Sunday date</label><input type="date" id="w-sunday"><div class="hint">Used to pull the correct Grace Notes issue.</div></div>
+        <div class="field" style="display:flex;align-items:flex-end;padding-bottom:1px">
+          <button class="btn btn-secondary" style="width:100%" id="btn-fetch-gn" onclick="fetchGraceNotesPreview()">Preview Grace Notes</button>
+        </div>
+      </div>
+      <div id="gn-preview" style="display:none;margin-top:10px">
+        <div id="gn-badge" class="alert alert-ok" style="margin-bottom:8px"></div>
+        <div class="field"><label>Grace Notes content (auto-filled, edit if needed)</label><textarea id="w-content" style="min-height:90px"></textarea></div>
+        <div class="field"><label>Archive URL</label><input type="text" id="w-url"></div>
+      </div>
+      <div id="gn-manual" style="margin-top:10px">
+        <div class="hint" style="margin-bottom:8px">Or paste manually:</div>
+        <div class="field"><label>Archive URL (manual)</label><input type="text" id="w-url-manual" placeholder="https://mailchimp.com/..."></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="ct">Sunday service preview</div>
+      <div class="field"><label>Sermon / service info</label><textarea id="w-service" placeholder="e.g. Rev. Williams on Acts 2, communion Sunday, guest musician"></textarea><div class="hint">Used for the Saturday invite and preview post.</div></div>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-primary" id="btn-wed" data-default="Draft Wed + Sat posts" onclick="runWed()">Draft Wed + Sat posts</button>
+      <button class="btn btn-secondary" onclick="clearWed()">Clear</button>
+    </div>
+    <div id="results-wed" class="results"></div>
+  </div>
+
+  <!-- FRIDAY -->
+  <div id="p-fri" class="panel">
+    <div class="card">
+      <div class="ct">Blog post</div>
+      <div class="row2">
+        <div class="field"><label>Date</label><input type="date" id="f-date"></div>
+        <div class="field" style="display:flex;align-items:flex-end;padding-bottom:1px">
+          <button class="btn btn-secondary" style="width:100%" id="btn-fetch-blog" onclick="fetchBlogPreview()">Fetch blog post</button>
+        </div>
+      </div>
+      <div id="blog-preview" style="display:none;margin-top:10px">
+        <div id="blog-badge" class="alert alert-ok" style="margin-bottom:8px"></div>
+        <div class="field"><label>Blog content (auto-filled, edit if needed)</label><textarea id="f-content" style="min-height:90px"></textarea></div>
+        <div class="field"><label>Archive URL</label><input type="text" id="f-url"></div>
+      </div>
+      <div id="blog-manual" style="margin-top:10px">
+        <div class="hint" style="margin-bottom:8px">Or paste manually:</div>
+        <div class="field"><label>Subject / title</label><input type="text" id="f-subject" placeholder="e.g. Rev. Williams' Weekly Blog - June 5, 2026"></div>
+        <div class="field"><label>Archive URL (manual)</label><input type="text" id="f-url-manual" placeholder="https://mailchimp.com/..."></div>
+        <div class="field"><label>Blog content (manual)</label><textarea id="f-content-manual" style="min-height:90px" placeholder="Paste blog text here"></textarea></div>
+      </div>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-primary" id="btn-fri" data-default="Draft Friday post" onclick="runFriday()">Draft Friday post</button>
+      <button class="btn btn-secondary" onclick="clearFriday()">Clear</button>
+    </div>
+    <div id="results-fri" class="results"></div>
+  </div>
+
+  <!-- SERIES -->
+  <div id="p-series" class="panel">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+      <div style="font-size:13px;color:var(--muted)" id="series-count"></div>
+      <button class="btn btn-primary" onclick="toggleNewSeriesForm()">+ New series</button>
+    </div>
+
+    <!-- New series form -->
+    <div class="card" id="new-series-card" style="display:none">
+      <div class="ct">New series</div>
+      <div class="row2">
+        <div class="field"><label>Series name</label><input type="text" id="ns-name" placeholder="e.g. Advent 2026"></div>
+        <div class="row2" style="gap:8px">
+          <div class="field"><label>Cadence</label>
+            <select id="ns-cadence">
+              <option value="weekly">Weekly</option>
+              <option value="biweekly">Biweekly</option>
+              <option value="monthly">Monthly</option>
+            </select>
+          </div>
+          <div class="field"><label>Start date</label><input type="date" id="ns-start"></div>
+        </div>
+      </div>
+      <div class="field"><label>Description</label><textarea id="ns-desc" style="min-height:60px" placeholder="What is this series about?"></textarea></div>
+      <div class="field"><label>Context for Claude</label><textarea id="ns-context" style="min-height:72px" placeholder="Background info Claude should know when drafting posts — key facts, tone, goals"></textarea></div>
+      <div class="row2">
+        <div class="field"><label>Number of posts</label><input type="number" id="ns-count" value="6" min="1" max="52"></div>
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-primary" id="btn-gen-plan" onclick="generatePlan()">Generate post plan</button>
+        <div class="hint" style="margin:0">Claude will draft the post titles and angles. You can edit before saving.</div>
+      </div>
+      <div id="ns-plan-area" style="margin-top:16px;display:none">
+        <div class="ct">Post plan <span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:11px;color:var(--muted)">(edit before saving)</span></div>
+        <div id="ns-plan-rows"></div>
+        <div class="btn-row" style="margin-top:12px">
+          <button class="btn btn-primary" id="btn-save-series" onclick="saveSeries()">Save series</button>
+          <button class="btn btn-secondary" onclick="addPlanRow()">+ Add post</button>
+          <button class="btn btn-secondary" onclick="cancelNewSeries()">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="series-list"><div class="hint" style="padding:8px 0">Loading series...</div></div>
+  </div>
+
+  <!-- DRAFTS -->
+  <div id="p-drafts" class="panel">
+    <div class="card">
+      <div class="ct">Recent drafts</div>
+      <div id="drafts-list"><div class="hint" style="padding:8px 0">Loading...</div></div>
+    </div>
+  </div>
+
+  <!-- SETTINGS -->
+  <div id="p-settings" class="panel">
+    <div class="card">
+      <div class="ct">Claude API</div>
+      <div class="field"><label>Anthropic API key</label><input type="text" id="s-ak" placeholder="sk-ant-..." autocomplete="off"><div class="hint" id="s-ak-hint">Loading...</div></div>
+    </div>
+    <div class="card">
+      <div class="ct">Mailchimp</div>
+      <div class="row2">
+        <div class="field"><label>Mailchimp API key</label><input type="text" id="s-mk" placeholder="xxxxxxxx-us21" autocomplete="off"></div>
+        <div class="field"><label>Server prefix</label><input type="text" id="s-ms" placeholder="e.g. us21"><div class="hint">From your Mailchimp API URL</div></div>
+      </div>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-primary" id="btn-settings" onclick="saveSettings()">Save settings</button>
+    </div>
+    <div id="results-settings" class="results"></div>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>
