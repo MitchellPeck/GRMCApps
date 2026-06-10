@@ -18,7 +18,7 @@ CREATE TABLE apps (
   id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   slug        text UNIQUE NOT NULL,
   name        text NOT NULL,
-  host        text UNIQUE NOT NULL,
+  subdomain   text UNIQUE NOT NULL,
   icon        text,
   enabled     boolean NOT NULL DEFAULT true,
   created_at  timestamptz NOT NULL DEFAULT now()
@@ -32,10 +32,10 @@ CREATE TABLE session (
 CREATE INDEX session_expire_idx ON session (expire);
 
 -- Seed the registry with the throwaway validation app.
-INSERT INTO apps (slug, name, host, icon)
-VALUES ('whoami', 'Who Am I', 'app-whoami.lvh.me', '👤');
+INSERT INTO apps (slug, name, subdomain, icon)
+VALUES ('whoami', 'Who Am I', 'whoami', '👤');
 
-INSERT INTO apps (slug, name, host, icon)
-VALUES ('social-posts', 'Social Posts', 'app-social.lvh.me', '📣');
+INSERT INTO apps (slug, name, subdomain, icon)
+VALUES ('social-posts', 'Social Posts', 'social', '📣');
 
 RESET ROLE;

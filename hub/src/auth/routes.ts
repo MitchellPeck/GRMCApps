@@ -3,7 +3,8 @@ import type { AuthorizationParameters } from "openid-client";
 import { getOidcClient, generators } from "./oidc";
 import { config } from "../config";
 import { pool } from "../db";
-import { getAppByHost, getUser } from "../apps/registry";
+import { getAppBySubdomain, getUser } from "../apps/registry";
+import { subdomainFromHost } from "../apps/host";
 
 // Short-lived marker cookie set on logout. It survives the destroyed session
 // cookie and tells the next /auth/login to force a Google prompt instead of
@@ -117,7 +118,8 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       );
     }
 
-    const appRow = await getAppByHost(forwardedHost);
+    const subdomain = subdomainFromHost(forwardedHost, config.baseDomain);
+    const appRow = subdomain ? await getAppBySubdomain(subdomain) : null;
     if (!appRow || !appRow.enabled) {
       return reply.code(403).send("Forbidden: unknown or disabled app");
     }

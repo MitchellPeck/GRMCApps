@@ -35,7 +35,7 @@ services:
     networks: [hubnet]
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.hub.rule=Host(`hub.lvh.me`)"
+      - "traefik.http.routers.hub.rule=Host(`hub.${BASE_DOMAIN}`)"
       - "traefik.http.routers.hub.entrypoints=websecure"
       - "traefik.http.routers.hub.tls=true"
       - "traefik.http.services.hub.loadbalancer.server.port=3000"
@@ -50,7 +50,7 @@ services:
     networks: [hubnet]
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.whoami.rule=Host(`app-whoami.lvh.me`)"
+      - "traefik.http.routers.whoami.rule=Host(`whoami.${BASE_DOMAIN}`)"
       - "traefik.http.routers.whoami.entrypoints=websecure"
       - "traefik.http.routers.whoami.tls=true"
       - "traefik.http.routers.whoami.middlewares=hub-forward-auth@file"
@@ -68,7 +68,7 @@ services:
     networks: [hubnet]
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.social.rule=Host(`app-social.lvh.me`)"
+      - "traefik.http.routers.social.rule=Host(`social.${BASE_DOMAIN}`)"
       - "traefik.http.routers.social.entrypoints=websecure"
       - "traefik.http.routers.social.tls=true"
       - "traefik.http.routers.social.middlewares=hub-forward-auth@file"

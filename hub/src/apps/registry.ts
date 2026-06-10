@@ -4,22 +4,22 @@ export interface AppRow {
   id: string;
   slug: string;
   name: string;
-  host: string;
+  subdomain: string;
   icon: string | null;
   enabled: boolean;
 }
 
 export async function listEnabledApps(): Promise<AppRow[]> {
   const r = await pool.query<AppRow>(
-    "SELECT id, slug, name, host, icon, enabled FROM apps WHERE enabled = true ORDER BY name"
+    "SELECT id, slug, name, subdomain, icon, enabled FROM apps WHERE enabled = true ORDER BY name"
   );
   return r.rows;
 }
 
-export async function getAppByHost(host: string): Promise<AppRow | null> {
+export async function getAppBySubdomain(subdomain: string): Promise<AppRow | null> {
   const r = await pool.query<AppRow>(
-    "SELECT id, slug, name, host, icon, enabled FROM apps WHERE host = $1",
-    [host]
+    "SELECT id, slug, name, subdomain, icon, enabled FROM apps WHERE subdomain = $1",
+    [subdomain]
   );
   return r.rows[0] ?? null;
 }
