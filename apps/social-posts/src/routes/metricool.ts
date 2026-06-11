@@ -33,12 +33,12 @@ export async function metricoolRoutes(app: FastifyInstance): Promise<void> {
   app.post("/api/metricool/send", async (req) => {
     const b = (req.body ?? {}) as SendBody;
     const email = getIdentity(req).email;
+    let mediaUrl = ""; // hoisted so the error path can log an orphaned R2 url
     try {
       const creds = await getMetricoolCreds(pool);
       const networks = Array.isArray(b.networks) ? b.networks : [];
       const warnings = charWarnings(b.text || "", networks);
 
-      let mediaUrl = "";
       if (b.approvedImageId) {
         const { bytes, contentType } = await getApprovedImageBytes(getIdentity(req), Number(b.approvedImageId));
         const r2Url = await uploadPublic(await getR2Creds(pool), bytes, contentType, `${b.approvedImageId}-${Date.now()}`);
@@ -62,7 +62,7 @@ export async function metricoolRoutes(app: FastifyInstance): Promise<void> {
     } catch (e) {
       await logSend(pool, {
         sourceType: b.sourceType || "", sourceRef: b.sourceRef || "", text: b.text || "",
-        networks: (b.networks || []).join(","), imageRef: b.approvedImageId || b.imageUrl || "", r2Url: "",
+        networks: (b.networks || []).join(","), imageRef: b.approvedImageId || b.imageUrl || "", r2Url: mediaUrl,
         scheduledFor: b.dateTime || "", timezone: b.timezone || "", metricoolPostId: "", status: "error",
         error: (e as Error).message, createdBy: email,
       }).catch(() => {});
