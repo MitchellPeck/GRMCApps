@@ -4,6 +4,7 @@ import { getIdentity } from "../identity";
 import { getSettingsView } from "../settings";
 import { getMetricoolCreds, listBrands, normalizeMedia, schedulePost, buildSchedulerPayload, charWarnings } from "../metricool";
 import { logSend } from "../metricool-sends";
+import { listApprovedImages } from "../approvals-client";
 
 interface SendBody {
   text: string; networks: string[]; dateTime: string; timezone: string;
@@ -20,6 +21,11 @@ export async function metricoolRoutes(app: FastifyInstance): Promise<void> {
 
   app.get("/api/metricool/brands", async () => {
     try { return { ok: true, brands: await listBrands(await getMetricoolCreds(pool)) }; }
+    catch (e) { return { ok: false, error: (e as Error).message }; }
+  });
+
+  app.get("/api/metricool/approved-images", async (req) => {
+    try { return { ok: true, images: await listApprovedImages(getIdentity(req)) }; }
     catch (e) { return { ok: false, error: (e as Error).message }; }
   });
 
