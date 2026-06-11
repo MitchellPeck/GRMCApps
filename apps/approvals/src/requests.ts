@@ -276,3 +276,26 @@ export async function getVersionImage(pool: Pool, id: number, versionNo: number,
   if (!row) return { ok: false, status: 404, error: "Version not found." };
   return { ok: true, mimeType: row.mime_type, fileName: row.file_name, image: row.image as Buffer };
 }
+
+export interface ApprovedItem { id: number; title: string; currentVersion: number; }
+export async function listApproved(pool: Pool): Promise<ApprovedItem[]> {
+  const r = await pool.query(
+    "SELECT id, title, current_version FROM requests WHERE status = 'approved' ORDER BY updated_at DESC"
+  );
+  return r.rows.map((row) => ({ id: Number(row.id), title: row.title, currentVersion: Number(row.current_version) }));
+}
+
+export type ApprovedImageResult =
+  | { ok: true; mimeType: string; fileName: string; image: Buffer }
+  | { ok: false; status: number; error: string };
+export async function getApprovedImage(pool: Pool, id: number): Promise<ApprovedImageResult> {
+  const req = await pool.query("SELECT current_version, status FROM requests WHERE id = $1", [id]);
+  if (!req.rows[0]) return { ok: false, status: 404, error: "Request not found." };
+  if (req.rows[0].status !== "approved") return { ok: false, status: 403, error: "Request is not approved." };
+  const v = await pool.query(
+    "SELECT mime_type, file_name, image FROM request_versions WHERE request_id = $1 AND version_no = $2",
+    [id, req.rows[0].current_version]
+  );
+  if (!v.rows[0]) return { ok: false, status: 404, error: "Image not found." };
+  return { ok: true, mimeType: v.rows[0].mime_type, fileName: v.rows[0].file_name, image: v.rows[0].image };
+}

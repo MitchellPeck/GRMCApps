@@ -6,6 +6,7 @@ import { DecisionAction } from "../approval";
 import {
   createRequest, listRequests, getRequestDetail,
   recordDecision, addVersion, getVersionImage, UploadFile,
+  listApproved, getApprovedImage,
 } from "../requests";
 
 // Pull a single file part + text fields out of a multipart request.
@@ -128,5 +129,18 @@ export async function requestsRoutes(app: FastifyInstance): Promise<void> {
     } catch (e) {
       return uploadErrorResponse(reply, e);
     }
+  });
+
+  // Team-visible approved gallery (any authenticated hub user) — used by social-posts.
+  app.get("/api/approved", async () => {
+    try { return { ok: true, images: await listApproved(pool) }; }
+    catch (e) { return { ok: false, error: (e as Error).message }; }
+  });
+
+  app.get("/api/approved/:id/image", async (req, reply) => {
+    const r = await getApprovedImage(pool, Number((req.params as { id: string }).id));
+    if (!r.ok) { reply.code(r.status); return { ok: false, error: r.error }; }
+    reply.header("Content-Type", r.mimeType).header("Cache-Control", "private, max-age=300");
+    return reply.send(r.image);
   });
 }

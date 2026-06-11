@@ -5,6 +5,7 @@ import { addRosterEntry } from "./roster";
 import {
   createRequest, listRequests, getRequestDetail,
   recordDecision, addVersion, getVersionImage,
+  listApproved, getApprovedImage,
 } from "./requests";
 
 const url = process.env.TEST_DATABASE_URL;
@@ -78,6 +79,42 @@ test("full request lifecycle: submit -> changes -> new version -> approve", { sk
   assert.equal(after.request.status, "approved");
   // cannot approve again
   assert.equal((await recordDecision(pool, id, "appr@x.com", "approve", "")).ok, false);
+
+  await pool.query("DELETE FROM request_events");
+  await pool.query("DELETE FROM request_versions");
+  await pool.query("DELETE FROM requests");
+  await pool.query("DELETE FROM roster");
+  await pool.end();
+});
+
+test("listApproved returns approved requests and getApprovedImage returns current-version bytes", { skip: !url }, async () => {
+  const pool = new Pool({ connectionString: url });
+  await pool.query("DELETE FROM request_events");
+  await pool.query("DELETE FROM request_versions");
+  await pool.query("DELETE FROM requests");
+  await pool.query("DELETE FROM roster");
+
+  const appr = await addRosterEntry(pool, "Approver2", "appr2@x.com");
+  assert.ok(appr.ok);
+
+  const created = await createRequest(pool, {
+    title: "Approved Banner", description: "approved graphic", approverId: appr.id,
+    submitter: { email: "sub2@x.com", name: "Submitter2" },
+    file: { fileName: "approved.png", mimeType: "image/png", buffer: png },
+  });
+  assert.ok(created.ok);
+  const id = created.id;
+
+  // Directly set status to approved (bypassing business logic, matching test style)
+  await pool.query("UPDATE requests SET status='approved', decided_at=now() WHERE id=$1", [id]);
+
+  const list = await listApproved(pool);
+  assert.ok(Array.isArray(list));
+  assert.ok(list.every((r) => typeof r.id === "number" && typeof r.title === "string" && typeof r.currentVersion === "number"));
+  assert.ok(list.length >= 1, "an approved request should be listed");
+
+  const img = await getApprovedImage(pool, list[0].id);
+  assert.ok(img.ok && Buffer.isBuffer(img.image) && img.mimeType.length > 0);
 
   await pool.query("DELETE FROM request_events");
   await pool.query("DELETE FROM request_versions");
