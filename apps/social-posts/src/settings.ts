@@ -18,6 +18,12 @@ export interface SettingsView {
   hasAnthropicKey: boolean;
   mailchimpServer: string;
   hasMailchimp: boolean;
+  hasMetricool: boolean;
+  metricoolUserId: string;
+  metricoolBlogId: string;
+  defaultPostTime: string;
+  defaultTimezone: string;
+  hasR2: boolean;
 }
 
 // Mirrors Code.gs getSettings(): never returns full keys, only a hint + flags.
@@ -25,10 +31,20 @@ export async function getSettingsView(pool: Pool): Promise<SettingsView> {
   const ak = await getSetting(pool, "anthropic_api_key");
   const mk = await getSetting(pool, "mailchimp_api_key");
   const server = await getSetting(pool, "mailchimp_server");
+  const mcToken = await getSetting(pool, "metricool_token");
+  const mcUser = await getSetting(pool, "metricool_user_id");
+  const r2Key = await getSetting(pool, "r2_access_key_id");
+  const r2Bucket = await getSetting(pool, "r2_bucket");
   return {
     anthropicKeyHint: ak ? ak.substring(0, 10) + "..." : "",
     hasAnthropicKey: ak.length > 0,
     mailchimpServer: server,
     hasMailchimp: !!(mk && server),
+    hasMetricool: !!(mcToken && mcUser),
+    metricoolUserId: mcUser,
+    metricoolBlogId: await getSetting(pool, "metricool_blog_id"),
+    defaultPostTime: (await getSetting(pool, "default_post_time")) || "09:00",
+    defaultTimezone: (await getSetting(pool, "default_timezone")) || "America/New_York",
+    hasR2: !!(r2Key && r2Bucket),
   };
 }

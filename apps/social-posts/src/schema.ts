@@ -39,4 +39,21 @@ CREATE TABLE IF NOT EXISTS post_drafts (
   created_by  text NOT NULL DEFAULT '',
   created_at  timestamptz NOT NULL DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS metricool_sends (
+  id                bigserial PRIMARY KEY,
+  source_type       text NOT NULL DEFAULT '',
+  source_ref        text NOT NULL DEFAULT '',
+  text              text NOT NULL,
+  networks          text NOT NULL,
+  image_ref         text NOT NULL DEFAULT '',
+  r2_url            text NOT NULL DEFAULT '',
+  scheduled_for     text NOT NULL,
+  timezone          text NOT NULL,
+  metricool_post_id text NOT NULL DEFAULT '',
+  status            text NOT NULL DEFAULT 'sent',
+  error             text NOT NULL DEFAULT '',
+  created_by        text NOT NULL DEFAULT '',
+  created_at        timestamptz NOT NULL DEFAULT now()
+);
 `;
