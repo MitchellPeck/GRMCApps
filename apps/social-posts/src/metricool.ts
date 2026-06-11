@@ -1,3 +1,6 @@
+import { Pool } from "pg";
+import { getSetting } from "./settings";
+
 export interface PayloadInput {
   text: string;
   networks: string[];
@@ -61,4 +64,48 @@ export function charWarnings(text: string, networks: string[]): string[] {
     if (lim && text.length > lim) out.push(`${n} limit is ${lim} chars; this post is ${text.length}.`);
   }
   return out;
+}
+
+export interface MetricoolCreds { token: string; userId: string; blogId: string; }
+
+export async function getMetricoolCreds(pool: Pool): Promise<MetricoolCreds> {
+  const token = await getSetting(pool, "metricool_token");
+  const userId = await getSetting(pool, "metricool_user_id");
+  const blogId = await getSetting(pool, "metricool_blog_id");
+  if (!token || !userId) throw new Error("Metricool not configured — add your token in Settings.");
+  return { token, userId, blogId };
+}
+
+const BASE = "https://app.metricool.com/api";
+
+function mcHeaders(c: MetricoolCreds): Record<string, string> {
+  return { "X-Mc-Auth": c.token, "content-type": "application/json" };
+}
+
+// List the brands the token can access so the user can pick a blogId.
+// NOTE: confirm the exact brands path against the live API/CLI during build;
+// adjust the path/field mapping here if it differs.
+export async function listBrands(c: MetricoolCreds): Promise<Array<{ id: string; label: string }>> {
+  const res = await fetch(`${BASE}/admin/simpleProfiles?userId=${encodeURIComponent(c.userId)}`, { headers: mcHeaders(c) });
+  const data: any = await res.json();
+  const arr: any[] = Array.isArray(data) ? data : data.profiles || data.brands || [];
+  return arr.map((b) => ({ id: String(b.blogId ?? b.id), label: String(b.label ?? b.title ?? b.brand ?? b.blogId ?? b.id) }));
+}
+
+// Normalize a PUBLIC media url so Metricool hosts it; returns the usable url.
+// NOTE: confirm the exact normalize path against the live API during build.
+export async function normalizeMedia(c: MetricoolCreds, publicUrl: string): Promise<string> {
+  const url = `${BASE}/v2/scheduler/medias?userId=${encodeURIComponent(c.userId)}&blogId=${encodeURIComponent(c.blogId)}&url=${encodeURIComponent(publicUrl)}`;
+  const res = await fetch(url, { headers: mcHeaders(c) });
+  if (!res.ok) throw new Error(`Metricool media normalize failed (${res.status})`);
+  const data: any = await res.json();
+  return String(data.url ?? data.media ?? publicUrl);
+}
+
+export async function schedulePost(c: MetricoolCreds, payload: SchedulerPayload): Promise<string> {
+  const url = `${BASE}/v2/scheduler/posts?userId=${encodeURIComponent(c.userId)}&blogId=${encodeURIComponent(c.blogId)}`;
+  const res = await fetch(url, { method: "POST", headers: mcHeaders(c), body: JSON.stringify(payload) });
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.message || data?.error || `Metricool scheduler failed (${res.status})`);
+  return String(data.id ?? data.postId ?? "");
 }
