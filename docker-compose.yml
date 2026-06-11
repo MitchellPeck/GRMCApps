@@ -1,7 +1,11 @@
 services:
   traefik:
     image: traefik:v3.6
-    command: ["--configfile=/etc/traefik/traefik.yml"]
+    command:
+      - "--configfile=/etc/traefik/traefik.yml"
+    environment:
+      ACME_EMAIL: "${ACME_EMAIL}"
+      CF_DNS_API_TOKEN: "${CF_DNS_API_TOKEN}"
     ports:
       - "80:80"
       - "443:443"
@@ -10,7 +14,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
       - ./traefik/dynamic:/etc/traefik/dynamic:ro
-      - ./certs:/certs:ro
+      - letsencrypt:/letsencrypt
     networks: [hubnet]
 
   postgres:
@@ -37,7 +41,9 @@ services:
       - "traefik.enable=true"
       - "traefik.http.routers.hub.rule=Host(`hub.${BASE_DOMAIN}`)"
       - "traefik.http.routers.hub.entrypoints=websecure"
-      - "traefik.http.routers.hub.tls=true"
+      - "traefik.http.routers.hub.tls.certresolver=le"
+      - "traefik.http.routers.hub.tls.domains[0].main=${BASE_DOMAIN}"
+      - "traefik.http.routers.hub.tls.domains[0].sans=*.${BASE_DOMAIN}"
       - "traefik.http.services.hub.loadbalancer.server.port=3000"
 
   whoami:
@@ -97,3 +103,4 @@ networks:
 
 volumes:
   pgdata:
+  letsencrypt:
