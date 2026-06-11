@@ -49,7 +49,10 @@ document.querySelectorAll('.tab').forEach(function(t){
 
 function postCard(label, cls, text, uid) {
   return '<div class="pcard"><div class="plabel"><span class="'+cls+'">'+esc(label)+'</span>'
-    +'<button class="btn-sm btn-sm-gold" onclick="copyText(this,document.getElementById(\''+uid+'\').textContent)">Copy</button></div>'
+    +'<div style="display:flex;gap:6px;align-items:center">'
+    +'<button class="btn-sm btn-sm-gold" onclick="copyText(this,document.getElementById(\''+uid+'\').textContent)">Copy</button>'
+    +'<button class="btn-sm" onclick="openMetricool(document.getElementById(\''+uid+'\').textContent)">&#8594; Metricool</button>'
+    +'</div></div>'
     +'<div class="ptext" id="'+uid+'">'+esc(text)+'</div></div>';
 }
 
@@ -63,12 +66,20 @@ function checkAuthStatus() {
     if(hint) hint.textContent = s.hasAnthropicKey ? 'Current: '+s.anthropicKeyHint : 'No key saved.';
     var ms=document.getElementById('s-ms');
     if(ms && s.mailchimpServer) ms.value=s.mailchimpServer;
+    // Metricool settings
+    window._mcDefaults = { time: s.defaultPostTime, tz: s.defaultTimezone };
+    var mcUser=document.getElementById('s-mc-user'); if(mcUser && s.metricoolUserId) mcUser.value=s.metricoolUserId;
+    var mcBlog=document.getElementById('s-mc-blog'); if(mcBlog && s.metricoolBlogId) mcBlog.value=s.metricoolBlogId;
+    var mcTime=document.getElementById('s-mc-time'); if(mcTime && s.defaultPostTime) mcTime.value=s.defaultPostTime;
+    var mcTz=document.getElementById('s-mc-tz'); if(mcTz && s.defaultTimezone) mcTz.value=s.defaultTimezone;
   }).catch(function(e){ console.error(e); });
 }
 
 function saveSettings() {
   setBtn('btn-settings', true, 'Saving...');
-  api('/api/settings', {method:'POST', body:{ anthropicKey:v('s-ak'), mailchimpKey:v('s-mk'), mailchimpServer:v('s-ms') }})
+  api('/api/settings', {method:'POST', body:{ anthropicKey:v('s-ak'), mailchimpKey:v('s-mk'), mailchimpServer:v('s-ms'),
+    metricoolToken:v('s-mc-token'), metricoolUserId:v('s-mc-user'), metricoolBlogId:v('s-mc-blog'),
+    defaultPostTime:v('s-mc-time'), defaultTimezone:v('s-mc-tz') }})
     .then(function(res){
       setBtn('btn-settings', false, 'Save settings');
       var el=document.getElementById('results-settings');
@@ -303,6 +314,7 @@ function renderSeriesPosts(seriesId, res) {
         +'<div class="ptext" id="'+uid+'">'+esc(p.draft)+'</div>'
         +'<div style="display:flex;gap:6px;margin-top:6px">'
         +'<button class="btn-sm btn-sm-gold" onclick="copyText(this,document.getElementById(\''+uid+'\').textContent)">Copy</button>'
+        +'<button class="btn-sm" onclick="openMetricool(document.getElementById(\''+uid+'\').textContent,{sourceType:\'series\',sourceRef:\''+seriesId+'-'+p.postIdx+'\'})">&#8594; Metricool</button>'
         +'</div></div>';
     }
     if(p.notes){
@@ -442,12 +454,57 @@ function loadDrafts() {
         var uid='dr-'+i;
         html+='<div class="pcard"><div class="plabel"><span class="'+(m[r.key]||'lbl-mon')+'">'+esc(r.key)+' — '+esc(r.postDate||String(r.dateDrafted).split('T')[0])+'</span>'
           +'<div style="display:flex;gap:6px;align-items:center"><span class="pbadge pb-'+esc(r.status)+'">'+esc(r.status)+'</span>'
-          +'<button class="btn-sm btn-sm-gold" onclick="copyText(this,document.getElementById(\''+uid+'\').textContent)">Copy</button></div></div>'
+          +'<button class="btn-sm btn-sm-gold" onclick="copyText(this,document.getElementById(\''+uid+'\').textContent)">Copy</button>'
+          +'<button class="btn-sm" onclick="openMetricool(document.getElementById(\''+uid+'\').textContent,{sourceType:\'draft\'})">&#8594; Metricool</button>'
+          +'</div></div>'
           +'<div class="ptext" id="'+uid+'">'+esc(r.text)+'</div></div>';
       });
       document.getElementById('drafts-list').innerHTML=html;
     })
     .catch(function(e){ document.getElementById('drafts-list').innerHTML='<div class="alert alert-err">'+esc(e.message)+'</div>'; });
+}
+
+// ── Metricool ─────────────────────────────────────────────────────────────────
+var _mcCtx = { sourceType:'', sourceRef:'' };
+function openMetricool(text, opts){
+  opts = opts || {};
+  _mcCtx = { sourceType: opts.sourceType||'', sourceRef: opts.sourceRef||'' };
+  document.getElementById('mc-text').value = text || '';
+  var d = opts.date || new Date().toISOString().split('T')[0];
+  document.getElementById('mc-date').value = d;
+  document.getElementById('mc-time').value = (window._mcDefaults && _mcDefaults.time) || '09:00';
+  document.getElementById('mc-imgurl').value = '';
+  document.getElementById('mc-msg').innerHTML = '';
+  document.getElementById('mc-modal').style.display = 'flex';
+}
+function closeMetricool(){ document.getElementById('mc-modal').style.display='none'; }
+function submitMetricool(){
+  var networks = [];
+  if (document.getElementById('mc-fb').checked) networks.push('facebook');
+  if (document.getElementById('mc-ig').checked) networks.push('instagram');
+  var dateTime = document.getElementById('mc-date').value + 'T' + (document.getElementById('mc-time').value||'09:00') + ':00';
+  var tz = (window._mcDefaults && _mcDefaults.tz) || 'America/New_York';
+  setBtn('mc-send-btn', true, 'Sending...');
+  api('/api/metricool/send', { method:'POST', body:{
+    text: document.getElementById('mc-text').value, networks: networks, dateTime: dateTime, timezone: tz,
+    imageUrl: document.getElementById('mc-imgurl').value, sourceType: _mcCtx.sourceType, sourceRef: _mcCtx.sourceRef
+  }}).then(function(res){
+    setBtn('mc-send-btn', false);
+    var el = document.getElementById('mc-msg');
+    if(!res.ok){ el.innerHTML = '<div class="alert alert-err">'+esc(res.error)+'</div>'; return; }
+    var extra = (res.note? ' '+esc(res.note):'') + ((res.warnings&&res.warnings.length)? ' '+esc(res.warnings.join(' ')):'');
+    el.innerHTML = '<div class="alert alert-ok">Sent to Metricool — scheduled '+esc(res.scheduledFor)+'.'+extra+'</div>';
+  }).catch(function(e){ setBtn('mc-send-btn', false); document.getElementById('mc-msg').innerHTML = '<div class="alert alert-err">'+esc(e.message)+'</div>'; });
+}
+function loadBrands(){
+  var btn=document.getElementById('btn-load-brands'); if(btn){btn.disabled=true;btn.textContent='Loading...';}
+  api('/api/metricool/brands').then(function(res){
+    if(btn){btn.disabled=false;btn.textContent='Load brands';}
+    var sel=document.getElementById('mc-brands'); if(!sel) return;
+    if(!res.ok){ alert('Error: '+res.error); return; }
+    sel.innerHTML = (res.brands||[]).map(function(b){ return '<option value="'+esc(b.id)+'">'+esc(b.label)+'</option>'; }).join('');
+    if(res.brands && res.brands.length){ document.getElementById('s-mc-blog').value = res.brands[0].id; }
+  }).catch(function(e){ if(btn){btn.disabled=false;btn.textContent='Load brands';} alert('Error: '+e.message); });
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────

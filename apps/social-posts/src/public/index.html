@@ -268,6 +268,24 @@ textarea{resize:vertical;min-height:76px;line-height:1.55}
         <div class="field"><label>Server prefix</label><input type="text" id="s-ms" placeholder="e.g. us21"><div class="hint">From your Mailchimp API URL</div></div>
       </div>
     </div>
+    <div class="card">
+      <div class="ct">Metricool</div>
+      <div class="field"><label>Metricool API token</label><input type="text" id="s-mc-token" placeholder="Your Metricool API token" autocomplete="off"></div>
+      <div class="row2">
+        <div class="field"><label>User ID</label><input type="text" id="s-mc-user" placeholder="Metricool user ID"></div>
+        <div class="field"><label>Blog ID</label>
+          <div style="display:flex;gap:8px;align-items:flex-start">
+            <input type="text" id="s-mc-blog" placeholder="Blog / brand ID" style="flex:1">
+            <button class="btn btn-secondary" id="btn-load-brands" onclick="loadBrands()" style="white-space:nowrap;padding:8px 12px;font-size:12px">Load brands</button>
+          </div>
+          <select id="mc-brands" style="margin-top:6px" onchange="document.getElementById('s-mc-blog').value=this.value"><option value="">— select a brand —</option></select>
+        </div>
+      </div>
+      <div class="row2">
+        <div class="field"><label>Default post time</label><input type="time" id="s-mc-time"></div>
+        <div class="field"><label>Timezone</label><input type="text" id="s-mc-tz" placeholder="America/New_York"></div>
+      </div>
+    </div>
     <div class="btn-row">
       <button class="btn btn-primary" id="btn-settings" onclick="saveSettings()">Save settings</button>
     </div>
@@ -276,5 +294,26 @@ textarea{resize:vertical;min-height:76px;line-height:1.55}
 </div>
 
 <script src="/app.js"></script>
+
+<div id="mc-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:50;align-items:center;justify-content:center">
+  <div class="card" style="max-width:520px;width:92%;max-height:90vh;overflow:auto">
+    <div class="ct">Send to Metricool</div>
+    <div class="field"><label>Post text</label><textarea id="mc-text" style="min-height:120px"></textarea></div>
+    <div class="field"><label>Networks</label>
+      <label style="font-weight:400"><input type="checkbox" id="mc-fb" checked> Facebook</label>
+      <label style="font-weight:400;margin-left:12px"><input type="checkbox" id="mc-ig" checked> Instagram</label>
+    </div>
+    <div class="row2">
+      <div class="field"><label>Date</label><input type="date" id="mc-date"></div>
+      <div class="field"><label>Time</label><input type="time" id="mc-time"></div>
+    </div>
+    <div id="mc-image-area"><div class="field"><label>Image URL (optional, must be public)</label><input type="text" id="mc-imgurl" placeholder="https://..."></div></div>
+    <div id="mc-msg"></div>
+    <div class="btn-row">
+      <button class="btn btn-primary" id="mc-send-btn" data-default="Send to Metricool" onclick="submitMetricool()">Send to Metricool</button>
+      <button class="btn btn-secondary" onclick="closeMetricool()">Cancel</button>
+    </div>
+  </div>
+</div>
 </body>
 </html>
