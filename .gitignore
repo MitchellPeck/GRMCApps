@@ -1,6 +1,7 @@
 # secrets & local certs
 .env
 certs/
+secrets/
 
 # node
 node_modules/

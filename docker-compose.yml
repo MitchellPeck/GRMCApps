@@ -50,6 +50,7 @@ services:
 
   hub:
     build: ./hub
+    image: ghcr.io/mitchellpeck/grmc-hub:latest
     env_file: .env
     depends_on:
       postgres:
@@ -63,9 +64,11 @@ services:
       - "traefik.http.routers.hub.tls.domains[0].main=${BASE_DOMAIN}"
       - "traefik.http.routers.hub.tls.domains[0].sans=*.${BASE_DOMAIN}"
       - "traefik.http.services.hub.loadbalancer.server.port=3000"
+      - "com.centurylinklabs.watchtower.enable=true"
 
   whoami:
     build: ./apps/whoami
+    image: ghcr.io/mitchellpeck/grmc-whoami:latest
     environment:
       WHOAMI_DATABASE_URL: "postgres://${WHOAMI_DB_USER}:${WHOAMI_DB_PASSWORD}@postgres:5432/${WHOAMI_DB_NAME}"
       BASE_DOMAIN: "${BASE_DOMAIN}"
@@ -80,9 +83,11 @@ services:
       - "traefik.http.routers.whoami.tls=true"
       - "traefik.http.routers.whoami.middlewares=hub-forward-auth@file"
       - "traefik.http.services.whoami.loadbalancer.server.port=3000"
+      - "com.centurylinklabs.watchtower.enable=true"
 
   social-posts:
     build: ./apps/social-posts
+    image: ghcr.io/mitchellpeck/grmc-social-posts:latest
     environment:
       SOCIALPOSTS_DB_USER: "${SOCIALPOSTS_DB_USER}"
       SOCIALPOSTS_DB_PASSWORD: "${SOCIALPOSTS_DB_PASSWORD}"
@@ -98,9 +103,11 @@ services:
       - "traefik.http.routers.social.tls=true"
       - "traefik.http.routers.social.middlewares=hub-forward-auth@file"
       - "traefik.http.services.social.loadbalancer.server.port=3000"
+      - "com.centurylinklabs.watchtower.enable=true"
 
   approvals:
     build: ./apps/approvals
+    image: ghcr.io/mitchellpeck/grmc-approvals:latest
     environment:
       APPROVALS_DB_USER: "${APPROVALS_DB_USER}"
       APPROVALS_DB_PASSWORD: "${APPROVALS_DB_PASSWORD}"
@@ -116,6 +123,7 @@ services:
       - "traefik.http.routers.approvals.tls=true"
       - "traefik.http.routers.approvals.middlewares=hub-forward-auth@file"
       - "traefik.http.services.approvals.loadbalancer.server.port=3000"
+      - "com.centurylinklabs.watchtower.enable=true"
 
 networks:
   hubnet:

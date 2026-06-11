@@ -1,0 +1,24 @@
+# Remote-host-only additions (run ONLY on the other Mac, not your build Mac).
+#
+# Start the stack on the remote with BOTH files:
+#   docker compose -f docker-compose.yml -f docker-compose.remote.yml up -d
+#
+# Watchtower polls GHCR every 2 minutes and automatically pulls + restarts any
+# app container whose image changed. It only touches services carrying the
+# `com.centurylinklabs.watchtower.enable=true` label (hub, whoami, social-posts,
+# approvals) — Postgres and Traefik are left alone.
+#
+# AUTH NOTE: Docker Desktop stores your `docker login` token in the macOS
+# keychain, which a container can't read. So Watchtower needs its own GHCR
+# credentials file at ./secrets/ghcr-auth.json (see DEPLOY.md to create it).
+services:
+  watchtower:
+    image: containrrr/watchtower
+    restart: unless-stopped
+    environment:
+      WATCHTOWER_LABEL_ENABLE: "true"     # only update labeled containers
+      WATCHTOWER_POLL_INTERVAL: "120"     # check GHCR every 120s
+      WATCHTOWER_CLEANUP: "true"          # delete old images after updating
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./secrets/ghcr-auth.json:/config.json:ro
