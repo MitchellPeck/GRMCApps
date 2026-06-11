@@ -8,6 +8,7 @@ import { settingsRoutes } from "./routes/settings";
 import { mailchimpRoutes } from "./routes/mailchimp";
 import { seriesRoutes } from "./routes/series";
 import { draftsRoutes } from "./routes/drafts";
+import { metricoolRoutes } from "./routes/metricool";
 
 const app = Fastify({ logger: true, trustProxy: true });
 
@@ -17,6 +18,7 @@ app.register(settingsRoutes);
 app.register(mailchimpRoutes);
 app.register(seriesRoutes);
 app.register(draftsRoutes);
+app.register(metricoolRoutes);
 
 app.get("/healthz", async () => ({ ok: true }));
 
