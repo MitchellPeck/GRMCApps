@@ -1,10 +1,29 @@
 services:
   traefik:
     image: traefik:v3.6
+    # Static config is provided entirely as CLI args (not a configfile) so Compose
+    # interpolates ${ACME_EMAIL}. Traefik does NOT expand env vars inside a YAML
+    # configfile, and it ignores CLI static-config args when --configfile is set —
+    # so the resolver email must come in via args like this.
     command:
-      - "--configfile=/etc/traefik/traefik.yml"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+      - "--entrypoints.websecure.address=:443"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--providers.docker.network=grmcapps_hubnet"
+      - "--providers.file.directory=/etc/traefik/dynamic"
+      - "--providers.file.watch=true"
+      - "--api.dashboard=true"
+      - "--api.insecure=true"
+      - "--log.level=INFO"
+      - "--certificatesresolvers.le.acme.email=${ACME_EMAIL}"
+      - "--certificatesresolvers.le.acme.storage=/letsencrypt/acme.json"
+      - "--certificatesresolvers.le.acme.dnschallenge=true"
+      - "--certificatesresolvers.le.acme.dnschallenge.provider=cloudflare"
+      - "--certificatesresolvers.le.acme.dnschallenge.resolvers=1.1.1.1:53,8.8.8.8:53"
     environment:
-      ACME_EMAIL: "${ACME_EMAIL}"
       CF_DNS_API_TOKEN: "${CF_DNS_API_TOKEN}"
     ports:
       - "80:80"
@@ -12,7 +31,6 @@ services:
       - "8080:8080"   # Traefik dashboard (local only)
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
       - ./traefik/dynamic:/etc/traefik/dynamic:ro
       - letsencrypt:/letsencrypt
     networks: [hubnet]
@@ -50,6 +68,7 @@ services:
     build: ./apps/whoami
     environment:
       WHOAMI_DATABASE_URL: "postgres://${WHOAMI_DB_USER}:${WHOAMI_DB_PASSWORD}@postgres:5432/${WHOAMI_DB_NAME}"
+      BASE_DOMAIN: "${BASE_DOMAIN}"
     depends_on:
       postgres:
         condition: service_healthy

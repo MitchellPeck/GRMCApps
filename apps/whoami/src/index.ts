@@ -3,6 +3,8 @@ import { Pool } from "pg";
 
 const app = Fastify({ logger: true });
 const pool = new Pool({ connectionString: process.env.WHOAMI_DATABASE_URL });
+// The hub lives at hub.<BASE_DOMAIN>; keep the link domain-agnostic.
+const HUB_URL = `https://hub.${process.env.BASE_DOMAIN ?? "grmc.app"}`;
 
 app.get("/", async (req, reply) => {
   // Prove the app can reach its OWN database with its own credentials.
@@ -31,7 +33,7 @@ app.get("/", async (req, reply) => {
       <p>Identity injected by the hub via Traefik forwardAuth:</p>
       <pre>${JSON.stringify(identity, null, 2)}</pre>
       <p>My own database time: <code>${dbTime}</code></p>
-      <p><a style="color:#93c5fd" href="https://hub.lvh.me/">← Back to hub</a></p>
+      <p><a style="color:#93c5fd" href="${HUB_URL}/">← Back to hub</a></p>
     </body></html>`);
 });
 
