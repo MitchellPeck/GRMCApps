@@ -49,7 +49,7 @@ a VPN), with no per-device certificate install.
   pulls Grace Notes / blog from Mailchimp, manages multi-week post series.
   Configure the Anthropic + Mailchimp keys in its Settings tab (stored in the
   `socialposts` database). Source ported from the Apps Script tool in
-  `docs/reference/social-posts/`.
+  `docs/reference/social-posts/`. Send drafted posts straight to Metricool as scheduled drafts (Settings → Metricool: API token + User ID + Blog ID via 'Load brands'), optionally attaching an **approved graphic from the Approvals app** — published to a public Cloudflare R2 URL so Metricool can fetch it (Settings → Image hosting). Requires the Metricool Advanced plan.
 - **Approvals** (`approvals.grmc.app`) — request and grant sign-off on graphics.
   Submitters upload an image and pick an approver from a roster (managed in
   Settings); the approver approves, rejects, or requests changes. Change
