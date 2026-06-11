@@ -19,6 +19,10 @@ services:
       WATCHTOWER_LABEL_ENABLE: "true"     # only update labeled containers
       WATCHTOWER_POLL_INTERVAL: "120"     # check GHCR every 120s
       WATCHTOWER_CLEANUP: "true"          # delete old images after updating
+      # containrrr/watchtower's bundled Docker client defaults to API 1.25,
+      # which modern Docker Desktop daemons (min API 1.40) reject. Pin the
+      # client to the daemon's minimum so its calls are accepted.
+      DOCKER_API_VERSION: "1.40"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./secrets/ghcr-auth.json:/config.json:ro
