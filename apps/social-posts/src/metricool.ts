@@ -93,13 +93,19 @@ export async function listBrands(c: MetricoolCreds): Promise<Array<{ id: string;
 }
 
 // Normalize a PUBLIC media url so Metricool hosts it; returns the usable url.
-// NOTE: confirm the exact normalize path against the live API during build.
+// Endpoint confirmed against Metricool's API (GET /actions/normalize/image/url).
+// The response is the normalized URL — either a JSON-quoted string or plain text.
 export async function normalizeMedia(c: MetricoolCreds, publicUrl: string): Promise<string> {
-  const url = `${BASE}/v2/scheduler/medias?userId=${encodeURIComponent(c.userId)}&blogId=${encodeURIComponent(c.blogId)}&url=${encodeURIComponent(publicUrl)}`;
+  const url = `${BASE}/actions/normalize/image/url?url=${encodeURIComponent(publicUrl)}&userId=${encodeURIComponent(c.userId)}${c.blogId ? `&blogId=${encodeURIComponent(c.blogId)}` : ""}`;
   const res = await fetch(url, { headers: mcHeaders(c) });
+  const text = await res.text();
   if (!res.ok) throw new Error(`Metricool media normalize failed (${res.status})`);
-  const data: any = await res.json();
-  return String(data.url ?? data.media ?? publicUrl);
+  try {
+    const data: any = JSON.parse(text);
+    return typeof data === "string" ? data : String(data.url ?? data.media ?? publicUrl);
+  } catch {
+    return text.trim();
+  }
 }
 
 export async function schedulePost(c: MetricoolCreds, payload: SchedulerPayload): Promise<string> {
