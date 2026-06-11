@@ -4,7 +4,8 @@ import { getIdentity } from "../identity";
 import { getSettingsView } from "../settings";
 import { getMetricoolCreds, listBrands, normalizeMedia, schedulePost, buildSchedulerPayload, charWarnings } from "../metricool";
 import { logSend } from "../metricool-sends";
-import { listApprovedImages } from "../approvals-client";
+import { listApprovedImages, getApprovedImageBytes } from "../approvals-client";
+import { getR2Creds, uploadPublic } from "../r2";
 
 interface SendBody {
   text: string; networks: string[]; dateTime: string; timezone: string;
@@ -38,7 +39,13 @@ export async function metricoolRoutes(app: FastifyInstance): Promise<void> {
       const warnings = charWarnings(b.text || "", networks);
 
       let mediaUrl = "";
-      if (b.imageUrl && b.imageUrl.trim()) mediaUrl = await normalizeMedia(creds, b.imageUrl.trim());
+      if (b.approvedImageId) {
+        const { bytes, contentType } = await getApprovedImageBytes(getIdentity(req), Number(b.approvedImageId));
+        const r2Url = await uploadPublic(await getR2Creds(pool), bytes, contentType, `${b.approvedImageId}-${Date.now()}`);
+        mediaUrl = await normalizeMedia(creds, r2Url);
+      } else if (b.imageUrl && b.imageUrl.trim()) {
+        mediaUrl = await normalizeMedia(creds, b.imageUrl.trim());
+      }
 
       const note = networks.includes("instagram") && !mediaUrl
         ? "Instagram needs an image — add it in Metricool before publishing." : "";

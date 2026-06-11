@@ -79,7 +79,9 @@ function saveSettings() {
   setBtn('btn-settings', true, 'Saving...');
   api('/api/settings', {method:'POST', body:{ anthropicKey:v('s-ak'), mailchimpKey:v('s-mk'), mailchimpServer:v('s-ms'),
     metricoolToken:v('s-mc-token'), metricoolUserId:v('s-mc-user'), metricoolBlogId:v('s-mc-blog'),
-    defaultPostTime:v('s-mc-time'), defaultTimezone:v('s-mc-tz') }})
+    defaultPostTime:v('s-mc-time'), defaultTimezone:v('s-mc-tz'),
+    r2AccountId:v('s-r2-account'), r2AccessKeyId:v('s-r2-key'), r2SecretAccessKey:v('s-r2-secret'),
+    r2Bucket:v('s-r2-bucket'), r2PublicBaseUrl:v('s-r2-baseurl') }})
     .then(function(res){
       setBtn('btn-settings', false, 'Save settings');
       var el=document.getElementById('results-settings');
@@ -476,6 +478,18 @@ function openMetricool(text, opts){
   document.getElementById('mc-imgurl').value = '';
   document.getElementById('mc-msg').innerHTML = '';
   document.getElementById('mc-modal').style.display = 'flex';
+  // Populate approved-image select
+  var sel = document.getElementById('mc-approved');
+  sel.innerHTML = '<option value="">— none —</option>';
+  api('/api/metricool/approved-images').then(function(res){
+    if (!res.ok || !res.images) return;
+    res.images.forEach(function(img){
+      var opt = document.createElement('option');
+      opt.value = img.id;
+      opt.textContent = img.title;
+      sel.appendChild(opt);
+    });
+  }).catch(function(){ /* silently ignore if approvals not available */ });
 }
 function closeMetricool(){ document.getElementById('mc-modal').style.display='none'; }
 function submitMetricool(){
@@ -484,10 +498,12 @@ function submitMetricool(){
   if (document.getElementById('mc-ig').checked) networks.push('instagram');
   var dateTime = document.getElementById('mc-date').value + 'T' + (document.getElementById('mc-time').value||'09:00') + ':00';
   var tz = (window._mcDefaults && _mcDefaults.tz) || 'America/New_York';
+  var approvedImageId = document.getElementById('mc-approved').value;
   setBtn('mc-send-btn', true, 'Sending...');
   api('/api/metricool/send', { method:'POST', body:{
     text: document.getElementById('mc-text').value, networks: networks, dateTime: dateTime, timezone: tz,
-    imageUrl: document.getElementById('mc-imgurl').value, sourceType: _mcCtx.sourceType, sourceRef: _mcCtx.sourceRef
+    imageUrl: document.getElementById('mc-imgurl').value, approvedImageId: approvedImageId,
+    sourceType: _mcCtx.sourceType, sourceRef: _mcCtx.sourceRef
   }}).then(function(res){
     setBtn('mc-send-btn', false);
     var el = document.getElementById('mc-msg');

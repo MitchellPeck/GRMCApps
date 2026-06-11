@@ -286,6 +286,18 @@ textarea{resize:vertical;min-height:76px;line-height:1.55}
         <div class="field"><label>Timezone</label><input type="text" id="s-mc-tz" placeholder="America/New_York"></div>
       </div>
     </div>
+    <div class="card">
+      <div class="ct">Image hosting (R2)</div>
+      <div class="row2">
+        <div class="field"><label>Account ID</label><input type="text" id="s-r2-account" placeholder="Cloudflare account ID" autocomplete="off"></div>
+        <div class="field"><label>Access Key ID</label><input type="text" id="s-r2-key" placeholder="R2 access key ID" autocomplete="off"></div>
+      </div>
+      <div class="row2">
+        <div class="field"><label>Secret Access Key</label><input type="text" id="s-r2-secret" placeholder="R2 secret access key" autocomplete="off"></div>
+        <div class="field"><label>Bucket name</label><input type="text" id="s-r2-bucket" placeholder="e.g. grmc-media"></div>
+      </div>
+      <div class="field"><label>Public base URL</label><input type="text" id="s-r2-baseurl" placeholder="https://media.grmc.app"><div class="hint">Public URL prefix for uploaded images (no trailing slash needed)</div></div>
+    </div>
     <div class="btn-row">
       <button class="btn btn-primary" id="btn-settings" onclick="saveSettings()">Save settings</button>
     </div>
@@ -307,7 +319,10 @@ textarea{resize:vertical;min-height:76px;line-height:1.55}
       <div class="field"><label>Date</label><input type="date" id="mc-date"></div>
       <div class="field"><label>Time</label><input type="time" id="mc-time"></div>
     </div>
-    <div id="mc-image-area"><div class="field"><label>Image URL (optional, must be public)</label><input type="text" id="mc-imgurl" placeholder="https://..."></div></div>
+    <div id="mc-image-area">
+      <div class="field"><label>Approved image</label><select id="mc-approved"></select></div>
+      <div class="field"><label>Image URL (optional, must be public)</label><input type="text" id="mc-imgurl" placeholder="https://..."></div>
+    </div>
     <div id="mc-msg"></div>
     <div class="btn-row">
       <button class="btn btn-primary" id="mc-send-btn" data-default="Send to Metricool" onclick="submitMetricool()">Send to Metricool</button>
