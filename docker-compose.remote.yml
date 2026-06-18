@@ -26,3 +26,19 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./secrets/ghcr-auth.json:/config.json:ro
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    # Outbound-only tunnel to Cloudflare's edge; no inbound ports. Forwards all
+    # public hostnames to Traefik (see cloudflared/config.yml). Joined to hubnet
+    # so it can reach the traefik service by name.
+    command: tunnel --config /etc/cloudflared/config.yml run
+    depends_on:
+      - traefik
+    volumes:
+      - ./cloudflared/config.yml:/etc/cloudflared/config.yml:ro
+      - ./secrets/cloudflared-creds.json:/etc/cloudflared/creds.json:ro
+    networks: [hubnet]
+    labels:
+      # Auto-update like the app containers (Watchtower runs with LABEL_ENABLE).
+      - "com.centurylinklabs.watchtower.enable=true"
