@@ -1,0 +1,17 @@
+# Cloudflare Tunnel ingress for GRMCApps.
+# Locally-managed (config-file) tunnel. Runs only on the always-on Mac via the
+# cloudflared service in docker-compose.remote.yml.
+#
+# All public hostnames (hub/whoami/social/approvals.grmc.app) are handed to
+# Traefik, which does the per-host routing. cloudflared connects over HTTPS on
+# the internal Docker network; originServerName pins SNI to a name covered by
+# the Let's Encrypt *.grmc.app wildcard cert so the origin cert validates,
+# while the original Host header is preserved for Traefik routing.
+tunnel: <TUNNEL_UUID>
+credentials-file: /etc/cloudflared/creds.json
+
+ingress:
+  - service: https://traefik:443
+    originRequest:
+      originServerName: hub.grmc.app
+  - service: http_status:404
