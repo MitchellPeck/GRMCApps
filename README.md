@@ -2,9 +2,9 @@
 
 A self-hosted "apps hub": a Traefik reverse proxy gates independent app
 containers behind Google-OIDC login handled by a Fastify hub, backed by a
-single Postgres with one database per app. It runs on one Docker host and is reachable from anywhere via a Cloudflare
-Tunnel (outbound-only; no inbound ports, no VPN), with real, publicly-trusted
-HTTPS and no per-device setup.
+single Postgres with one database per app. It runs on one Docker host and is
+reachable from anywhere via a Cloudflare Tunnel (outbound-only; no inbound
+ports, no VPN), with real, publicly-trusted HTTPS and no per-device setup.
 
 ## Prerequisites
 
