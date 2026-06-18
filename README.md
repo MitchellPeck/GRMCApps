@@ -2,9 +2,9 @@
 
 A self-hosted "apps hub": a Traefik reverse proxy gates independent app
 containers behind Google-OIDC login handled by a Fastify hub, backed by a
-single Postgres with one database per app. It runs on one Docker host and is
-reachable by every device on the local network — and by anyone tunneling in
-over a VPN — with real, publicly-trusted HTTPS and no per-device setup.
+single Postgres with one database per app. It runs on one Docker host and is reachable from anywhere via a Cloudflare
+Tunnel (outbound-only; no inbound ports, no VPN), with real, publicly-trusted
+HTTPS and no per-device setup.
 
 ## Prerequisites
 
@@ -16,9 +16,10 @@ over a VPN — with real, publicly-trusted HTTPS and no per-device setup.
 
 ## Setup
 
-1. **DNS (Cloudflare):** add `A  *.grmc.app → <Docker host LAN IP>`, set to
-   **DNS-only** (grey cloud). Any device that resolves the name gets the LAN IP,
-   which is reachable on the LAN or over a VPN into it.
+1. **DNS (Cloudflare):** the four app hosts (`hub`, `whoami`, `social`,
+   `approvals`) are **proxied CNAMEs** to the Cloudflare Tunnel, created by
+   `cloudflared tunnel route dns` (see DEPLOY.md → *Cloudflare Tunnel*). This
+   replaces the old LAN-only `A  *.grmc.app → <host LAN IP>` record.
 2. **Environment:** `cp .env.example .env`, then set `BASE_DOMAIN` (`grmc.app`),
    `ACME_EMAIL` (a real address — Let's Encrypt rejects `example.com`),
    `CF_DNS_API_TOKEN`, the `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`, and the
@@ -27,8 +28,8 @@ over a VPN — with real, publicly-trusted HTTPS and no per-device setup.
    `*.grmc.app` certificate from Let's Encrypt via the Cloudflare DNS-01
    challenge (no inbound internet access required).
 
-Every host below then loads with trusted HTTPS on any device on the LAN (or over
-a VPN), with no per-device certificate install.
+Every host below then loads with trusted HTTPS from anywhere through the
+Cloudflare Tunnel, with no per-device certificate install.
 
 > The domain is driven entirely by `BASE_DOMAIN`. Hosts are `hub.<BASE_DOMAIN>`
 > and `<subdomain>.<BASE_DOMAIN>` per app; changing `BASE_DOMAIN` re-points
