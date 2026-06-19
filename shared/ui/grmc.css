@@ -19,6 +19,7 @@
   --pending-bg:#fef6dc; --pending-fg:#9a7d20;
   --rej-bg:#f6e6e3; --rej-fg:#9a4b3a;
   --info-bg:#e6eff3; --info-fg:#0c447c;
+  --field-bg:#fff; --danger-border:#e0c3bc; --ink-soft:#5d6b61; --count-zero:#b3ac98; --gold-ring:rgba(211,176,43,.16);
   --r:7px; --r-lg:13px;
   --shadow:0 1px 2px rgba(9,45,62,.05); --shadow-lg:0 10px 30px rgba(9,45,62,.14);
   --t-h1:30px; --t-h2:22px; --t-body:13.5px; --t-small:11.5px;
@@ -53,7 +54,7 @@ header p{font-size:11px;color:var(--gold);margin-top:1px;font-family:var(--font-
 /* ---- Hero ---- */
 .hero{padding:6px 0 18px}
 .hero h1{font-size:var(--t-h1);font-weight:600;margin:8px 0 4px}
-.hero p{color:#5d6b61;font-size:var(--t-body)}
+.hero p{color:var(--ink-soft);font-size:var(--t-body)}
 
 /* ---- Tabs ---- */
 .tabs{display:flex;gap:2px;background:var(--card);border:1px solid var(--rule);border-radius:var(--r-lg);padding:4px;margin-bottom:20px;flex-wrap:wrap}
@@ -71,18 +72,18 @@ header p{font-size:11px;color:var(--gold);margin-top:1px;font-family:var(--font-
 /* ---- Forms ---- */
 .field{margin-bottom:14px}.field:last-child{margin-bottom:0}
 label,.lbl{display:block;font-size:10px;font-weight:600;color:var(--muted);margin-bottom:5px;letter-spacing:.04em;text-transform:uppercase}
-input[type=text],input[type=email],input[type=url],input[type=file],input[type=password],textarea,select{width:100%;border:1px solid var(--rule);border-radius:var(--r);padding:9px 11px;font-size:13px;font-family:var(--font-ui);color:var(--ink);background:#fff}
-input:focus,textarea:focus,select:focus{outline:none;border-color:var(--gold);box-shadow:0 0 0 3px rgba(211,176,43,.16)}
+input[type=text],input[type=email],input[type=url],input[type=file],input[type=password],textarea,select{width:100%;border:1px solid var(--rule);border-radius:var(--r);padding:9px 11px;font-size:13px;font-family:var(--font-ui);color:var(--ink);background:var(--field-bg)}
+input:focus,textarea:focus,select:focus{outline:none;border-color:var(--gold);box-shadow:0 0 0 3px var(--gold-ring)}
 textarea{resize:vertical;min-height:72px;line-height:1.55}
 
 /* ---- Buttons ---- */
 .btn-row{display:flex;gap:8px;align-items:center;margin-top:16px;flex-wrap:wrap}
 .btn{display:inline-flex;align-items:center;gap:6px;padding:9px 18px;font-size:13px;font-weight:600;cursor:pointer;border-radius:var(--r);border:none;font-family:var(--font-ui)}
 .btn-primary{background:var(--navy);color:var(--paper)}.btn-primary:hover{background:var(--navy-2)}.btn-primary:disabled{opacity:.5;cursor:not-allowed}
-.btn-secondary{background:#fff;color:var(--ink);border:1px solid var(--rule)}.btn-secondary:hover{background:var(--paper)}
+.btn-secondary{background:var(--field-bg);color:var(--ink);border:1px solid var(--rule)}.btn-secondary:hover{background:var(--paper)}
 .btn-gold{background:var(--gold);color:var(--navy)}.btn-gold:hover{filter:brightness(1.05)}
-.btn-danger{background:#fff;color:#9a4b3a;border:1px solid #e0c3bc}.btn-danger:hover{background:var(--rej-bg)}
-.btn-sm{padding:5px 11px;font-size:12px;font-weight:600;cursor:pointer;border-radius:var(--r);border:1px solid var(--rule);background:#fff;color:var(--ink);font-family:var(--font-ui)}
+.btn-danger{background:var(--field-bg);color:var(--rej-fg);border:1px solid var(--danger-border)}.btn-danger:hover{background:var(--rej-bg)}
+.btn-sm{padding:5px 11px;font-size:12px;font-weight:600;cursor:pointer;border-radius:var(--r);border:1px solid var(--rule);background:var(--field-bg);color:var(--ink);font-family:var(--font-ui)}
 .btn-sm:hover{background:var(--paper)}
 .spin{display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,.35);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
@@ -106,4 +107,4 @@ textarea{resize:vertical;min-height:72px;line-height:1.55}
 .pill-rejected{background:var(--rej-bg);color:var(--rej-fg)}
 .pill-info{background:var(--info-bg);color:var(--info-fg)}
 .badge-count{background:var(--gold);color:var(--navy);font-size:12px;font-weight:700;min-width:22px;height:22px;border-radius:11px;padding:0 7px;display:inline-flex;align-items:center;justify-content:center}
-.badge-count.zero{background:transparent;color:#b3ac98;border:1px solid var(--rule)}
+.badge-count.zero{background:transparent;color:var(--count-zero);border:1px solid var(--rule)}
