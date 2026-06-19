@@ -1,0 +1,19 @@
+/* Approvals — bespoke components (inherits grmc.css tokens). */
+.rcard{background:var(--card);border:1px solid var(--rule);border-radius:var(--r-lg);padding:16px;margin-bottom:12px;box-shadow:var(--shadow)}
+.rhead{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.rtitle{font-family:var(--font-display);font-size:16px;font-weight:600;color:var(--navy)}
+.rmeta{font-size:11px;color:var(--muted);margin-top:3px}
+.rdesc{font-size:12.5px;color:var(--ink);margin-top:8px;white-space:pre-wrap;line-height:1.6}
+.preview{margin-top:12px;border:1px solid var(--rule);border-radius:var(--r);overflow:hidden;background:var(--paper)}
+.preview img{display:block;max-width:100%;max-height:340px;margin:0 auto}
+.preview .pdf{padding:18px;text-align:center;font-size:12.5px}
+.ver{font-size:11px;color:var(--muted);margin-top:8px}
+.log{margin-top:10px;border-top:1px solid var(--rule);padding-top:10px}
+.logitem{font-size:11.5px;color:var(--muted);padding:3px 0;line-height:1.5}
+.logitem b{color:var(--ink)}
+.logitem .cmt{color:var(--ink);display:block;background:var(--paper);border-radius:6px;padding:6px 9px;margin-top:3px}
+.roster-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 0;border-bottom:1px solid var(--rule)}
+.roster-row:last-child{border-bottom:none}
+.roster-name{font-size:13px;font-weight:600}
+.roster-email{font-size:11px;color:var(--muted)}
+.roster-row.off{opacity:.5}
