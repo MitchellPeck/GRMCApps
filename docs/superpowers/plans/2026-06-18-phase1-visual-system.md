@@ -57,32 +57,30 @@ Create `scripts/fetch-fonts.sh`:
 
 ```bash
 #!/usr/bin/env bash
-# Reproducibly download self-hosted woff2 for Playfair Display + Inter.
-# Resolves Google Fonts CSS (woff2 only via modern UA) and downloads each file.
+# Reproducibly download self-hosted woff2 (latin subset) for Playfair Display
+# + Inter. The Google CSS2 endpoint returns several subset blocks per weight
+# (latin, latin-ext, cyrillic, ...), each preceded by a /* <subset> */ comment.
+# We request ONE weight at a time and extract the woff2 URL from the block
+# labelled /* latin */ — robust against block ordering and extra subsets.
 set -euo pipefail
 DEST="$(cd "$(dirname "$0")/.." && pwd)/shared/ui/fonts"
 mkdir -p "$DEST"
 UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
 
-fetch() { # <css-url> <out-basename-prefix>
-  local css; css=$(curl -sf -H "User-Agent: $UA" "$1")
-  local i=0
-  # Each @font-face block has one src url(...) woff2; map in declared weight order.
-  while IFS= read -r url; do
-    local w="${WEIGHTS[$i]}"
-    curl -sf -o "$DEST/${2}-${w}.woff2" "$url"
-    echo "  -> ${2}-${w}.woff2"
-    i=$((i+1))
-  done < <(echo "$css" | grep -oE "https://[^) ]+\.woff2")
+fetch_one() { # <family-query> <weight> <out-basename>
+  local css url
+  css=$(curl -sf -H "User-Agent: $UA" "https://fonts.googleapis.com/css2?family=${1}:wght@${2}&display=swap")
+  # From the /* latin */ marker, take the first woff2 URL that follows.
+  url=$(printf '%s\n' "$css" | awk '/\/\* latin \*\//{f=1} f && /url\(/{match($0,/https:[^)]+woff2/); print substr($0,RSTART,RLENGTH); exit}')
+  if [ -z "$url" ]; then echo "ERROR: no latin woff2 for ${1} ${2}" >&2; exit 1; fi
+  curl -sf -o "$DEST/${3}.woff2" "$url"
+  echo "  -> ${3}.woff2"
 }
 
 echo "Playfair Display..."
-WEIGHTS=(500 600 700)
-fetch "https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;600;700" "playfair"
-
+for w in 500 600 700; do fetch_one "Playfair+Display" "$w" "playfair-$w"; done
 echo "Inter..."
-WEIGHTS=(400 500 600 700)
-fetch "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700" "inter"
+for w in 400 500 600 700; do fetch_one "Inter" "$w" "inter-$w"; done
 
 echo "Done. Files in $DEST"
 ls -1 "$DEST"
