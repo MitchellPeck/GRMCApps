@@ -1,0 +1,37 @@
+/* GRMC design system — Editorial Refined. Single source of truth. */
+
+/* ---- Fonts (self-hosted) ---- */
+@font-face{font-family:"Playfair Display";font-weight:500;font-display:swap;src:url("/assets/fonts/playfair-500.woff2") format("woff2")}
+@font-face{font-family:"Playfair Display";font-weight:600;font-display:swap;src:url("/assets/fonts/playfair-600.woff2") format("woff2")}
+@font-face{font-family:"Playfair Display";font-weight:700;font-display:swap;src:url("/assets/fonts/playfair-700.woff2") format("woff2")}
+@font-face{font-family:"Inter";font-weight:400;font-display:swap;src:url("/assets/fonts/inter-400.woff2") format("woff2")}
+@font-face{font-family:"Inter";font-weight:500;font-display:swap;src:url("/assets/fonts/inter-500.woff2") format("woff2")}
+@font-face{font-family:"Inter";font-weight:600;font-display:swap;src:url("/assets/fonts/inter-600.woff2") format("woff2")}
+@font-face{font-family:"Inter";font-weight:700;font-display:swap;src:url("/assets/fonts/inter-700.woff2") format("woff2")}
+
+/* ---- Tokens ---- */
+:root{
+  --navy:#092D3E; --navy-2:#0e3c52;
+  --gold:#D3B02B; --gold-d:#9a7d20;
+  --paper:#f7f3e9; --card:#fffdf8; --rule:#e3d9bf;
+  --ink:#23303a; --muted:#7a6f54; --hint:#9a8f72;
+  --ok-bg:#e6efe1; --ok-fg:#3f6b2e;
+  --pending-bg:#fef6dc; --pending-fg:#9a7d20;
+  --rej-bg:#f6e6e3; --rej-fg:#9a4b3a;
+  --info-bg:#e6eff3; --info-fg:#0c447c;
+  --r:7px; --r-lg:13px;
+  --shadow:0 1px 2px rgba(9,45,62,.05); --shadow-lg:0 10px 30px rgba(9,45,62,.14);
+  --t-h1:30px; --t-h2:22px; --t-body:13.5px; --t-small:11.5px;
+  --font-display:"Playfair Display",Georgia,serif;
+  --font-ui:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+}
+
+/* ---- Base / reset ---- */
+*{box-sizing:border-box;margin:0;padding:0}
+html{-webkit-text-size-adjust:100%}
+body{font-family:var(--font-ui);background:var(--paper);color:var(--ink);min-height:100vh;line-height:1.5;-webkit-font-smoothing:antialiased}
+h1,h2,h3{font-family:var(--font-display);font-weight:600;color:var(--navy);line-height:1.15}
+a{color:var(--navy);text-underline-offset:2px}
+.kicker{font-family:var(--font-ui);font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--gold-d);font-weight:700}
+.muted{color:var(--muted)} .hint{font-size:var(--t-small);color:var(--hint);margin-top:3px;line-height:1.5}
+.empty{text-align:center;color:var(--muted);font-size:13px;padding:30px 10px}
