@@ -15,3 +15,6 @@ dist/
 .vscode/*
 /tmp
 /out-tsc
+
+# Brainstorming visual companion
+.superpowers/
