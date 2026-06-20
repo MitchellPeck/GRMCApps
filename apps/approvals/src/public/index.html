@@ -4,77 +4,14 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>GRMC Approvals</title>
-<style>
-:root{--navy:#1a2744;--navy-light:#243058;--gold:#c9a84c;--gold-light:#e8c97a;--gold-muted:#f5ead4;--white:#fff;--off:#f8f6f1;--text:#1a2744;--muted:#5a6480;--hint:#9aa0b4;--border:#dde0ea;--r:8px;--rlg:12px}
-*{box-sizing:border-box;margin:0;padding:0}
-body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:var(--off);color:var(--text);min-height:100vh}
-header{background:var(--navy);padding:14px 24px;display:flex;align-items:center;justify-content:space-between;border-bottom:2px solid var(--gold)}
-.logo{display:flex;align-items:center;gap:12px}
-.mark{width:32px;height:32px;border-radius:50%;background:var(--gold);display:flex;align-items:center;justify-content:center;font-size:15px;color:var(--navy);flex-shrink:0}
-header h1{font-size:14px;font-weight:600;color:var(--white)}
-header p{font-size:11px;color:var(--gold-light);margin-top:1px}
-.hright{display:flex;align-items:center;gap:8px}
-.hlabel{font-size:12px;color:rgba(255,255,255,.7)}
-.layout{max-width:760px;margin:0 auto;padding:24px 20px 80px}
-.tabs{display:flex;gap:2px;background:var(--white);border:1px solid var(--border);border-radius:var(--rlg);padding:4px;margin-bottom:20px;flex-wrap:wrap}
-.tab{flex:1;min-width:90px;padding:8px 10px;font-size:13px;font-weight:500;text-align:center;cursor:pointer;border:none;background:none;color:var(--muted);border-radius:var(--r);transition:background .15s,color .15s}
-.tab.active{background:var(--navy);color:var(--white)}
-.tab:hover:not(.active){background:var(--off);color:var(--text)}
-.panel{display:none}.panel.active{display:block}
-.card{background:var(--white);border:1px solid var(--border);border-radius:var(--rlg);padding:20px;margin-bottom:14px}
-.ct{font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--gold);margin-bottom:14px;display:flex;align-items:center;gap:6px}
-.ct::after{content:"";flex:1;height:1px;background:var(--gold-muted)}
-.field{margin-bottom:14px}.field:last-child{margin-bottom:0}
-label{display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:4px;letter-spacing:.02em}
-.hint{font-size:11px;color:var(--hint);margin-top:3px;line-height:1.5}
-input[type=text],input[type=file],textarea,select{width:100%;border:1px solid var(--border);border-radius:var(--r);padding:8px 11px;font-size:13px;font-family:inherit;color:var(--text);background:var(--white)}
-input:focus,textarea:focus,select:focus{outline:none;border-color:var(--gold);box-shadow:0 0 0 3px rgba(201,168,76,.12)}
-textarea{resize:vertical;min-height:70px;line-height:1.55}
-.btn-row{display:flex;gap:8px;align-items:center;margin-top:16px;flex-wrap:wrap}
-.btn{display:inline-flex;align-items:center;gap:6px;padding:9px 18px;font-size:13px;font-weight:600;cursor:pointer;border-radius:var(--r);border:none}
-.btn-primary{background:var(--navy);color:var(--white)}.btn-primary:hover{background:var(--navy-light)}.btn-primary:disabled{opacity:.5;cursor:not-allowed}
-.btn-secondary{background:var(--white);color:var(--text);border:1px solid var(--border)}.btn-secondary:hover{background:var(--off)}
-.btn-gold{background:var(--gold);color:var(--navy)}.btn-gold:hover{background:var(--gold-light)}
-.btn-danger{background:#fff;color:#791F1F;border:1px solid #e6b8b8}.btn-danger:hover{background:#FCEBEB}
-.btn-sm{padding:5px 11px;font-size:12px;font-weight:600;cursor:pointer;border-radius:var(--r);border:1px solid var(--border);background:var(--white);color:var(--text)}
-.btn-sm:hover{background:var(--off)}
-.spin{display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite}
-@keyframes spin{to{transform:rotate(360deg)}}
-.alert{padding:10px 14px;border-radius:var(--r);font-size:12.5px;line-height:1.6;margin-bottom:12px}
-.alert-err{background:#FCEBEB;color:#791F1F}
-.alert-ok{background:#EAF3DE;color:#27500A}
-.alert-info{background:#E6F1FB;color:#0C447C}
-.empty{text-align:center;color:var(--muted);font-size:13px;padding:30px 10px}
-.rcard{background:var(--white);border:1px solid var(--border);border-radius:var(--rlg);padding:16px;margin-bottom:12px}
-.rhead{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
-.rtitle{font-size:14px;font-weight:600;color:var(--text)}
-.rmeta{font-size:11px;color:var(--muted);margin-top:3px}
-.rdesc{font-size:12.5px;color:var(--text);margin-top:8px;white-space:pre-wrap;line-height:1.6}
-.badge{font-size:10px;font-weight:700;padding:2px 9px;border-radius:20px;white-space:nowrap}
-.b-pending{background:#FAEEDA;color:#633806}
-.b-approved{background:#EAF3DE;color:#27500A}
-.b-rejected{background:#FCEBEB;color:#791F1F}
-.b-changes_requested{background:#E6F1FB;color:#0C447C}
-.preview{margin-top:12px;border:1px solid var(--border);border-radius:var(--r);overflow:hidden;background:var(--off)}
-.preview img{display:block;max-width:100%;max-height:340px;margin:0 auto}
-.preview .pdf{padding:18px;text-align:center;font-size:12.5px}
-.ver{font-size:11px;color:var(--muted);margin-top:8px}
-.log{margin-top:10px;border-top:1px solid var(--border);padding-top:10px}
-.logitem{font-size:11.5px;color:var(--muted);padding:3px 0;line-height:1.5}
-.logitem b{color:var(--text)}
-.logitem .cmt{color:var(--text);display:block;background:var(--off);border-radius:6px;padding:6px 9px;margin-top:3px}
-.roster-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 0;border-bottom:1px solid var(--border)}
-.roster-row:last-child{border-bottom:none}
-.roster-name{font-size:13px;font-weight:600}
-.roster-email{font-size:11px;color:var(--muted)}
-.roster-row.off{opacity:.5}
-</style>
+<link rel="stylesheet" href="/assets/grmc.css">
+<link rel="stylesheet" href="/app.css">
 </head>
 <body>
 <header>
   <div class="logo">
-    <div class="mark">&#10003;</div>
-    <div><h1>GRMC Approvals</h1><p>Graphics sign-off</p></div>
+    <div class="seal">G</div>
+    <div><h1>GRMC Approvals</h1><p>Graphics &amp; content sign-off</p></div>
   </div>
   <div class="hright"><span class="hlabel" id="me-label">&hellip;</span></div>
 </header>

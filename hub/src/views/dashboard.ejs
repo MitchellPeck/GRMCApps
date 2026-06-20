@@ -1,29 +1,36 @@
 <!doctype html>
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>GRMC Apps</title>
-    <style>
-      body { font-family: system-ui, sans-serif; margin: 0; background: #0f172a; color: #e2e8f0; }
-      header { display: flex; justify-content: space-between; align-items: center; padding: 1rem 2rem; background: #1e293b; }
-      header a { color: #93c5fd; text-decoration: none; }
-      .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 1rem; padding: 2rem; }
-      .app { background: #1e293b; padding: 1.5rem; border-radius: 12px; text-decoration: none; color: inherit; }
-      .app .icon { font-size: 2rem; }
-    </style>
+    <link rel="stylesheet" href="/assets/grmc.css" />
   </head>
   <body>
     <header>
-      <strong>GRMC Apps</strong>
-      <span><%= user.email %> · <a href="/auth/logout">Sign out</a></span>
+      <div class="logo">
+        <div class="seal">G</div>
+        <div><h1>GRMC Apps</h1><p>Workspace</p></div>
+      </div>
+      <div class="hright">
+        <span class="hlabel"><%= user.email %></span>
+        <a class="btn-hdr" href="/auth/logout" style="text-decoration:none">Sign out</a>
+      </div>
     </header>
-    <div class="grid">
-      <% apps.forEach(function (a) { %>
-        <a class="app" href="https://<%= a.host %>/">
-          <div class="icon"><%= a.icon || "📦" %></div>
-          <div><%= a.name %></div>
-        </a>
-      <% }); %>
+    <div class="layout" style="max-width:1000px">
+      <div class="hero">
+        <div class="kicker">Good day</div>
+        <h1>Your apps</h1>
+        <p>Open any GRMC tool below.</p>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px">
+        <% apps.forEach(function (a) { %>
+          <a class="appcard" href="https://<%= a.host %>/" style="text-decoration:none;display:flex;flex-direction:column;min-height:120px">
+            <div style="font-size:22px;margin-bottom:10px"><%= a.icon || "📦" %></div>
+            <h3 style="font-size:18px"><%= a.name %></h3>
+          </a>
+        <% }); %>
+      </div>
     </div>
   </body>
 </html>

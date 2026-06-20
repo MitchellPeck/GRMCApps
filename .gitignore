@@ -15,3 +15,9 @@ dist/
 .vscode/*
 /tmp
 /out-tsc
+
+# Brainstorming visual companion
+.superpowers/
+
+# Generated: shared UI synced into served dirs (source of truth is shared/ui/)
+**/src/public/assets/

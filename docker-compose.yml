@@ -49,7 +49,9 @@ services:
     networks: [hubnet]
 
   hub:
-    build: ./hub
+    build:
+      context: .
+      dockerfile: hub/Dockerfile
     image: ghcr.io/mitchellpeck/grmc-hub:latest
     env_file: .env
     depends_on:
@@ -86,7 +88,9 @@ services:
       - "com.centurylinklabs.watchtower.enable=true"
 
   social-posts:
-    build: ./apps/social-posts
+    build:
+      context: .
+      dockerfile: apps/social-posts/Dockerfile
     image: ghcr.io/mitchellpeck/grmc-social-posts:latest
     environment:
       SOCIALPOSTS_DB_USER: "${SOCIALPOSTS_DB_USER}"
@@ -106,7 +110,9 @@ services:
       - "com.centurylinklabs.watchtower.enable=true"
 
   approvals:
-    build: ./apps/approvals
+    build:
+      context: .
+      dockerfile: apps/approvals/Dockerfile
     image: ghcr.io/mitchellpeck/grmc-approvals:latest
     environment:
       APPROVALS_DB_USER: "${APPROVALS_DB_USER}"

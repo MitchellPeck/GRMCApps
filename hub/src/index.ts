@@ -1,6 +1,7 @@
 import Fastify from "fastify";
 import fastifyCookie from "@fastify/cookie";
 import fastifySession from "@fastify/session";
+import fastifyStatic from "@fastify/static";
 import fastifyView from "@fastify/view";
 import ejs from "ejs";
 import { join } from "node:path";
@@ -46,6 +47,7 @@ app.register(fastifySession, {
   },
 });
 
+app.register(fastifyStatic, { root: join(__dirname, "public", "assets"), prefix: "/assets/", decorateReply: false });
 app.register(authRoutes);
 app.register(appRoutes);
 
