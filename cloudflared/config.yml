@@ -11,7 +11,11 @@ tunnel: <TUNNEL_UUID>
 credentials-file: /etc/cloudflared/creds.json
 
 ingress:
+  # Single catch-all: hand every hostname to Traefik, which does the per-host
+  # routing (and 404s unknown hosts itself). cloudflared requires the last rule
+  # to be a hostname-less catch-all, so this must be the only rule — adding a
+  # rule after it (e.g. http_status:404) is unreachable and cloudflared refuses
+  # to start.
   - service: https://traefik:443
     originRequest:
       originServerName: hub.grmc.app
-  - service: http_status:404
