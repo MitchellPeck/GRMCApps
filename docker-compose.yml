@@ -1,6 +1,7 @@
 services:
   traefik:
     image: traefik:v3.6
+    restart: unless-stopped
     # Static config is provided entirely as CLI args (not a configfile) so Compose
     # interpolates ${ACME_EMAIL}. Traefik does NOT expand env vars inside a YAML
     # configfile, and it ignores CLI static-config args when --configfile is set —
@@ -37,6 +38,7 @@ services:
 
   postgres:
     image: postgres:16
+    restart: unless-stopped
     env_file: .env
     volumes:
       - pgdata:/var/lib/postgresql/data
@@ -76,6 +78,7 @@ services:
       context: .
       dockerfile: hub/Dockerfile
     image: ghcr.io/mitchellpeck/grmc-hub:latest
+    restart: unless-stopped
     env_file: .env
     depends_on:
       postgres:
@@ -96,6 +99,7 @@ services:
   whoami:
     build: ./apps/whoami
     image: ghcr.io/mitchellpeck/grmc-whoami:latest
+    restart: unless-stopped
     environment:
       WHOAMI_DATABASE_URL: "postgres://${WHOAMI_DB_USER}:${WHOAMI_DB_PASSWORD}@postgres:5432/${WHOAMI_DB_NAME}"
       BASE_DOMAIN: "${BASE_DOMAIN}"
@@ -119,6 +123,7 @@ services:
       context: .
       dockerfile: apps/social-posts/Dockerfile
     image: ghcr.io/mitchellpeck/grmc-social-posts:latest
+    restart: unless-stopped
     environment:
       SOCIALPOSTS_DB_USER: "${SOCIALPOSTS_DB_USER}"
       SOCIALPOSTS_DB_PASSWORD: "${SOCIALPOSTS_DB_PASSWORD}"
@@ -143,6 +148,7 @@ services:
       context: .
       dockerfile: apps/approvals/Dockerfile
     image: ghcr.io/mitchellpeck/grmc-approvals:latest
+    restart: unless-stopped
     environment:
       APPROVALS_DB_USER: "${APPROVALS_DB_USER}"
       APPROVALS_DB_PASSWORD: "${APPROVALS_DB_PASSWORD}"
@@ -167,6 +173,7 @@ services:
       context: .
       dockerfile: apps/meeting-minutes/Dockerfile
     image: ghcr.io/mitchellpeck/grmc-meeting-minutes:latest
+    restart: unless-stopped
     environment:
       MEETINGMINUTES_DB_USER: "${MEETINGMINUTES_DB_USER}"
       MEETINGMINUTES_DB_PASSWORD: "${MEETINGMINUTES_DB_PASSWORD}"
@@ -196,6 +203,7 @@ services:
   # whisperdata volume.
   whisper:
     image: hwdsl2/whisper-server:latest
+    restart: unless-stopped
     environment:
       WHISPER_MODEL: "small"
       WHISPER_LANGUAGE: "en"

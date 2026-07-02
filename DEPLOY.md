@@ -100,14 +100,46 @@ registered and serving connections).
 
 ## When you change infra, not app code
 
-If you edit `docker-compose.yml`, the `traefik/dynamic/` files, or `db/init/`
-scripts (not app source), the remote needs those files too:
+**Watchtower only updates app _images_ — it cannot apply compose changes.** New
+services, a changed image or port, new env vars, new `db/init/` scripts,
+`traefik/dynamic/` edits: none of these reach the host until someone re-applies
+the compose files there. (This is exactly why adding the `whisper` service broke
+transcription: Watchtower updated the `meeting-minutes` app to point at
+`whisper:9000`, but the `whisper` container itself was never created — only a
+`compose up` does that.)
+
+So after any infra change, the host must run:
 
 ```bash
-# on the other Mac
+# on the always-on Mac
 git pull
 docker compose -f docker-compose.yml -f docker-compose.remote.yml up -d
 ```
+
+### Automate it (so you don't have to be onsite)
+
+`scripts/auto-deploy.sh` does exactly the above, but only when the deploy branch
+actually moved. Install it once on the host as a launchd agent so compose
+changes apply themselves within a few minutes — no need to be in front of the
+machine:
+
+```bash
+# on the always-on Mac, once
+./scripts/install-autodeploy.sh            # runs every 5 min; RunAtLoad too
+# GRMC_DEPLOY_INTERVAL=120 ./scripts/install-autodeploy.sh   # custom cadence
+./scripts/install-autodeploy.sh --uninstall
+```
+
+It fast-forwards `main`, `docker compose pull`s, and `up -d`s (removing
+orphans). It's a LaunchAgent (not a system daemon) on purpose: Docker Desktop
+runs in your user session, so the Mac must be set to **auto-login** for the
+agent — and Docker — to be running after a reboot. Logs land in
+`auto-deploy.log` (and `auto-deploy.launchd.log`) at the repo root.
+
+> Watchtower and auto-deploy are complementary: Watchtower ships app-image
+> updates fast (every 2 min); auto-deploy applies structural compose changes.
+> All long-running services also carry `restart: unless-stopped`, so a crash or
+> a Docker/host restart brings them back on its own.
 
 ---
 
