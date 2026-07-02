@@ -131,6 +131,28 @@ services:
       - "traefik.http.services.approvals.loadbalancer.server.port=3000"
       - "com.centurylinklabs.watchtower.enable=true"
 
+  meeting-minutes:
+    build:
+      context: .
+      dockerfile: apps/meeting-minutes/Dockerfile
+    image: ghcr.io/mitchellpeck/grmc-meeting-minutes:latest
+    environment:
+      MEETINGMINUTES_DB_USER: "${MEETINGMINUTES_DB_USER}"
+      MEETINGMINUTES_DB_PASSWORD: "${MEETINGMINUTES_DB_PASSWORD}"
+      MEETINGMINUTES_DB_NAME: "${MEETINGMINUTES_DB_NAME}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [hubnet]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.minutes.rule=Host(`minutes.${BASE_DOMAIN}`)"
+      - "traefik.http.routers.minutes.entrypoints=websecure"
+      - "traefik.http.routers.minutes.tls=true"
+      - "traefik.http.routers.minutes.middlewares=hub-forward-auth@file"
+      - "traefik.http.services.minutes.loadbalancer.server.port=3000"
+      - "com.centurylinklabs.watchtower.enable=true"
+
 networks:
   hubnet:
 

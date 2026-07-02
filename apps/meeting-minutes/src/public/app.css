@@ -1,0 +1,66 @@
+/* Meeting Minutes — bespoke components (inherits grmc.css tokens). */
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media(max-width:560px){.grid2{grid-template-columns:1fr}}
+.back{margin-bottom:16px}
+
+/* Meeting list rows */
+.mcard{background:var(--card);border:1px solid var(--rule);border-radius:var(--r-lg);padding:16px;margin-bottom:12px;box-shadow:var(--shadow);cursor:pointer;transition:transform .12s,box-shadow .12s}
+.mcard:hover{transform:translateY(-2px);box-shadow:var(--shadow-lg)}
+.mhead{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.mtitle{font-family:var(--font-display);font-size:17px;font-weight:600;color:var(--navy)}
+.mmeta{font-size:11.5px;color:var(--muted);margin-top:3px}
+.mstats{font-size:11px;color:var(--hint);margin-top:8px;display:flex;gap:14px;flex-wrap:wrap}
+
+/* People rows */
+.person-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 0;border-bottom:1px solid var(--rule)}
+.person-row:last-child{border-bottom:none}
+.person-row.off{opacity:.5}
+.person-name{font-size:13.5px;font-weight:600;color:var(--ink)}
+.person-sub{font-size:11px;color:var(--muted)}
+.person-actions{display:flex;gap:6px;flex-wrap:wrap}
+
+/* Detail header */
+.dhead{background:var(--navy);color:#fff;border-radius:var(--r-lg);padding:18px 20px;margin-bottom:16px}
+.dhead h2{color:#fff;font-size:22px}
+.dhead .dmeta{color:var(--gold);font-size:12px;margin-top:5px}
+.dhead .dedit{margin-top:10px}
+
+/* Attendee chips (selectable) */
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:4px}
+.chip{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:20px;border:1px solid var(--rule);background:var(--field-bg);font-size:12.5px;color:var(--ink);cursor:pointer;user-select:none;transition:background .12s,border-color .12s}
+.chip:hover{background:var(--paper)}
+.chip.on{background:var(--navy);color:#fff;border-color:var(--navy)}
+.chip.pres.on{background:var(--gold);color:var(--navy);border-color:var(--gold-d);font-weight:600}
+.chip.empty-hint{border:none;background:none;color:var(--muted);cursor:default;padding:6px 0}
+
+/* Agenda item cards */
+.item{background:var(--card);border:1px solid var(--rule);border-radius:var(--r-lg);padding:16px;margin-bottom:12px;box-shadow:var(--shadow)}
+.item.active-item{border-color:var(--gold);box-shadow:0 0 0 3px var(--gold-ring)}
+.ihead{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;cursor:pointer}
+.inum{width:24px;height:24px;border-radius:50%;background:var(--navy);color:#fff;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.inum.done{background:var(--ok-fg)}
+.ititle{font-family:var(--font-display);font-size:15.5px;font-weight:600;color:var(--navy)}
+.idesc{font-size:12px;color:var(--muted);margin-top:2px;white-space:pre-wrap}
+.itop{display:flex;gap:10px;align-items:flex-start;flex:1}
+.ibody{margin-top:14px;padding-top:14px;border-top:1px solid var(--rule)}
+.ibody.collapsed{display:none}
+.sublbl{font-size:10px;font-weight:600;color:var(--muted);letter-spacing:.04em;text-transform:uppercase;margin:12px 0 5px}
+
+/* Recorder */
+.rec-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.rec-dot{width:9px;height:9px;border-radius:50%;background:var(--rej-fg);display:inline-block;animation:pulse 1s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.rec-status{font-size:11.5px;color:var(--muted)}
+.interim{color:var(--hint);font-style:italic}
+
+/* Summary + report render */
+.summary-box{background:var(--ok-bg);color:var(--ink);border-radius:var(--r);padding:11px 13px;font-size:12.5px;line-height:1.6;white-space:pre-wrap;margin-top:6px}
+.report{background:var(--card);border:1px solid var(--rule);border-radius:var(--r-lg);padding:20px 22px;box-shadow:var(--shadow);line-height:1.65;font-size:13.5px}
+.report h1{font-size:24px;margin:2px 0 10px}
+.report h2{font-size:17px;margin:20px 0 8px;padding-top:12px;border-top:1px solid var(--rule)}
+.report h3{font-size:14.5px;margin:14px 0 5px;color:var(--navy)}
+.report ul{margin:6px 0 6px 20px}.report li{margin:3px 0}
+.report p{margin:6px 0}
+.report code{background:var(--paper);padding:1px 5px;border-radius:4px;font-size:12px}
+.section-title{font-family:var(--font-display);font-size:18px;font-weight:600;color:var(--navy);margin:22px 0 10px}
+.hr{height:1px;background:var(--rule);border:none;margin:20px 0}
