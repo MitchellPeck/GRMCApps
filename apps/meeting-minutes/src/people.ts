@@ -87,3 +87,22 @@ export async function listPeople(pool: Pool, includeInactive: boolean): Promise<
 export async function setPersonActive(pool: Pool, id: number, active: boolean): Promise<void> {
   await pool.query("UPDATE people SET active = $2 WHERE id = $1", [id, active]);
 }
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// Return the ids of library people whose name appears (case-insensitive, as a
+// whole word/phrase) in the given text — used to link people named in an
+// action item to the meeting. Names shorter than 2 chars are ignored.
+export function peopleNamedIn(text: string, people: Person[]): number[] {
+  if (!text) return [];
+  const ids: number[] = [];
+  for (const p of people) {
+    const name = p.name.trim();
+    if (name.length < 2) continue;
+    const re = new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRegex(name)}([^\\p{L}\\p{N}]|$)`, "iu");
+    if (re.test(text) && !ids.includes(p.id)) ids.push(p.id);
+  }
+  return ids;
+}

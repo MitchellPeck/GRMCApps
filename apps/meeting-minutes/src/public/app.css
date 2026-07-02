@@ -40,6 +40,9 @@
 .inum{width:24px;height:24px;border-radius:50%;background:var(--navy);color:#fff;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0}
 .inum.done{background:var(--ok-fg)}
 .ititle{font-family:var(--font-display);font-size:15.5px;font-weight:600;color:var(--navy)}
+.item-badge{flex-shrink:0;display:inline-flex;align-items:center;white-space:nowrap}
+.item-badge .badge{display:inline-flex;align-items:center;gap:5px}
+.item-badge .spin{width:10px;height:10px;border:2px solid rgba(154,125,32,.3);border-top-color:var(--pending-fg)}
 .idesc{font-size:12px;color:var(--muted);margin-top:2px;white-space:pre-wrap}
 .itop{display:flex;gap:10px;align-items:flex-start;flex:1}
 .ibody{margin-top:14px;padding-top:14px;border-top:1px solid var(--rule)}

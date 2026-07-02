@@ -63,6 +63,11 @@ document.querySelectorAll('.tab').forEach(function(t){
 });
 function showList(){
   stopRecording();
+  // Summarize the item left open, so nothing is lost on the way out.
+  if(state.openItemId && state.items){
+    var open=state.items.filter(function(x){return x.id===state.openItemId;})[0];
+    if(open) summarizeIfNeeded(open);
+  }
   document.getElementById('view-detail').style.display='none';
   document.getElementById('view-list').style.display='block';
   loadMeetings();
@@ -321,20 +326,20 @@ function addItemManually(){
 // ── Agenda item cards ───────────────────────────────────────────────────────
 function renderItems(){
   var wrap=document.getElementById('items-wrap');
+  state.openItemId=null; // DOM rebuilt → all bodies collapsed
   if(!state.items.length){ wrap.innerHTML='<div class="empty">No agenda items yet. Upload an agenda or add items manually.</div>'; return; }
   wrap.innerHTML=state.items.map(function(it, idx){ return itemHtml(it, idx); }).join('');
   state.items.forEach(function(it){ wireItem(it); });
 }
 
 function itemHtml(it, idx){
-  var done = it.status==='done';
   return '<div class="item" id="item-'+it.id+'">'
     +'<div class="ihead" data-toggle-item="'+it.id+'">'
-      +'<div class="itop"><div class="inum'+(done?' done':'')+'">'+(done?'✓':(idx+1))+'</div>'
+      +'<div class="itop"><div class="inum" id="inum-'+it.id+'">'+(idx+1)+'</div>'
       +'<div><div class="ititle">'+esc(it.title)+'</div>'
       +(it.description?'<div class="idesc">'+esc(it.description)+'</div>':'')
       +'</div></div>'
-      +(it.summary?'<span class="badge b-approved">summarized</span>':'')
+      +'<span class="item-badge" id="badge-'+it.id+'">'+itemBadgeInner(it)+'</span>'
     +'</div>'
     +'<div class="ibody collapsed" id="ibody-'+it.id+'">'
       +'<div class="sublbl">Presented by</div>'
@@ -349,14 +354,29 @@ function itemHtml(it, idx){
       +'<textarea id="tx-'+it.id+'" placeholder="Record or upload audio to transcribe. Speakers are labeled once you record; you can also edit this text." style="margin-top:6px">'+esc(it.transcript)+'</textarea>'
       +'<div class="sublbl">Notes (typed)</div>'
       +'<textarea id="nt-'+it.id+'" placeholder="Optional manual notes">'+esc(it.notes)+'</textarea>'
+      +'<div class="hint" style="margin-top:8px">The summary is generated automatically when you collapse this item or open another. Editing the transcript or notes clears it so it regenerates.</div>'
       +'<div class="btn-row">'
-        +'<button class="btn btn-primary btn-sm" data-summarize="'+it.id+'" data-default="'+(it.summary?'Re-summarize':'Summarize this item')+'">'+(it.summary?'Re-summarize':'Summarize this item')+'</button>'
         +'<button class="btn btn-danger btn-sm" data-del-item="'+it.id+'">Remove item</button>'
         +'<span id="imsg-'+it.id+'"></span>'
       +'</div>'
       +'<div id="sum-'+it.id+'">'+summaryHtml(it)+'</div>'
     +'</div>'
   +'</div>';
+}
+
+// True when the item has content worth summarizing.
+function itemHasContent(it){ return !!((it.transcript && it.transcript.trim()) || (it.notes && it.notes.trim())); }
+
+// The header status badge inner HTML for an item's current summary state.
+function itemBadgeInner(it){
+  if(it._summarizing) return '<span class="badge b-pending"><span class="spin" style="border-top-color:var(--pending-fg)"></span> Summary generating</span>';
+  if(it._summaryError) return '<span class="badge b-rejected">Summary failed</span>';
+  if(it.summary && !it._dirty) return '<span class="badge b-approved">Summary generated</span>';
+  if(itemHasContent(it)) return '<span class="badge b-changes_requested">Needs summary</span>';
+  return '';
+}
+function refreshBadge(it){
+  var b=document.getElementById('badge-'+it.id); if(b) b.innerHTML=itemBadgeInner(it);
 }
 
 // Rendered summary + action-item list for an item.
@@ -375,19 +395,83 @@ function actionItemsHtml(items){
 }
 
 function wireItem(it){
-  document.querySelector('[data-toggle-item="'+it.id+'"]').addEventListener('click', function(){
-    document.getElementById('ibody-'+it.id).classList.toggle('collapsed');
-  });
+  document.querySelector('[data-toggle-item="'+it.id+'"]').addEventListener('click', function(){ toggleItemOpen(it); });
   renderPresenterChips(it);
   renderSpeakerMap(it);
   var tx=document.getElementById('tx-'+it.id);
   var nt=document.getElementById('nt-'+it.id);
-  tx.addEventListener('blur', function(){ saveItemField(it, { transcript: tx.value }); it.transcript=tx.value; });
-  nt.addEventListener('blur', function(){ saveItemField(it, { notes: nt.value }); it.notes=nt.value; });
+  tx.addEventListener('blur', function(){
+    if(tx.value===it.transcript) return;
+    it.transcript=tx.value; saveItemField(it, { transcript: tx.value }); invalidateSummary(it);
+  });
+  nt.addEventListener('blur', function(){
+    if(nt.value===it.notes) return;
+    it.notes=nt.value; saveItemField(it, { notes: nt.value }); invalidateSummary(it);
+  });
   document.querySelector('[data-rec="'+it.id+'"]').addEventListener('click', function(){ toggleRecording(it, this); });
   document.querySelector('[data-audio="'+it.id+'"]').addEventListener('change', function(){ uploadAudio(it, this); });
-  document.querySelector('[data-summarize="'+it.id+'"]').addEventListener('click', function(){ summarize(it); });
   document.querySelector('[data-del-item="'+it.id+'"]').addEventListener('click', function(){ removeItem(it); });
+}
+
+// ── Accordion open/close (drives auto-summary) ──────────────────────────────
+// Opening an item collapses whichever was open (summarizing it if needed);
+// closing the current item summarizes it. One item open at a time.
+function toggleItemOpen(it){
+  var body=document.getElementById('ibody-'+it.id);
+  var isOpen=!body.classList.contains('collapsed');
+  if(isOpen){ collapseItem(it); return; }
+  if(state.openItemId && state.openItemId!==it.id){
+    var prev=state.items.filter(function(x){return x.id===state.openItemId;})[0];
+    if(prev) collapseItem(prev);
+  }
+  body.classList.remove('collapsed');
+  state.openItemId=it.id;
+}
+function collapseItem(it){
+  var body=document.getElementById('ibody-'+it.id);
+  if(body) body.classList.add('collapsed');
+  if(state.openItemId===it.id) state.openItemId=null;
+  summarizeIfNeeded(it);
+}
+
+// Content changed → the existing summary is stale. Clear it (locally + server)
+// and mark the item so it regenerates when collapsed / another item opens.
+function invalidateSummary(it){
+  it._dirty=true; it._summaryError=false;
+  if(it.summary || (it.action_items && it.action_items.length)){
+    it.summary=''; it.action_items=[];
+    var sumEl=document.getElementById('sum-'+it.id); if(sumEl) sumEl.innerHTML='';
+    saveItemField(it, { summary:'', actionItems:[], status:'pending' });
+  }
+  refreshBadge(it);
+}
+
+function summarizeIfNeeded(it){
+  if(!itemHasContent(it)) return Promise.resolve();
+  if(it.summary && !it._dirty) return Promise.resolve();
+  if(it._summarizing) return it._summarizing;
+  return autoSummarize(it);
+}
+
+// Generate the summary + action items for one item. Returns a promise and
+// stores it on it._summarizing so concurrent triggers coalesce.
+function autoSummarize(it){
+  it._summarizing = saveItemField(it, { transcript: it.transcript, notes: it.notes })
+    .then(function(){ refreshBadge(it); return api('/api/items/'+it.id+'/summarize', { method:'POST' }); })
+    .then(function(res){
+      it._summarizing=null;
+      if(!res.ok){ it._summaryError=true; refreshBadge(it); var im=document.getElementById('imsg-'+it.id); if(im) im.innerHTML='<span style="color:var(--rej-fg);font-size:12px">'+esc(res.error)+'</span>'; return; }
+      it.summary=res.summary; it.action_items=res.actionItems||[]; it._dirty=false; it._summaryError=false; it.status='done';
+      var sumEl=document.getElementById('sum-'+it.id); if(sumEl) sumEl.innerHTML=summaryHtml(it);
+      // Auto-linked people from action items may have joined the meeting / this item.
+      if(res.attendeeIds){ state.attendeeIds=res.attendeeIds; renderAttendeeChips(); }
+      if(res.presenterIds){ it.presenter_ids=res.presenterIds; }
+      state.items.forEach(function(x){ renderPresenterChips(x); });
+      refreshBadge(it);
+    })
+    .catch(function(e){ it._summarizing=null; it._summaryError=true; refreshBadge(it); });
+  refreshBadge(it);
+  return it._summarizing;
 }
 
 // ── Speaker → person mapping ────────────────────────────────────────────────
@@ -444,6 +528,7 @@ function renderSpeakerMap(it){
       tx.value=renderTranscriptJS(it.transcript_segments, it.speaker_map);
       it.transcript=tx.value;
       saveItemField(it, { speakerMap: it.speaker_map });
+      invalidateSummary(it);
     });
   });
 }
@@ -469,27 +554,6 @@ function renderPresenterChips(it){
 
 function saveItemField(it, fields){
   return api('/api/items/'+it.id, { method:'PATCH', body:fields });
-}
-
-function summarize(it){
-  var tx=document.getElementById('tx-'+it.id), nt=document.getElementById('nt-'+it.id);
-  it.transcript=tx.value; it.notes=nt.value;
-  var imsg=document.getElementById('imsg-'+it.id);
-  // Persist latest transcript/notes before summarizing.
-  saveItemField(it, { transcript: tx.value, notes: nt.value }).then(function(){
-    imsg.innerHTML='<span class="spin" style="border-top-color:var(--navy)"></span>';
-    return api('/api/items/'+it.id+'/summarize', { method:'POST' });
-  }).then(function(res){
-    imsg.innerHTML='';
-    if(!res.ok){ imsg.innerHTML='<span style="color:var(--rej-fg);font-size:12px">'+esc(res.error)+'</span>'; return; }
-    it.summary=res.summary; it.action_items=res.actionItems||[]; it.status='done';
-    document.getElementById('sum-'+it.id).innerHTML=summaryHtml(it);
-    var btn=document.querySelector('[data-summarize="'+it.id+'"]'); btn.textContent='Re-summarize'; btn.setAttribute('data-default','Re-summarize');
-    // Refresh number badge → check + summarized badge.
-    var head=document.querySelector('[data-toggle-item="'+it.id+'"]');
-    var num=head.querySelector('.inum'); num.classList.add('done'); num.textContent='✓';
-    if(!head.querySelector('.badge')) head.insertAdjacentHTML('beforeend','<span class="badge b-approved">summarized</span>');
-  }).catch(function(e){ imsg.innerHTML='<span style="color:var(--rej-fg);font-size:12px">'+esc(e.message)+'</span>'; });
 }
 
 function removeItem(it){
@@ -564,6 +628,7 @@ function transcribeBlob(it, blob, mime){
       if(det.ok){ var fresh=det.items.filter(function(x){return x.id===it.id;})[0]; if(fresh){ it.transcript_segments=fresh.transcript_segments; it.speaker_map=fresh.speaker_map; } }
       document.getElementById('tx-'+it.id).value=it.transcript;
       renderSpeakerMap(it);
+      invalidateSummary(it);
       var n=(res.speakers||[]).length;
       rs.textContent= n>1 ? ('Transcribed — '+n+' speakers detected. Label them below.') : 'Transcribed.';
     });
@@ -578,10 +643,24 @@ function uploadAudio(it, input){
 }
 
 // ── Report ──────────────────────────────────────────────────────────────────
+// Every item with content must be summarized first. Collapse the open item and
+// summarize any pending items, then write the report.
 function generateReport(){
-  setBtn('btn-report', true, 'Generating…');
-  msg('report-msg','info','Writing the meeting report with AI…');
-  api('/api/meetings/'+state.meeting.id+'/report', { method:'POST' }).then(function(res){
+  setBtn('btn-report', true, 'Preparing…');
+  if(state.openItemId){ var open=state.items.filter(function(x){return x.id===state.openItemId;})[0]; if(open) collapseItem(open); }
+  var pending=state.items.filter(function(it){ return itemHasContent(it) && (!it.summary || it._dirty || it._summarizing); });
+  if(pending.length) msg('report-msg','info','Summarizing '+pending.length+' item'+(pending.length===1?'':'s')+' before the report…');
+  var chain=Promise.resolve();
+  pending.forEach(function(it){ chain=chain.then(function(){ return summarizeIfNeeded(it); }); });
+  chain.then(function(){
+    // Bail if any item still failed to summarize.
+    var failed=state.items.filter(function(it){ return it._summaryError; });
+    if(failed.length){ setBtn('btn-report', false); msg('report-msg','err','Some items could not be summarized. Fix those, then try again.'); return null; }
+    setBtn('btn-report', true, 'Generating…');
+    msg('report-msg','info','Writing the meeting report with AI…');
+    return api('/api/meetings/'+state.meeting.id+'/report', { method:'POST' });
+  }).then(function(res){
+    if(!res){ return; }
     setBtn('btn-report', false);
     if(!res.ok){ msg('report-msg','err',res.error); return; }
     msg('report-msg','ok','Report generated.');

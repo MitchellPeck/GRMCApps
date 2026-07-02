@@ -1,9 +1,29 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import { Pool } from "pg";
-import { addPerson, updatePerson, listPeople, setPersonActive } from "./people";
+import { addPerson, updatePerson, listPeople, setPersonActive, peopleNamedIn, Person } from "./people";
 
 const url = process.env.TEST_DATABASE_URL;
+
+test("peopleNamedIn matches library names as whole words", () => {
+  const people: Person[] = [
+    { id: 1, name: "Alice", email: "", title: "", active: true },
+    { id: 2, name: "Bob", email: "", title: "", active: true },
+    { id: 3, name: "Pastor Dale", email: "", title: "", active: true },
+    { id: 4, name: "Al", email: "", title: "", active: true },
+  ];
+  // owner + task text
+  assert.deepEqual(peopleNamedIn("Bob to pull the Q2 numbers", people).sort(), [2]);
+  assert.deepEqual(peopleNamedIn("Pastor Dale will open in prayer", people).sort(), [3]);
+  // multiple names
+  assert.deepEqual(peopleNamedIn("Alice and Bob to coordinate", people).sort(), [1, 2]);
+  // substring must NOT match (Alice should not hit on "Malice"; Al not in "false")
+  assert.deepEqual(peopleNamedIn("There was no malice; it was false", people), []);
+  // case-insensitive
+  assert.deepEqual(peopleNamedIn("bob follows up", people), [2]);
+  // no match
+  assert.deepEqual(peopleNamedIn("Unassigned to review", people), []);
+});
 
 test("people add (dedup by email + reactivate), update, list, toggle", { skip: !url }, async () => {
   const pool = new Pool({ connectionString: url });
