@@ -208,6 +208,11 @@ services:
       WHISPER_MODEL: "small"
       WHISPER_LANGUAGE: "en"
       WHISPER_DIARIZATION: "true"      # label who is speaking (SPEAKER_00, 01, …)
+      # Empty = auth disabled. With the whisperdata volume mounted the server
+      # otherwise auto-generates a Bearer token and rejects unauthenticated
+      # calls ("missing authorization header"). Safe here: no published ports,
+      # reachable only by the app on the private hubnet.
+      WHISPER_API_KEY: ""
     volumes:
       - whisperdata:/var/lib/whisper
     networks: [hubnet]
