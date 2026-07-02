@@ -1,6 +1,7 @@
 import Fastify from "fastify";
 import fastifyStatic from "@fastify/static";
 import fastifyMultipart from "@fastify/multipart";
+import fastifyWebsocket from "@fastify/websocket";
 import { join } from "node:path";
 import { config } from "./config";
 import { ensureSchema } from "./db";
@@ -8,8 +9,14 @@ import { meRoutes } from "./routes/me";
 import { settingsRoutes } from "./routes/settings";
 import { peopleRoutes } from "./routes/people";
 import { meetingsRoutes } from "./routes/meetings";
+import { transcribeSocket } from "./ws-proxy";
 
 const app = Fastify({ logger: true, trustProxy: true, bodyLimit: 2 * 1024 * 1024 });
+
+// WebSocket relay for live transcription (register before static so the
+// /ws/transcribe upgrade isn't shadowed by the static catch-all).
+app.register(fastifyWebsocket);
+app.register(transcribeSocket);
 
 // 25 MB covers agenda PDFs/images and short per-item audio recordings.
 app.register(fastifyMultipart, { limits: { fileSize: 25 * 1024 * 1024, files: 1 } });

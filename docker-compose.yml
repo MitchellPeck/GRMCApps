@@ -140,6 +140,11 @@ services:
       MEETINGMINUTES_DB_USER: "${MEETINGMINUTES_DB_USER}"
       MEETINGMINUTES_DB_PASSWORD: "${MEETINGMINUTES_DB_PASSWORD}"
       MEETINGMINUTES_DB_NAME: "${MEETINGMINUTES_DB_NAME}"
+      # Self-hosted transcription (internal, keyless). WHISPER_MODEL must match
+      # the whisper service's WHISPERLIVE_MODEL below.
+      WHISPER_WS_URL: "ws://whisper:9090"
+      WHISPER_REST_URL: "http://whisper:8000"
+      WHISPER_MODEL: "small"
     depends_on:
       postgres:
         condition: service_healthy
@@ -153,9 +158,27 @@ services:
       - "traefik.http.services.minutes.loadbalancer.server.port=3000"
       - "com.centurylinklabs.watchtower.enable=true"
 
+  # Self-hosted speech-to-text (faster-whisper). Internal only — no Traefik
+  # labels and no published ports, so it is reachable solely from the hubnet by
+  # the meeting-minutes app, which proxies the browser's audio to it. No API
+  # key and no per-minute cost; audio never leaves the host. First boot
+  # downloads the model into the whisperdata volume.
+  whisper:
+    image: hwdsl2/whisper-live-server:latest
+    environment:
+      WHISPERLIVE_MODEL: "small"       # keep in sync with WHISPER_MODEL above
+      WHISPERLIVE_LANGUAGE: "en"
+      WHISPERLIVE_USE_VAD: "true"
+      WHISPERLIVE_THREADS: "4"
+      WHISPERLIVE_API_KEY: ""          # empty = auth disabled (internal network only)
+    volumes:
+      - whisperdata:/var/lib/whisper-live
+    networks: [hubnet]
+
 networks:
   hubnet:
 
 volumes:
   pgdata:
   letsencrypt:
+  whisperdata:

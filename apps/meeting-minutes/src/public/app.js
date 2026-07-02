@@ -46,7 +46,9 @@ function renderMarkdown(md){
 }
 
 // ── App state ───────────────────────────────────────────────────────────────
-var state = { people: [], peopleById: {}, meeting: null, attendeeIds: [], items: [] };
+var state = { people: [], peopleById: {}, meeting: null, attendeeIds: [], items: [], whisperModel: 'small' };
+// Learn which Whisper model the server loaded so the live stream matches it.
+api('/api/transcription-config').then(function(r){ if(r && r.ok && r.model) state.whisperModel = r.model; }).catch(function(){});
 
 // ── Tabs / views ────────────────────────────────────────────────────────────
 function switchTab(id){
@@ -177,18 +179,15 @@ function loadSettings(){
     document.getElementById('s-anthropic-hint').innerHTML = res.hasAnthropicKey
       ? 'Saved (' + esc(res.anthropicKeyHint) + '). Enter a new key to replace it.'
       : 'Used to extract agendas, summarize items, and write the report.';
-    document.getElementById('s-openai-hint').innerHTML = res.hasOpenAIKey
-      ? 'Saved. Enter a new key to replace it. Used for Whisper transcription of uploaded audio.'
-      : 'Only needed to transcribe <em>uploaded</em> audio files (Whisper). Live in-browser transcription needs no key.';
   });
 }
 document.getElementById('btn-save-settings').addEventListener('click', function(){
   setBtn('btn-save-settings', true, 'Saving...');
-  api('/api/settings', { method:'POST', body:{ anthropicKey:v('s-anthropic'), openaiKey:v('s-openai') } })
+  api('/api/settings', { method:'POST', body:{ anthropicKey:v('s-anthropic') } })
     .then(function(res){
       setBtn('btn-save-settings', false);
       if(!res.ok){ msg('settings-msg','err',res.error); return; }
-      document.getElementById('s-anthropic').value=''; document.getElementById('s-openai').value='';
+      document.getElementById('s-anthropic').value='';
       msg('settings-msg','ok','Saved.');
       loadSettings();
     }).catch(function(e){ setBtn('btn-save-settings', false); msg('settings-msg','err',e.message); });
@@ -429,59 +428,104 @@ function removeItem(it){
   });
 }
 
-// ── Live transcription (Web Speech API) ─────────────────────────────────────
-var activeRec = null; // { rec, itemId, btn, wantStop }
+// ── Live transcription (self-hosted WhisperLive over WebSocket) ─────────────
+// The browser captures mic audio, converts it to 16-bit PCM @ 16 kHz, and
+// streams it to /ws/transcribe, which the server relays to the internal
+// Whisper container. Segments come back as {text, completed}.
+var activeRec = null; // { it, btn, ws, ctx, proc, source, gain, stream, base }
 
-function speechSupported(){ return !!(window.SpeechRecognition || window.webkitSpeechRecognition); }
+function downsampleTo16k(input, inRate){
+  if(inRate === 16000) return input;
+  var ratio = inRate / 16000;
+  var outLen = Math.floor(input.length / ratio);
+  var out = new Float32Array(outLen);
+  for(var i=0;i<outLen;i++){
+    // Average the source window mapped to each output sample (cheap anti-alias).
+    var start = Math.floor(i*ratio), end = Math.floor((i+1)*ratio), sum=0, n=0;
+    for(var j=start;j<end && j<input.length;j++){ sum+=input[j]; n++; }
+    out[i] = n ? sum/n : input[start] || 0;
+  }
+  return out;
+}
+function floatTo16(f32){
+  var out = new Int16Array(f32.length);
+  for(var i=0;i<f32.length;i++){ var s=Math.max(-1,Math.min(1,f32[i])); out[i]= s<0 ? s*0x8000 : s*0x7fff; }
+  return out;
+}
 
 function toggleRecording(it, btn){
-  if(activeRec && activeRec.itemId===it.id){ stopRecording(); return; }
+  if(activeRec && activeRec.it.id===it.id){ stopRecording(); return; }
   if(activeRec){ stopRecording(); }
-  if(!speechSupported()){
-    document.getElementById('recstat-'+it.id).innerHTML='<span style="color:var(--rej-fg)">Live transcription needs Chrome/Edge. Type notes or upload audio instead.</span>';
+  var rs=document.getElementById('recstat-'+it.id);
+  if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+    rs.innerHTML='<span style="color:var(--rej-fg)">This browser cannot capture audio. Upload a recording instead.</span>';
     return;
   }
-  var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  var rec = new SR();
-  rec.continuous=true; rec.interimResults=true; rec.lang='en-US';
+  rs.textContent='Starting microphone…';
+  navigator.mediaDevices.getUserMedia({ audio:{ channelCount:1, echoCancellation:true, noiseSuppression:true } })
+    .then(function(stream){ startStream(it, btn, stream); })
+    .catch(function(e){ rs.innerHTML='<span style="color:var(--rej-fg)">Mic access denied: '+esc(e.message||e.name)+'</span>'; });
+}
+
+function startStream(it, btn, stream){
   var tx=document.getElementById('tx-'+it.id);
   var interimEl=document.getElementById('interim-'+it.id);
-  activeRec = { rec:rec, itemId:it.id, btn:btn, wantStop:false };
+  var rs=document.getElementById('recstat-'+it.id);
+  var base = tx.value;
 
-  rec.onresult=function(e){
-    var interim='', finals='';
-    for(var i=e.resultIndex;i<e.results.length;i++){
-      var t=e.results[i][0].transcript;
-      if(e.results[i].isFinal) finals+=t+' '; else interim+=t;
-    }
-    if(finals){ tx.value = (tx.value ? tx.value.replace(/\s+$/,'')+' ' : '') + finals.trim(); }
-    interimEl.textContent = interim;
+  var AC = window.AudioContext || window.webkitAudioContext;
+  var ctx = new AC();
+  var source = ctx.createMediaStreamSource(stream);
+  var proc = ctx.createScriptProcessor(4096, 1, 1);
+  var gain = ctx.createGain(); gain.gain.value = 0; // silence local monitoring (no echo)
+
+  var proto = location.protocol==='https:' ? 'wss' : 'ws';
+  var ws = new WebSocket(proto+'://'+location.host+'/ws/transcribe');
+  ws.binaryType='arraybuffer';
+  var ready=false;
+
+  activeRec = { it:it, btn:btn, ws:ws, ctx:ctx, proc:proc, source:source, gain:gain, stream:stream, base:base };
+
+  ws.onopen=function(){
+    ws.send(JSON.stringify({ uid:'mm-'+it.id+'-'+(state.meeting?state.meeting.id:0), language:'en', model:state.whisperModel, use_vad:true }));
+    ready=true;
+    rs.innerHTML='<span class="rec-dot"></span> Listening…';
   };
-  rec.onerror=function(ev){
-    document.getElementById('recstat-'+it.id).innerHTML='<span style="color:var(--rej-fg)">Mic error: '+esc(ev.error||'unknown')+'</span>';
+  ws.onmessage=function(ev){
+    var data; try{ data=JSON.parse(ev.data); }catch(e){ return; }
+    if(data.error){ rs.innerHTML='<span style="color:var(--rej-fg)">'+esc(data.error)+'</span>'; return; }
+    if(!data.segments) return;
+    var finals=data.segments.filter(function(s){return s.completed;}).map(function(s){return (s.text||'').trim();}).filter(Boolean).join(' ');
+    var interim=data.segments.filter(function(s){return !s.completed;}).map(function(s){return (s.text||'').trim();}).filter(Boolean).join(' ');
+    tx.value = base + (finals ? (base?'\n':'')+finals : '');
+    if(interimEl) interimEl.textContent = interim;
   };
-  rec.onend=function(){
-    if(activeRec && activeRec.itemId===it.id && !activeRec.wantStop){ try{ rec.start(); }catch(e){} return; }
-    finalizeRecording(it, tx);
+  ws.onerror=function(){ rs.innerHTML='<span style="color:var(--rej-fg)">Transcription connection error.</span>'; };
+
+  proc.onaudioprocess=function(e){
+    if(!ready || ws.readyState!==1) return;
+    var input=e.inputBuffer.getChannelData(0);
+    var ds=downsampleTo16k(input, ctx.sampleRate);
+    ws.send(floatTo16(ds).buffer);
   };
-  try { rec.start(); } catch(e){}
+
+  source.connect(proc); proc.connect(gain); gain.connect(ctx.destination);
   btn.innerHTML='<span class="rec-dot"></span> Stop recording';
-  document.getElementById('recstat-'+it.id).textContent='Listening…';
 }
 
 function stopRecording(){
   if(!activeRec) return;
-  activeRec.wantStop=true;
-  try { activeRec.rec.stop(); } catch(e){}
-}
-
-function finalizeRecording(it, tx){
-  var rs=document.getElementById('recstat-'+it.id);
-  var interimEl=document.getElementById('interim-'+it.id);
-  if(interimEl) interimEl.textContent='';
-  if(activeRec && activeRec.btn){ activeRec.btn.innerHTML='● Start recording'; }
-  activeRec=null;
-  if(tx){ it.transcript=tx.value; saveItemField(it, { transcript: tx.value }); }
+  var r=activeRec; activeRec=null;
+  try { r.proc.onaudioprocess=null; r.source.disconnect(); r.proc.disconnect(); r.gain.disconnect(); } catch(e){}
+  try { r.stream.getTracks().forEach(function(t){ t.stop(); }); } catch(e){}
+  try { r.ctx.close(); } catch(e){}
+  // Give the server a moment to flush trailing segments, then close.
+  setTimeout(function(){ try{ r.ws.close(); }catch(e){} }, 600);
+  if(r.btn) r.btn.innerHTML='● Start recording';
+  var interimEl=document.getElementById('interim-'+r.it.id); if(interimEl) interimEl.textContent='';
+  var rs=document.getElementById('recstat-'+r.it.id);
+  var tx=document.getElementById('tx-'+r.it.id);
+  if(tx){ r.it.transcript=tx.value; saveItemField(r.it, { transcript: tx.value }); }
   if(rs) rs.textContent='Saved.';
 }
 

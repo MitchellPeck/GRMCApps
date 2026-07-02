@@ -173,7 +173,7 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
         reply.code(400);
         return { ok: false, error: "Upload an audio recording (mp3, m4a, wav, webm, …)." };
       }
-      const text = await transcribeAudio(pool, file);
+      const text = await transcribeAudio(file);
       await updateAgendaItem(pool, itemId, { appendTranscript: text });
       const updated = await getAgendaItem(pool, itemId);
       return { ok: true, transcript: updated?.transcript ?? text, added: text };

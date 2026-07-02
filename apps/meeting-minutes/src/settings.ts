@@ -16,16 +16,13 @@ export async function setSetting(pool: Pool, key: string, value: string): Promis
 export interface SettingsView {
   anthropicKeyHint: string;
   hasAnthropicKey: boolean;
-  hasOpenAIKey: boolean;
 }
 
 // Never returns full keys, only a hint + flags.
 export async function getSettingsView(pool: Pool): Promise<SettingsView> {
   const ak = await getSetting(pool, "anthropic_api_key");
-  const ok = await getSetting(pool, "openai_api_key");
   return {
     anthropicKeyHint: ak ? ak.substring(0, 10) + "..." : "",
     hasAnthropicKey: ak.length > 0,
-    hasOpenAIKey: ok.length > 0,
   };
 }
