@@ -31,17 +31,8 @@ CREATE TABLE session (
 );
 CREATE INDEX session_expire_idx ON session (expire);
 
--- Seed the registry with the throwaway validation app.
-INSERT INTO apps (slug, name, subdomain, icon)
-VALUES ('whoami', 'Who Am I', 'whoami', '👤');
-
-INSERT INTO apps (slug, name, subdomain, icon)
-VALUES ('social-posts', 'Social Posts', 'social', '📣');
-
-INSERT INTO apps (slug, name, subdomain, icon)
-VALUES ('approvals', 'Approvals', 'approvals', '✅');
-
-INSERT INTO apps (slug, name, subdomain, icon)
-VALUES ('meeting-minutes', 'Meeting Minutes', 'minutes', '📝');
-
 RESET ROLE;
+
+-- App-registry rows are seeded separately in 03-app-registry.sql, which is
+-- idempotent and re-run by the db-init service on every `up` — so adding an app
+-- registers it against a LIVE hub DB, not only on a fresh Postgres volume.

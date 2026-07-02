@@ -59,7 +59,10 @@ services:
     environment:
       PGHOST: postgres
       PGPASSWORD: "${POSTGRES_PASSWORD}"
-    entrypoint: ["bash", "/init/01-databases.sh"]
+    entrypoint:
+      - bash
+      - -c
+      - /init/01-databases.sh && psql -v ON_ERROR_STOP=1 -U "$$POSTGRES_USER" -f /init/03-app-registry.sql
     volumes:
       - ./db/init:/init:ro
     depends_on:
