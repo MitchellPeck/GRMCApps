@@ -1,6 +1,5 @@
 import { FastifyInstance } from "fastify";
 import { pool } from "../db";
-import { config } from "../config";
 import { getSettingsView, setSetting } from "../settings";
 
 interface SaveBody {
@@ -25,11 +24,5 @@ export async function settingsRoutes(app: FastifyInstance): Promise<void> {
     } catch (e) {
       return { ok: false, error: (e as Error).message };
     }
-  });
-
-  // Public (within the authed host) transcription config so the browser client
-  // sends the same model the whisper container has loaded.
-  app.get("/api/transcription-config", async () => {
-    return { ok: true, model: config.whisperModel };
   });
 }

@@ -113,6 +113,11 @@ export function parseItems(raw: string): ExtractedItem[] {
     .filter((el) => el.title.length > 0);
 }
 
+export interface ActionItem {
+  task: string;
+  owner: string;
+}
+
 export interface SummarizeInput {
   meetingTitle: string;
   itemTitle: string;
@@ -122,15 +127,47 @@ export interface SummarizeInput {
   transcript: string;
 }
 
-const SUMMARIZE_SYSTEM = `You are a meeting minutes assistant. Given the raw
-transcript and typed notes for a single agenda item, write concise minutes for
-that item. Use plain prose and short bullet points. Capture key discussion
-points, decisions made, and any action items (with owners if named). Do not
-add information that is not present. Keep it tight — a few sentences to a short
-list. Output plain text (no markdown headers).`;
+export interface SummarizeResult {
+  summary: string;
+  actionItems: ActionItem[];
+}
 
-// Summarize one agenda item from its transcript + notes.
-export async function summarizeItem(pool: Pool, input: SummarizeInput): Promise<string> {
+const SUMMARIZE_SYSTEM = `You are a meeting-minutes assistant. From the transcript
+and typed notes for ONE agenda item, produce concise minutes AND extract every
+action item.
+
+An "action item" is any commitment, task, follow-up, decision-to-do, or to-do —
+INCLUDING ones phrased in natural, conversational language. Treat phrasings like
+"we need to X", "we have to X", "someone should X", "let's X", "I'll take care of
+X", "I can handle X", "can you follow up on X", "make sure to X", "the next step
+is X", "we should look into X", or a deadline like "by next week" as action
+items. Do NOT limit yourself to sentences that literally say "action item".
+
+For each action item, identify the owner — the person who committed to it or was
+asked to do it. The transcript labels speakers by name ("Alice: ..."); use that
+to attribute ownership. Use a real name when it is clear, otherwise "Unassigned".
+
+Respond with ONLY a JSON object, no prose around it:
+{
+  "summary": "a few sentences and/or short bullet lines covering the discussion and any decisions (plain text, no markdown headings)",
+  "actionItems": [ { "task": "clear imperative description", "owner": "Name or Unassigned" } ]
+}
+Use an empty array when there are genuinely no action items. Base everything
+strictly on the provided text; never invent tasks, owners, or decisions.`;
+
+export function parseSummary(raw: string): SummarizeResult {
+  let data: any;
+  try { data = JSON.parse(stripJsonFences(raw)); } catch { return { summary: raw.trim(), actionItems: [] }; }
+  const actionItems: ActionItem[] = Array.isArray(data?.actionItems)
+    ? data.actionItems
+        .map((a: any) => ({ task: String(a?.task ?? "").trim(), owner: String(a?.owner ?? "").trim() || "Unassigned" }))
+        .filter((a: ActionItem) => a.task.length > 0)
+    : [];
+  return { summary: String(data?.summary ?? "").trim(), actionItems };
+}
+
+// Summarize one agenda item and extract its action items.
+export async function summarizeItem(pool: Pool, input: SummarizeInput): Promise<SummarizeResult> {
   const presenters = input.presenters.length ? input.presenters.join(", ") : "unspecified";
   const parts = [
     `Meeting: ${input.meetingTitle}`,
@@ -138,14 +175,14 @@ export async function summarizeItem(pool: Pool, input: SummarizeInput): Promise<
     input.itemDescription ? `Item details: ${input.itemDescription}` : "",
     `Presented by: ${presenters}`,
     "",
-    input.transcript ? `Transcript:\n${input.transcript}` : "Transcript: (none)",
+    input.transcript ? `Transcript (speakers labeled by name where known):\n${input.transcript}` : "Transcript: (none)",
     "",
     input.notes ? `Typed notes:\n${input.notes}` : "Typed notes: (none)",
   ].filter(Boolean);
   if (!input.transcript && !input.notes) {
     throw new Error("Nothing to summarize yet — record a transcript or type notes first.");
   }
-  return (await callClaude(pool, SUMMARIZE_SYSTEM, parts.join("\n"), 1024)).trim();
+  return parseSummary(await callClaude(pool, SUMMARIZE_SYSTEM, parts.join("\n"), 1024));
 }
 
 export interface ReportItem {
@@ -154,6 +191,7 @@ export interface ReportItem {
   summary: string;
   notes: string;
   transcript: string;
+  actionItems: ActionItem[];
 }
 
 export interface ReportInput {
@@ -164,22 +202,31 @@ export interface ReportInput {
   items: ReportItem[];
 }
 
-const REPORT_SYSTEM = `You are a meeting minutes assistant. Produce clean,
+const REPORT_SYSTEM = `You are a meeting-minutes assistant. Produce clean,
 professional meeting minutes in Markdown from the structured meeting data
-provided. Structure:
+provided. Structure exactly:
   # <Meeting title>
   A line with date, location, and attendees.
   ## Agenda
-  For each item: a "### <n>. <title>" heading, who presented it, a short
-  summary of the discussion, decisions, and any action items.
+  For each item: a "### <n>. <title>" heading, who presented it, and a short
+  summary of the discussion and any decisions.
   ## Action Items
-  A consolidated checklist of every action item across the meeting, each with
-  an owner if one was named.
-Base everything strictly on the provided summaries, notes, and transcripts. Do
-not invent attendees, decisions, or action items. If there are no action items,
-say "None recorded."`;
+  A single consolidated checklist (- [ ] style) of EVERY action item across the
+  whole meeting. Each line: the task, the owner in **bold** (or **Unassigned**),
+  and the agenda item it came from in parentheses.
 
-// Generate a full meeting report from all item summaries.
+You are given each item's already-extracted action items — include ALL of them,
+none dropped. ALSO re-read each transcript and typed notes and ADD any further
+action items you find that were phrased conversationally (e.g. "we need to…",
+"someone should…", "I'll handle…", "can you follow up…", "by next week…") and
+were not already listed. Merge duplicates. Attribute owners from the named
+speakers when possible.
+
+Base everything strictly on the provided material. Never invent attendees,
+decisions, or action items. If, after all this, there are truly no action
+items, write "None recorded." under the Action Items heading.`;
+
+// Generate a full meeting report from all item summaries + action items.
 export async function generateReport(pool: Pool, input: ReportInput): Promise<string> {
   const lines: string[] = [
     `Meeting title: ${input.title}`,
@@ -195,13 +242,18 @@ export async function generateReport(pool: Pool, input: ReportInput): Promise<st
     lines.push(`${i + 1}. ${it.title}`);
     lines.push(`   Presented by: ${it.presenters.length ? it.presenters.join(", ") : "unspecified"}`);
     if (it.summary) lines.push(`   Summary: ${it.summary}`);
-    else if (it.notes || it.transcript) {
-      if (it.notes) lines.push(`   Notes: ${it.notes}`);
-      if (it.transcript) lines.push(`   Transcript: ${it.transcript}`);
-    } else {
-      lines.push("   (no notes recorded)");
+    if (it.actionItems.length) {
+      lines.push(`   Action items already extracted for this item:`);
+      it.actionItems.forEach((a) => lines.push(`     - ${a.task} (owner: ${a.owner})`));
     }
+    if (it.notes) lines.push(`   Typed notes: ${it.notes}`);
+    if (it.transcript) lines.push(`   Transcript (speakers labeled by name where known):\n${indent(it.transcript)}`);
+    if (!it.summary && !it.notes && !it.transcript) lines.push("   (no notes recorded)");
   });
 
   return (await callClaude(pool, REPORT_SYSTEM, lines.join("\n"), 3072)).trim();
+}
+
+function indent(text: string): string {
+  return text.split("\n").map((l) => "     " + l).join("\n");
 }

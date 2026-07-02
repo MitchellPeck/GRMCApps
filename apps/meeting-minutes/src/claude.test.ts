@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { parseItems, stripJsonFences, isSupportedAgendaType } from "./claude";
+import { parseItems, stripJsonFences, isSupportedAgendaType, parseSummary } from "./claude";
 
 test("stripJsonFences removes code fences", () => {
   assert.equal(stripJsonFences('```json\n[]\n```'), "[]");
@@ -33,4 +33,32 @@ test("isSupportedAgendaType covers pdf, text, images only", () => {
   assert.ok(isSupportedAgendaType("image/png"));
   assert.ok(!isSupportedAgendaType("application/msword"));
   assert.ok(!isSupportedAgendaType("audio/webm"));
+});
+
+test("parseSummary reads summary + action items and defaults owner", () => {
+  const raw = JSON.stringify({
+    summary: "Discussed the Q2 budget shortfall.",
+    actionItems: [
+      { task: "Pull the Q2 numbers", owner: "Bob" },
+      { task: "Follow up with the printer", owner: "" },
+      { task: "  ", owner: "X" },
+    ],
+  });
+  const r = parseSummary(raw);
+  assert.equal(r.summary, "Discussed the Q2 budget shortfall.");
+  assert.equal(r.actionItems.length, 2); // blank task dropped
+  assert.equal(r.actionItems[0].owner, "Bob");
+  assert.equal(r.actionItems[1].owner, "Unassigned"); // blank owner defaulted
+});
+
+test("parseSummary tolerates fenced JSON and missing actionItems", () => {
+  const r = parseSummary('```json\n{"summary":"ok"}\n```');
+  assert.equal(r.summary, "ok");
+  assert.deepEqual(r.actionItems, []);
+});
+
+test("parseSummary falls back to raw text when not JSON", () => {
+  const r = parseSummary("plain summary text");
+  assert.equal(r.summary, "plain summary text");
+  assert.deepEqual(r.actionItems, []);
 });

@@ -46,9 +46,7 @@ function renderMarkdown(md){
 }
 
 // ── App state ───────────────────────────────────────────────────────────────
-var state = { people: [], peopleById: {}, meeting: null, attendeeIds: [], items: [], whisperModel: 'small' };
-// Learn which Whisper model the server loaded so the live stream matches it.
-api('/api/transcription-config').then(function(r){ if(r && r.ok && r.model) state.whisperModel = r.model; }).catch(function(){});
+var state = { people: [], peopleById: {}, meeting: null, attendeeIds: [], items: [] };
 
 // ── Tabs / views ────────────────────────────────────────────────────────────
 function switchTab(id){
@@ -341,14 +339,14 @@ function itemHtml(it, idx){
     +'<div class="ibody collapsed" id="ibody-'+it.id+'">'
       +'<div class="sublbl">Presented by</div>'
       +'<div class="chips" id="pres-'+it.id+'"></div>'
-      +'<div class="sublbl">Transcript (AI)</div>'
+      +'<div class="sublbl">Transcript (AI, with speaker labels)</div>'
       +'<div class="rec-row">'
-        +'<button class="btn-sm" data-rec="'+it.id+'">● Start recording</button>'
+        +'<button class="btn-sm" data-rec="'+it.id+'">● Record</button>'
         +'<label class="btn-sm" style="cursor:pointer">Upload audio<input type="file" accept="audio/*,video/webm" data-audio="'+it.id+'" style="display:none"></label>'
         +'<span class="rec-status" id="recstat-'+it.id+'"></span>'
       +'</div>'
-      +'<textarea id="tx-'+it.id+'" placeholder="Live transcription appears here. You can also edit it." style="margin-top:6px">'+esc(it.transcript)+'</textarea>'
-      +'<div class="interim" id="interim-'+it.id+'"></div>'
+      +'<div class="speakers" id="spk-'+it.id+'"></div>'
+      +'<textarea id="tx-'+it.id+'" placeholder="Record or upload audio to transcribe. Speakers are labeled once you record; you can also edit this text." style="margin-top:6px">'+esc(it.transcript)+'</textarea>'
       +'<div class="sublbl">Notes (typed)</div>'
       +'<textarea id="nt-'+it.id+'" placeholder="Optional manual notes">'+esc(it.notes)+'</textarea>'
       +'<div class="btn-row">'
@@ -356,9 +354,24 @@ function itemHtml(it, idx){
         +'<button class="btn btn-danger btn-sm" data-del-item="'+it.id+'">Remove item</button>'
         +'<span id="imsg-'+it.id+'"></span>'
       +'</div>'
-      +'<div id="sum-'+it.id+'">'+(it.summary?'<div class="sublbl">Summary</div><div class="summary-box">'+esc(it.summary)+'</div>':'')+'</div>'
+      +'<div id="sum-'+it.id+'">'+summaryHtml(it)+'</div>'
     +'</div>'
   +'</div>';
+}
+
+// Rendered summary + action-item list for an item.
+function summaryHtml(it){
+  var h='';
+  if(it.summary) h+='<div class="sublbl">Summary</div><div class="summary-box">'+esc(it.summary)+'</div>';
+  h+=actionItemsHtml(it.action_items);
+  return h;
+}
+function actionItemsHtml(items){
+  if(!items || !items.length) return '';
+  var rows=items.map(function(a){
+    return '<li><span class="ai-task">'+esc(a.task)+'</span> <span class="ai-owner">'+esc(a.owner||'Unassigned')+'</span></li>';
+  }).join('');
+  return '<div class="sublbl">Action items</div><ul class="action-list">'+rows+'</ul>';
 }
 
 function wireItem(it){
@@ -366,6 +379,7 @@ function wireItem(it){
     document.getElementById('ibody-'+it.id).classList.toggle('collapsed');
   });
   renderPresenterChips(it);
+  renderSpeakerMap(it);
   var tx=document.getElementById('tx-'+it.id);
   var nt=document.getElementById('nt-'+it.id);
   tx.addEventListener('blur', function(){ saveItemField(it, { transcript: tx.value }); it.transcript=tx.value; });
@@ -374,6 +388,64 @@ function wireItem(it){
   document.querySelector('[data-audio="'+it.id+'"]').addEventListener('change', function(){ uploadAudio(it, this); });
   document.querySelector('[data-summarize="'+it.id+'"]').addEventListener('click', function(){ summarize(it); });
   document.querySelector('[data-del-item="'+it.id+'"]').addEventListener('click', function(){ removeItem(it); });
+}
+
+// ── Speaker → person mapping ────────────────────────────────────────────────
+function distinctSpeakersJS(segments){
+  var seen=[];
+  (segments||[]).forEach(function(s){ if(s.speaker && seen.indexOf(s.speaker)<0) seen.push(s.speaker); });
+  return seen;
+}
+// Mirror of server transcript.ts renderTranscript so remapping updates instantly.
+function renderTranscriptJS(segments, map){
+  if(!segments || !segments.length) return '';
+  var order=distinctSpeakersJS(segments);
+  if(!order.length) return segments.map(function(s){return s.text;}).join(' ').trim();
+  var lines=[], cur=null, buf=[];
+  function flush(){
+    if(cur===null || !buf.length) return;
+    var name=(map[cur] && map[cur].trim()) || ('Speaker '+(order.indexOf(cur)+1));
+    lines.push(name+': '+buf.join(' ').trim()); buf=[];
+  }
+  segments.forEach(function(s){
+    var spk=s.speaker || order[0];
+    if(spk!==cur){ flush(); cur=spk; }
+    buf.push(s.text);
+  });
+  flush();
+  return lines.join('\n');
+}
+function renderSpeakerMap(it){
+  var el=document.getElementById('spk-'+it.id); if(!el) return;
+  var speakers=distinctSpeakersJS(it.transcript_segments);
+  if(speakers.length<1){ el.innerHTML=''; return; }
+  var attendees=state.attendeeIds.map(function(id){ return state.peopleById[id]; }).filter(Boolean);
+  var opts=function(sel){
+    var o='<option value="">— unlabeled —</option>';
+    attendees.forEach(function(p){ o+='<option value="'+esc(p.name)+'"'+(sel===p.name?' selected':'')+'>'+esc(p.name)+'</option>'; });
+    // Keep a currently-set name that isn't in the attendee list as an option too.
+    if(sel && attendees.every(function(p){return p.name!==sel;})) o+='<option value="'+esc(sel)+'" selected>'+esc(sel)+'</option>';
+    return o;
+  };
+  el.innerHTML='<div class="sublbl">Who is speaking?</div><div class="spk-rows">'
+    + speakers.map(function(spk, i){
+        var cur=(it.speaker_map||{})[spk]||'';
+        return '<div class="spk-row"><span class="spk-tag">Speaker '+(i+1)+'</span>'
+          +'<select data-spk="'+esc(spk)+'">'+opts(cur)+'</select></div>';
+      }).join('')
+    + '</div><div class="hint">Label each voice; the transcript and summary use these names. Remapping relabels the transcript.</div>';
+  el.querySelectorAll('select[data-spk]').forEach(function(sel){
+    sel.addEventListener('change', function(){
+      var spk=sel.getAttribute('data-spk');
+      it.speaker_map=it.speaker_map||{};
+      if(sel.value) it.speaker_map[spk]=sel.value; else delete it.speaker_map[spk];
+      // Instant local re-render, then persist (server renders identically).
+      var tx=document.getElementById('tx-'+it.id);
+      tx.value=renderTranscriptJS(it.transcript_segments, it.speaker_map);
+      it.transcript=tx.value;
+      saveItemField(it, { speakerMap: it.speaker_map });
+    });
+  });
 }
 
 function renderPresenterChips(it){
@@ -410,8 +482,8 @@ function summarize(it){
   }).then(function(res){
     imsg.innerHTML='';
     if(!res.ok){ imsg.innerHTML='<span style="color:var(--rej-fg);font-size:12px">'+esc(res.error)+'</span>'; return; }
-    it.summary=res.summary; it.status='done';
-    document.getElementById('sum-'+it.id).innerHTML='<div class="sublbl">Summary</div><div class="summary-box">'+esc(res.summary)+'</div>';
+    it.summary=res.summary; it.action_items=res.actionItems||[]; it.status='done';
+    document.getElementById('sum-'+it.id).innerHTML=summaryHtml(it);
     var btn=document.querySelector('[data-summarize="'+it.id+'"]'); btn.textContent='Re-summarize'; btn.setAttribute('data-default','Re-summarize');
     // Refresh number badge → check + summarized badge.
     var head=document.querySelector('[data-toggle-item="'+it.id+'"]');
@@ -428,120 +500,81 @@ function removeItem(it){
   });
 }
 
-// ── Live transcription (self-hosted WhisperLive over WebSocket) ─────────────
-// The browser captures mic audio, converts it to 16-bit PCM @ 16 kHz, and
-// streams it to /ws/transcribe, which the server relays to the internal
-// Whisper container. Segments come back as {text, completed}.
-var activeRec = null; // { it, btn, ws, ctx, proc, source, gain, stream, base }
+// ── Recording → diarized transcription ──────────────────────────────────────
+// Record the agenda item with MediaRecorder; on stop, upload the audio to the
+// self-hosted Whisper service, which transcribes AND labels who is speaking.
+var activeRec = null; // { it, btn, mr, stream, chunks }
 
-function downsampleTo16k(input, inRate){
-  if(inRate === 16000) return input;
-  var ratio = inRate / 16000;
-  var outLen = Math.floor(input.length / ratio);
-  var out = new Float32Array(outLen);
-  for(var i=0;i<outLen;i++){
-    // Average the source window mapped to each output sample (cheap anti-alias).
-    var start = Math.floor(i*ratio), end = Math.floor((i+1)*ratio), sum=0, n=0;
-    for(var j=start;j<end && j<input.length;j++){ sum+=input[j]; n++; }
-    out[i] = n ? sum/n : input[start] || 0;
-  }
-  return out;
-}
-function floatTo16(f32){
-  var out = new Int16Array(f32.length);
-  for(var i=0;i<f32.length;i++){ var s=Math.max(-1,Math.min(1,f32[i])); out[i]= s<0 ? s*0x8000 : s*0x7fff; }
-  return out;
+function pickMime(){
+  var opts=['audio/webm;codecs=opus','audio/webm','audio/mp4','audio/ogg'];
+  for(var i=0;i<opts.length;i++){ if(window.MediaRecorder && MediaRecorder.isTypeSupported(opts[i])) return opts[i]; }
+  return '';
 }
 
 function toggleRecording(it, btn){
   if(activeRec && activeRec.it.id===it.id){ stopRecording(); return; }
   if(activeRec){ stopRecording(); }
   var rs=document.getElementById('recstat-'+it.id);
-  if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
-    rs.innerHTML='<span style="color:var(--rej-fg)">This browser cannot capture audio. Upload a recording instead.</span>';
+  if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder){
+    rs.innerHTML='<span style="color:var(--rej-fg)">This browser cannot record audio. Upload a recording instead.</span>';
     return;
   }
   rs.textContent='Starting microphone…';
   navigator.mediaDevices.getUserMedia({ audio:{ channelCount:1, echoCancellation:true, noiseSuppression:true } })
-    .then(function(stream){ startStream(it, btn, stream); })
+    .then(function(stream){
+      var mime=pickMime();
+      var mr=new MediaRecorder(stream, mime?{ mimeType:mime }:undefined);
+      var chunks=[];
+      mr.ondataavailable=function(e){ if(e.data && e.data.size) chunks.push(e.data); };
+      mr.onstop=function(){
+        try { stream.getTracks().forEach(function(t){ t.stop(); }); } catch(e){}
+        var blob=new Blob(chunks, { type: mime || 'audio/webm' });
+        transcribeBlob(it, blob, mime);
+      };
+      activeRec={ it:it, btn:btn, mr:mr, stream:stream, chunks:chunks };
+      mr.start();
+      btn.innerHTML='<span class="rec-dot"></span> Stop &amp; transcribe';
+      rs.innerHTML='<span class="rec-dot"></span> Recording…';
+    })
     .catch(function(e){ rs.innerHTML='<span style="color:var(--rej-fg)">Mic access denied: '+esc(e.message||e.name)+'</span>'; });
-}
-
-function startStream(it, btn, stream){
-  var tx=document.getElementById('tx-'+it.id);
-  var interimEl=document.getElementById('interim-'+it.id);
-  var rs=document.getElementById('recstat-'+it.id);
-  var base = tx.value;
-
-  var AC = window.AudioContext || window.webkitAudioContext;
-  var ctx = new AC();
-  var source = ctx.createMediaStreamSource(stream);
-  var proc = ctx.createScriptProcessor(4096, 1, 1);
-  var gain = ctx.createGain(); gain.gain.value = 0; // silence local monitoring (no echo)
-
-  var proto = location.protocol==='https:' ? 'wss' : 'ws';
-  var ws = new WebSocket(proto+'://'+location.host+'/ws/transcribe');
-  ws.binaryType='arraybuffer';
-  var ready=false;
-
-  activeRec = { it:it, btn:btn, ws:ws, ctx:ctx, proc:proc, source:source, gain:gain, stream:stream, base:base };
-
-  ws.onopen=function(){
-    ws.send(JSON.stringify({ uid:'mm-'+it.id+'-'+(state.meeting?state.meeting.id:0), language:'en', model:state.whisperModel, use_vad:true }));
-    ready=true;
-    rs.innerHTML='<span class="rec-dot"></span> Listening…';
-  };
-  ws.onmessage=function(ev){
-    var data; try{ data=JSON.parse(ev.data); }catch(e){ return; }
-    if(data.error){ rs.innerHTML='<span style="color:var(--rej-fg)">'+esc(data.error)+'</span>'; return; }
-    if(!data.segments) return;
-    var finals=data.segments.filter(function(s){return s.completed;}).map(function(s){return (s.text||'').trim();}).filter(Boolean).join(' ');
-    var interim=data.segments.filter(function(s){return !s.completed;}).map(function(s){return (s.text||'').trim();}).filter(Boolean).join(' ');
-    tx.value = base + (finals ? (base?'\n':'')+finals : '');
-    if(interimEl) interimEl.textContent = interim;
-  };
-  ws.onerror=function(){ rs.innerHTML='<span style="color:var(--rej-fg)">Transcription connection error.</span>'; };
-
-  proc.onaudioprocess=function(e){
-    if(!ready || ws.readyState!==1) return;
-    var input=e.inputBuffer.getChannelData(0);
-    var ds=downsampleTo16k(input, ctx.sampleRate);
-    ws.send(floatTo16(ds).buffer);
-  };
-
-  source.connect(proc); proc.connect(gain); gain.connect(ctx.destination);
-  btn.innerHTML='<span class="rec-dot"></span> Stop recording';
 }
 
 function stopRecording(){
   if(!activeRec) return;
   var r=activeRec; activeRec=null;
-  try { r.proc.onaudioprocess=null; r.source.disconnect(); r.proc.disconnect(); r.gain.disconnect(); } catch(e){}
-  try { r.stream.getTracks().forEach(function(t){ t.stop(); }); } catch(e){}
-  try { r.ctx.close(); } catch(e){}
-  // Give the server a moment to flush trailing segments, then close.
-  setTimeout(function(){ try{ r.ws.close(); }catch(e){} }, 600);
-  if(r.btn) r.btn.innerHTML='● Start recording';
-  var interimEl=document.getElementById('interim-'+r.it.id); if(interimEl) interimEl.textContent='';
-  var rs=document.getElementById('recstat-'+r.it.id);
-  var tx=document.getElementById('tx-'+r.it.id);
-  if(tx){ r.it.transcript=tx.value; saveItemField(r.it, { transcript: tx.value }); }
-  if(rs) rs.textContent='Saved.';
+  if(r.btn) r.btn.innerHTML='● Record';
+  try { if(r.mr.state!=='inactive') r.mr.stop(); } catch(e){
+    try { r.stream.getTracks().forEach(function(t){ t.stop(); }); } catch(e2){}
+  }
 }
 
-// ── Audio upload → Whisper transcription ────────────────────────────────────
-function uploadAudio(it, input){
-  if(!input.files.length) return;
+// Send a recorded/selected audio blob for transcription + diarization.
+function transcribeBlob(it, blob, mime){
   var rs=document.getElementById('recstat-'+it.id);
-  rs.innerHTML='<span class="spin" style="border-top-color:var(--navy)"></span> Transcribing…';
-  var fd=new FormData(); fd.append('file', input.files[0]);
+  if(!blob || !blob.size){ rs.innerHTML='<span style="color:var(--rej-fg)">No audio captured.</span>'; return; }
+  rs.innerHTML='<span class="spin" style="border-top-color:var(--navy)"></span> Transcribing &amp; identifying speakers…';
+  var ext=(mime||'').indexOf('mp4')>=0?'m4a':(mime||'').indexOf('ogg')>=0?'ogg':'webm';
+  var fd=new FormData(); fd.append('file', blob, 'item-'+it.id+'.'+ext);
   apiForm('/api/items/'+it.id+'/transcribe', fd).then(function(res){
-    input.value='';
     if(!res.ok){ rs.innerHTML='<span style="color:var(--rej-fg)">'+esc(res.error)+'</span>'; return; }
     it.transcript=res.transcript;
-    document.getElementById('tx-'+it.id).value=res.transcript;
-    rs.textContent='Transcribed.';
+    it.speaker_map=res.speakerMap||{};
+    // Reflect the newly diarized segments so the speaker map + re-render work.
+    return api('/api/meetings/'+state.meeting.id).then(function(det){
+      if(det.ok){ var fresh=det.items.filter(function(x){return x.id===it.id;})[0]; if(fresh){ it.transcript_segments=fresh.transcript_segments; it.speaker_map=fresh.speaker_map; } }
+      document.getElementById('tx-'+it.id).value=it.transcript;
+      renderSpeakerMap(it);
+      var n=(res.speakers||[]).length;
+      rs.textContent= n>1 ? ('Transcribed — '+n+' speakers detected. Label them below.') : 'Transcribed.';
+    });
   }).catch(function(e){ rs.innerHTML='<span style="color:var(--rej-fg)">'+esc(e.message)+'</span>'; });
+}
+
+// ── Audio file upload → same transcription path ─────────────────────────────
+function uploadAudio(it, input){
+  if(!input.files.length) return;
+  var f=input.files[0]; input.value='';
+  transcribeBlob(it, f, f.type);
 }
 
 // ── Report ──────────────────────────────────────────────────────────────────
