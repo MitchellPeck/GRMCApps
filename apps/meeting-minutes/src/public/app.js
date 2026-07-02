@@ -177,18 +177,15 @@ function loadSettings(){
     document.getElementById('s-anthropic-hint').innerHTML = res.hasAnthropicKey
       ? 'Saved (' + esc(res.anthropicKeyHint) + '). Enter a new key to replace it.'
       : 'Used to extract agendas, summarize items, and write the report.';
-    document.getElementById('s-openai-hint').innerHTML = res.hasOpenAIKey
-      ? 'Saved. Enter a new key to replace it. Used for Whisper transcription of uploaded audio.'
-      : 'Only needed to transcribe <em>uploaded</em> audio files (Whisper). Live in-browser transcription needs no key.';
   });
 }
 document.getElementById('btn-save-settings').addEventListener('click', function(){
   setBtn('btn-save-settings', true, 'Saving...');
-  api('/api/settings', { method:'POST', body:{ anthropicKey:v('s-anthropic'), openaiKey:v('s-openai') } })
+  api('/api/settings', { method:'POST', body:{ anthropicKey:v('s-anthropic') } })
     .then(function(res){
       setBtn('btn-save-settings', false);
       if(!res.ok){ msg('settings-msg','err',res.error); return; }
-      document.getElementById('s-anthropic').value=''; document.getElementById('s-openai').value='';
+      document.getElementById('s-anthropic').value='';
       msg('settings-msg','ok','Saved.');
       loadSettings();
     }).catch(function(e){ setBtn('btn-save-settings', false); msg('settings-msg','err',e.message); });
@@ -342,14 +339,14 @@ function itemHtml(it, idx){
     +'<div class="ibody collapsed" id="ibody-'+it.id+'">'
       +'<div class="sublbl">Presented by</div>'
       +'<div class="chips" id="pres-'+it.id+'"></div>'
-      +'<div class="sublbl">Transcript (AI)</div>'
+      +'<div class="sublbl">Transcript (AI, with speaker labels)</div>'
       +'<div class="rec-row">'
-        +'<button class="btn-sm" data-rec="'+it.id+'">● Start recording</button>'
+        +'<button class="btn-sm" data-rec="'+it.id+'">● Record</button>'
         +'<label class="btn-sm" style="cursor:pointer">Upload audio<input type="file" accept="audio/*,video/webm" data-audio="'+it.id+'" style="display:none"></label>'
         +'<span class="rec-status" id="recstat-'+it.id+'"></span>'
       +'</div>'
-      +'<textarea id="tx-'+it.id+'" placeholder="Live transcription appears here. You can also edit it." style="margin-top:6px">'+esc(it.transcript)+'</textarea>'
-      +'<div class="interim" id="interim-'+it.id+'"></div>'
+      +'<div class="speakers" id="spk-'+it.id+'"></div>'
+      +'<textarea id="tx-'+it.id+'" placeholder="Record or upload audio to transcribe. Speakers are labeled once you record; you can also edit this text." style="margin-top:6px">'+esc(it.transcript)+'</textarea>'
       +'<div class="sublbl">Notes (typed)</div>'
       +'<textarea id="nt-'+it.id+'" placeholder="Optional manual notes">'+esc(it.notes)+'</textarea>'
       +'<div class="btn-row">'
@@ -357,9 +354,24 @@ function itemHtml(it, idx){
         +'<button class="btn btn-danger btn-sm" data-del-item="'+it.id+'">Remove item</button>'
         +'<span id="imsg-'+it.id+'"></span>'
       +'</div>'
-      +'<div id="sum-'+it.id+'">'+(it.summary?'<div class="sublbl">Summary</div><div class="summary-box">'+esc(it.summary)+'</div>':'')+'</div>'
+      +'<div id="sum-'+it.id+'">'+summaryHtml(it)+'</div>'
     +'</div>'
   +'</div>';
+}
+
+// Rendered summary + action-item list for an item.
+function summaryHtml(it){
+  var h='';
+  if(it.summary) h+='<div class="sublbl">Summary</div><div class="summary-box">'+esc(it.summary)+'</div>';
+  h+=actionItemsHtml(it.action_items);
+  return h;
+}
+function actionItemsHtml(items){
+  if(!items || !items.length) return '';
+  var rows=items.map(function(a){
+    return '<li><span class="ai-task">'+esc(a.task)+'</span> <span class="ai-owner">'+esc(a.owner||'Unassigned')+'</span></li>';
+  }).join('');
+  return '<div class="sublbl">Action items</div><ul class="action-list">'+rows+'</ul>';
 }
 
 function wireItem(it){
@@ -367,6 +379,7 @@ function wireItem(it){
     document.getElementById('ibody-'+it.id).classList.toggle('collapsed');
   });
   renderPresenterChips(it);
+  renderSpeakerMap(it);
   var tx=document.getElementById('tx-'+it.id);
   var nt=document.getElementById('nt-'+it.id);
   tx.addEventListener('blur', function(){ saveItemField(it, { transcript: tx.value }); it.transcript=tx.value; });
@@ -375,6 +388,64 @@ function wireItem(it){
   document.querySelector('[data-audio="'+it.id+'"]').addEventListener('change', function(){ uploadAudio(it, this); });
   document.querySelector('[data-summarize="'+it.id+'"]').addEventListener('click', function(){ summarize(it); });
   document.querySelector('[data-del-item="'+it.id+'"]').addEventListener('click', function(){ removeItem(it); });
+}
+
+// ── Speaker → person mapping ────────────────────────────────────────────────
+function distinctSpeakersJS(segments){
+  var seen=[];
+  (segments||[]).forEach(function(s){ if(s.speaker && seen.indexOf(s.speaker)<0) seen.push(s.speaker); });
+  return seen;
+}
+// Mirror of server transcript.ts renderTranscript so remapping updates instantly.
+function renderTranscriptJS(segments, map){
+  if(!segments || !segments.length) return '';
+  var order=distinctSpeakersJS(segments);
+  if(!order.length) return segments.map(function(s){return s.text;}).join(' ').trim();
+  var lines=[], cur=null, buf=[];
+  function flush(){
+    if(cur===null || !buf.length) return;
+    var name=(map[cur] && map[cur].trim()) || ('Speaker '+(order.indexOf(cur)+1));
+    lines.push(name+': '+buf.join(' ').trim()); buf=[];
+  }
+  segments.forEach(function(s){
+    var spk=s.speaker || order[0];
+    if(spk!==cur){ flush(); cur=spk; }
+    buf.push(s.text);
+  });
+  flush();
+  return lines.join('\n');
+}
+function renderSpeakerMap(it){
+  var el=document.getElementById('spk-'+it.id); if(!el) return;
+  var speakers=distinctSpeakersJS(it.transcript_segments);
+  if(speakers.length<1){ el.innerHTML=''; return; }
+  var attendees=state.attendeeIds.map(function(id){ return state.peopleById[id]; }).filter(Boolean);
+  var opts=function(sel){
+    var o='<option value="">— unlabeled —</option>';
+    attendees.forEach(function(p){ o+='<option value="'+esc(p.name)+'"'+(sel===p.name?' selected':'')+'>'+esc(p.name)+'</option>'; });
+    // Keep a currently-set name that isn't in the attendee list as an option too.
+    if(sel && attendees.every(function(p){return p.name!==sel;})) o+='<option value="'+esc(sel)+'" selected>'+esc(sel)+'</option>';
+    return o;
+  };
+  el.innerHTML='<div class="sublbl">Who is speaking?</div><div class="spk-rows">'
+    + speakers.map(function(spk, i){
+        var cur=(it.speaker_map||{})[spk]||'';
+        return '<div class="spk-row"><span class="spk-tag">Speaker '+(i+1)+'</span>'
+          +'<select data-spk="'+esc(spk)+'">'+opts(cur)+'</select></div>';
+      }).join('')
+    + '</div><div class="hint">Label each voice; the transcript and summary use these names. Remapping relabels the transcript.</div>';
+  el.querySelectorAll('select[data-spk]').forEach(function(sel){
+    sel.addEventListener('change', function(){
+      var spk=sel.getAttribute('data-spk');
+      it.speaker_map=it.speaker_map||{};
+      if(sel.value) it.speaker_map[spk]=sel.value; else delete it.speaker_map[spk];
+      // Instant local re-render, then persist (server renders identically).
+      var tx=document.getElementById('tx-'+it.id);
+      tx.value=renderTranscriptJS(it.transcript_segments, it.speaker_map);
+      it.transcript=tx.value;
+      saveItemField(it, { speakerMap: it.speaker_map });
+    });
+  });
 }
 
 function renderPresenterChips(it){
@@ -411,8 +482,8 @@ function summarize(it){
   }).then(function(res){
     imsg.innerHTML='';
     if(!res.ok){ imsg.innerHTML='<span style="color:var(--rej-fg);font-size:12px">'+esc(res.error)+'</span>'; return; }
-    it.summary=res.summary; it.status='done';
-    document.getElementById('sum-'+it.id).innerHTML='<div class="sublbl">Summary</div><div class="summary-box">'+esc(res.summary)+'</div>';
+    it.summary=res.summary; it.action_items=res.actionItems||[]; it.status='done';
+    document.getElementById('sum-'+it.id).innerHTML=summaryHtml(it);
     var btn=document.querySelector('[data-summarize="'+it.id+'"]'); btn.textContent='Re-summarize'; btn.setAttribute('data-default','Re-summarize');
     // Refresh number badge → check + summarized badge.
     var head=document.querySelector('[data-toggle-item="'+it.id+'"]');
@@ -429,75 +500,81 @@ function removeItem(it){
   });
 }
 
-// ── Live transcription (Web Speech API) ─────────────────────────────────────
-var activeRec = null; // { rec, itemId, btn, wantStop }
+// ── Recording → diarized transcription ──────────────────────────────────────
+// Record the agenda item with MediaRecorder; on stop, upload the audio to the
+// self-hosted Whisper service, which transcribes AND labels who is speaking.
+var activeRec = null; // { it, btn, mr, stream, chunks }
 
-function speechSupported(){ return !!(window.SpeechRecognition || window.webkitSpeechRecognition); }
+function pickMime(){
+  var opts=['audio/webm;codecs=opus','audio/webm','audio/mp4','audio/ogg'];
+  for(var i=0;i<opts.length;i++){ if(window.MediaRecorder && MediaRecorder.isTypeSupported(opts[i])) return opts[i]; }
+  return '';
+}
 
 function toggleRecording(it, btn){
-  if(activeRec && activeRec.itemId===it.id){ stopRecording(); return; }
+  if(activeRec && activeRec.it.id===it.id){ stopRecording(); return; }
   if(activeRec){ stopRecording(); }
-  if(!speechSupported()){
-    document.getElementById('recstat-'+it.id).innerHTML='<span style="color:var(--rej-fg)">Live transcription needs Chrome/Edge. Type notes or upload audio instead.</span>';
+  var rs=document.getElementById('recstat-'+it.id);
+  if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder){
+    rs.innerHTML='<span style="color:var(--rej-fg)">This browser cannot record audio. Upload a recording instead.</span>';
     return;
   }
-  var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  var rec = new SR();
-  rec.continuous=true; rec.interimResults=true; rec.lang='en-US';
-  var tx=document.getElementById('tx-'+it.id);
-  var interimEl=document.getElementById('interim-'+it.id);
-  activeRec = { rec:rec, itemId:it.id, btn:btn, wantStop:false };
-
-  rec.onresult=function(e){
-    var interim='', finals='';
-    for(var i=e.resultIndex;i<e.results.length;i++){
-      var t=e.results[i][0].transcript;
-      if(e.results[i].isFinal) finals+=t+' '; else interim+=t;
-    }
-    if(finals){ tx.value = (tx.value ? tx.value.replace(/\s+$/,'')+' ' : '') + finals.trim(); }
-    interimEl.textContent = interim;
-  };
-  rec.onerror=function(ev){
-    document.getElementById('recstat-'+it.id).innerHTML='<span style="color:var(--rej-fg)">Mic error: '+esc(ev.error||'unknown')+'</span>';
-  };
-  rec.onend=function(){
-    if(activeRec && activeRec.itemId===it.id && !activeRec.wantStop){ try{ rec.start(); }catch(e){} return; }
-    finalizeRecording(it, tx);
-  };
-  try { rec.start(); } catch(e){}
-  btn.innerHTML='<span class="rec-dot"></span> Stop recording';
-  document.getElementById('recstat-'+it.id).textContent='Listening…';
+  rs.textContent='Starting microphone…';
+  navigator.mediaDevices.getUserMedia({ audio:{ channelCount:1, echoCancellation:true, noiseSuppression:true } })
+    .then(function(stream){
+      var mime=pickMime();
+      var mr=new MediaRecorder(stream, mime?{ mimeType:mime }:undefined);
+      var chunks=[];
+      mr.ondataavailable=function(e){ if(e.data && e.data.size) chunks.push(e.data); };
+      mr.onstop=function(){
+        try { stream.getTracks().forEach(function(t){ t.stop(); }); } catch(e){}
+        var blob=new Blob(chunks, { type: mime || 'audio/webm' });
+        transcribeBlob(it, blob, mime);
+      };
+      activeRec={ it:it, btn:btn, mr:mr, stream:stream, chunks:chunks };
+      mr.start();
+      btn.innerHTML='<span class="rec-dot"></span> Stop &amp; transcribe';
+      rs.innerHTML='<span class="rec-dot"></span> Recording…';
+    })
+    .catch(function(e){ rs.innerHTML='<span style="color:var(--rej-fg)">Mic access denied: '+esc(e.message||e.name)+'</span>'; });
 }
 
 function stopRecording(){
   if(!activeRec) return;
-  activeRec.wantStop=true;
-  try { activeRec.rec.stop(); } catch(e){}
+  var r=activeRec; activeRec=null;
+  if(r.btn) r.btn.innerHTML='● Record';
+  try { if(r.mr.state!=='inactive') r.mr.stop(); } catch(e){
+    try { r.stream.getTracks().forEach(function(t){ t.stop(); }); } catch(e2){}
+  }
 }
 
-function finalizeRecording(it, tx){
+// Send a recorded/selected audio blob for transcription + diarization.
+function transcribeBlob(it, blob, mime){
   var rs=document.getElementById('recstat-'+it.id);
-  var interimEl=document.getElementById('interim-'+it.id);
-  if(interimEl) interimEl.textContent='';
-  if(activeRec && activeRec.btn){ activeRec.btn.innerHTML='● Start recording'; }
-  activeRec=null;
-  if(tx){ it.transcript=tx.value; saveItemField(it, { transcript: tx.value }); }
-  if(rs) rs.textContent='Saved.';
-}
-
-// ── Audio upload → Whisper transcription ────────────────────────────────────
-function uploadAudio(it, input){
-  if(!input.files.length) return;
-  var rs=document.getElementById('recstat-'+it.id);
-  rs.innerHTML='<span class="spin" style="border-top-color:var(--navy)"></span> Transcribing…';
-  var fd=new FormData(); fd.append('file', input.files[0]);
+  if(!blob || !blob.size){ rs.innerHTML='<span style="color:var(--rej-fg)">No audio captured.</span>'; return; }
+  rs.innerHTML='<span class="spin" style="border-top-color:var(--navy)"></span> Transcribing &amp; identifying speakers…';
+  var ext=(mime||'').indexOf('mp4')>=0?'m4a':(mime||'').indexOf('ogg')>=0?'ogg':'webm';
+  var fd=new FormData(); fd.append('file', blob, 'item-'+it.id+'.'+ext);
   apiForm('/api/items/'+it.id+'/transcribe', fd).then(function(res){
-    input.value='';
     if(!res.ok){ rs.innerHTML='<span style="color:var(--rej-fg)">'+esc(res.error)+'</span>'; return; }
     it.transcript=res.transcript;
-    document.getElementById('tx-'+it.id).value=res.transcript;
-    rs.textContent='Transcribed.';
+    it.speaker_map=res.speakerMap||{};
+    // Reflect the newly diarized segments so the speaker map + re-render work.
+    return api('/api/meetings/'+state.meeting.id).then(function(det){
+      if(det.ok){ var fresh=det.items.filter(function(x){return x.id===it.id;})[0]; if(fresh){ it.transcript_segments=fresh.transcript_segments; it.speaker_map=fresh.speaker_map; } }
+      document.getElementById('tx-'+it.id).value=it.transcript;
+      renderSpeakerMap(it);
+      var n=(res.speakers||[]).length;
+      rs.textContent= n>1 ? ('Transcribed — '+n+' speakers detected. Label them below.') : 'Transcribed.';
+    });
   }).catch(function(e){ rs.innerHTML='<span style="color:var(--rej-fg)">'+esc(e.message)+'</span>'; });
+}
+
+// ── Audio file upload → same transcription path ─────────────────────────────
+function uploadAudio(it, input){
+  if(!input.files.length) return;
+  var f=input.files[0]; input.value='';
+  transcribeBlob(it, f, f.type);
 }
 
 // ── Report ──────────────────────────────────────────────────────────────────

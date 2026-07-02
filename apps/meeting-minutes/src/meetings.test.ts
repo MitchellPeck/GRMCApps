@@ -76,6 +76,29 @@ test("full meeting lifecycle: attendees, agenda, presenters, summary, report", {
   await updateAgendaItem(pool, item.id, { transcript: "overwritten" });
   assert.equal((await getAgendaItem(pool, item.id))!.transcript, "overwritten");
 
+  // Diarized segments render a speaker-attributed transcript; remapping a
+  // speaker relabels it without re-uploading audio.
+  await updateAgendaItem(pool, item.id, {
+    transcriptSegments: [
+      { text: "We need to book the hall.", speaker: "SPEAKER_00", start: 0, end: 2 },
+      { text: "I'll do it.", speaker: "SPEAKER_01", start: 2, end: 3 },
+    ],
+    speakerMap: { SPEAKER_00: "Alice" },
+  });
+  let diar = (await getAgendaItem(pool, item.id))!;
+  assert.equal(diar.transcript, "Alice: We need to book the hall.\nSpeaker 2: I'll do it.");
+  assert.equal(diar.transcript_segments.length, 2);
+
+  await updateAgendaItem(pool, item.id, { speakerMap: { SPEAKER_00: "Alice", SPEAKER_01: "Bob" } });
+  diar = (await getAgendaItem(pool, item.id))!;
+  assert.equal(diar.transcript, "Alice: We need to book the hall.\nBob: I'll do it.");
+
+  // Structured action items round-trip through jsonb.
+  await updateAgendaItem(pool, item.id, {
+    actionItems: [{ task: "Book the hall", owner: "Bob" }],
+  });
+  assert.deepEqual((await getAgendaItem(pool, item.id))!.action_items, [{ task: "Book the hall", owner: "Bob" }]);
+
   await updateAgendaItem(pool, item.id, { notes: "typed", summary: "sum", status: "done" });
   const done = (await getAgendaItem(pool, item.id))!;
   assert.equal(done.notes, "typed");

@@ -1,5 +1,7 @@
 import { Pool } from "pg";
-import { ExtractedItem } from "./claude";
+import { ExtractedItem, ActionItem } from "./claude";
+import { DiarizedSegment } from "./whisper";
+import { SpeakerMap, renderTranscript } from "./transcript";
 
 export interface MeetingRow {
   id: number;
@@ -26,8 +28,29 @@ export interface AgendaItem {
   status: string;
   notes: string;
   transcript: string;
+  transcript_segments: DiarizedSegment[];
+  speaker_map: SpeakerMap;
   summary: string;
+  action_items: ActionItem[];
   presenter_ids: number[];
+}
+
+function mapItemRow(row: any, presenterIds: number[]): AgendaItem {
+  return {
+    id: Number(row.id),
+    meeting_id: Number(row.meeting_id),
+    position: Number(row.position),
+    title: row.title,
+    description: row.description,
+    status: row.status,
+    notes: row.notes,
+    transcript: row.transcript,
+    transcript_segments: Array.isArray(row.transcript_segments) ? row.transcript_segments : [],
+    speaker_map: row.speaker_map && typeof row.speaker_map === "object" ? row.speaker_map : {},
+    summary: row.summary,
+    action_items: Array.isArray(row.action_items) ? row.action_items : [],
+    presenter_ids: presenterIds,
+  };
 }
 
 export type Result<T> = { ok: true; status: number } & T | { ok: false; status: number; error: string };
@@ -199,18 +222,7 @@ export async function listAgendaItems(pool: Pool, meetingId: number): Promise<Ag
     if (!byItem.has(k)) byItem.set(k, []);
     byItem.get(k)!.push(Number(row.person_id));
   }
-  return r.rows.map((row) => ({
-    id: Number(row.id),
-    meeting_id: Number(row.meeting_id),
-    position: Number(row.position),
-    title: row.title,
-    description: row.description,
-    status: row.status,
-    notes: row.notes,
-    transcript: row.transcript,
-    summary: row.summary,
-    presenter_ids: byItem.get(Number(row.id)) ?? [],
-  }));
+  return r.rows.map((row) => mapItemRow(row, byItem.get(Number(row.id)) ?? []));
 }
 
 export async function getAgendaItem(pool: Pool, itemId: number): Promise<AgendaItem | null> {
@@ -218,18 +230,7 @@ export async function getAgendaItem(pool: Pool, itemId: number): Promise<AgendaI
   const row = r.rows[0];
   if (!row) return null;
   const pres = await pool.query("SELECT person_id FROM agenda_item_presenters WHERE item_id = $1", [itemId]);
-  return {
-    id: Number(row.id),
-    meeting_id: Number(row.meeting_id),
-    position: Number(row.position),
-    title: row.title,
-    description: row.description,
-    status: row.status,
-    notes: row.notes,
-    transcript: row.transcript,
-    summary: row.summary,
-    presenter_ids: pres.rows.map((p) => Number(p.person_id)),
-  };
+  return mapItemRow(row, pres.rows.map((p) => Number(p.person_id)));
 }
 
 // Patch mutable fields on an agenda item. `presenterIds` (when provided)
@@ -245,7 +246,10 @@ export async function updateAgendaItem(
     notes?: string;
     transcript?: string;
     appendTranscript?: string;
+    transcriptSegments?: DiarizedSegment[];
+    speakerMap?: SpeakerMap;
     summary?: string;
+    actionItems?: ActionItem[];
     presenterIds?: number[];
   }
 ): Promise<Result<{}>> {
@@ -263,7 +267,18 @@ export async function updateAgendaItem(
     if (fields.status !== undefined) add("status", fields.status);
     if (fields.notes !== undefined) add("notes", fields.notes);
     if (fields.summary !== undefined) add("summary", fields.summary);
-    if (fields.transcript !== undefined) add("transcript", fields.transcript);
+    if (fields.actionItems !== undefined) add("action_items", JSON.stringify(fields.actionItems));
+
+    // Diarized segments and/or the speaker→name map drive the rendered
+    // transcript. When either is supplied, re-derive `transcript` from them so
+    // remapping a speaker relabels the whole transcript.
+    if (fields.transcriptSegments !== undefined || fields.speakerMap !== undefined) {
+      const segs = fields.transcriptSegments !== undefined ? fields.transcriptSegments : existing.transcript_segments;
+      const map = fields.speakerMap !== undefined ? fields.speakerMap : existing.speaker_map;
+      if (fields.transcriptSegments !== undefined) add("transcript_segments", JSON.stringify(segs));
+      if (fields.speakerMap !== undefined) add("speaker_map", JSON.stringify(map));
+      add("transcript", renderTranscript(segs, map));
+    } else if (fields.transcript !== undefined) add("transcript", fields.transcript);
     else if (fields.appendTranscript !== undefined && fields.appendTranscript.trim()) {
       const joined = existing.transcript
         ? existing.transcript + "\n" + fields.appendTranscript.trim()

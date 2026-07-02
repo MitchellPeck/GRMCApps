@@ -68,12 +68,11 @@
         <input type="password" id="s-anthropic" placeholder="sk-ant-...">
         <div class="hint" id="s-anthropic-hint">Used to extract agendas, summarize items, and write the report.</div>
       </div>
-      <div class="field">
-        <label>OpenAI API key (optional)</label>
-        <input type="password" id="s-openai" placeholder="sk-...">
-        <div class="hint" id="s-openai-hint">Only needed to transcribe <em>uploaded</em> audio files (Whisper). Live in-browser transcription needs no key.</div>
-      </div>
       <div class="btn-row"><button class="btn btn-primary" id="btn-save-settings" data-default="Save settings">Save settings</button></div>
+    </div>
+    <div class="card">
+      <div class="ct">Transcription</div>
+      <div class="hint">Live and uploaded-audio transcription run on a self-hosted Whisper service on your own server — no API key, no per-minute cost, and audio never leaves your machine. Live transcription streams your mic in real time; use a good microphone for best results.</div>
     </div>
   </div>
 </div>

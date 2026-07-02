@@ -62,13 +62,19 @@ Cloudflare Tunnel, with no per-device certificate install.
   AI minutes. Maintain a reusable **library of people**; create a **meeting**,
   **upload its agenda** (PDF, image, or text) which Claude extracts into an
   ordered list of items, and pick which people are **present**. Then work down
-  the agenda: for each item choose the presenter(s), capture the discussion by
-  **live AI transcription** (the browser's speech engine — Chrome/Edge, no key)
-  or by uploading an audio recording (optional OpenAI Whisper), plus optional
-  typed notes, and **summarize** the item. Finally **generate a report** —
-  Claude writes full minutes with per-item summaries and a consolidated
-  action-item list. Add the Anthropic key (and optional OpenAI key) in
-  Settings; everything is stored in the `meetingminutes` database.
+  the agenda: for each item choose the presenter(s), **record** the discussion
+  (or upload a recording) — on stop it is transcribed **with speaker
+  diarization**, labeling who is speaking; you map each detected voice to an
+  attendee (auto-mapped when there's a single speaker and one presenter). Add
+  optional typed notes, then **summarize** the item — Claude writes the minutes
+  and **infers action items** from natural phrasing ("we need to…", "Bob will
+  follow up…"), each with an owner. Finally **generate a report**: full minutes
+  with per-item summaries and one consolidated, owner-attributed action-item
+  checklist. Transcription runs on a **self-hosted Whisper service** with
+  diarization (the `whisper` container) — no API key, no per-minute cost, and
+  audio never leaves the host. Add only the Anthropic key (for
+  extraction/summaries/report) in Settings; everything is stored in the
+  `meetingminutes` database.
 
 ## Adding an app
 

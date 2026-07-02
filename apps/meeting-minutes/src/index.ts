@@ -11,8 +11,8 @@ import { meetingsRoutes } from "./routes/meetings";
 
 const app = Fastify({ logger: true, trustProxy: true, bodyLimit: 2 * 1024 * 1024 });
 
-// 25 MB covers agenda PDFs/images and short per-item audio recordings.
-app.register(fastifyMultipart, { limits: { fileSize: 25 * 1024 * 1024, files: 1 } });
+// 50 MB covers agenda PDFs/images and per-item audio recordings.
+app.register(fastifyMultipart, { limits: { fileSize: 50 * 1024 * 1024, files: 1 } });
 app.register(fastifyStatic, { root: join(__dirname, "public"), prefix: "/" });
 app.register(meRoutes);
 app.register(settingsRoutes);

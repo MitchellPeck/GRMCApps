@@ -43,17 +43,25 @@ CREATE TABLE IF NOT EXISTS meeting_attendees (
 -- Agenda line items, ordered by position. Each carries typed notes, an AI
 -- transcript, and an AI summary.
 CREATE TABLE IF NOT EXISTS agenda_items (
-  id          bigserial PRIMARY KEY,
-  meeting_id  bigint NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
-  position    integer NOT NULL DEFAULT 0,
-  title       text NOT NULL,
-  description text NOT NULL DEFAULT '',
-  status      text NOT NULL DEFAULT 'pending',
-  notes       text NOT NULL DEFAULT '',
-  transcript  text NOT NULL DEFAULT '',
-  summary     text NOT NULL DEFAULT '',
-  created_at  timestamptz NOT NULL DEFAULT now()
+  id                 bigserial PRIMARY KEY,
+  meeting_id         bigint NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+  position           integer NOT NULL DEFAULT 0,
+  title              text NOT NULL,
+  description        text NOT NULL DEFAULT '',
+  status             text NOT NULL DEFAULT 'pending',
+  notes              text NOT NULL DEFAULT '',
+  transcript         text NOT NULL DEFAULT '',
+  transcript_segments jsonb NOT NULL DEFAULT '[]',
+  speaker_map        jsonb NOT NULL DEFAULT '{}',
+  summary            text NOT NULL DEFAULT '',
+  action_items       jsonb NOT NULL DEFAULT '[]',
+  created_at         timestamptz NOT NULL DEFAULT now()
 );
+
+-- Migrate existing installs to the diarization + action-item columns.
+ALTER TABLE agenda_items ADD COLUMN IF NOT EXISTS transcript_segments jsonb NOT NULL DEFAULT '[]';
+ALTER TABLE agenda_items ADD COLUMN IF NOT EXISTS speaker_map jsonb NOT NULL DEFAULT '{}';
+ALTER TABLE agenda_items ADD COLUMN IF NOT EXISTS action_items jsonb NOT NULL DEFAULT '[]';
 
 -- One or more people presenting a given agenda item.
 CREATE TABLE IF NOT EXISTS agenda_item_presenters (

@@ -171,6 +171,8 @@ services:
       MEETINGMINUTES_DB_USER: "${MEETINGMINUTES_DB_USER}"
       MEETINGMINUTES_DB_PASSWORD: "${MEETINGMINUTES_DB_PASSWORD}"
       MEETINGMINUTES_DB_NAME: "${MEETINGMINUTES_DB_NAME}"
+      # Self-hosted transcription (internal, keyless).
+      WHISPER_REST_URL: "http://whisper:9000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -186,9 +188,26 @@ services:
       - "traefik.http.services.minutes.loadbalancer.server.port=3000"
       - "com.centurylinklabs.watchtower.enable=true"
 
+  # Self-hosted speech-to-text with speaker diarization (faster-whisper).
+  # Internal only — no Traefik labels and no published ports, so it is reachable
+  # solely from the hubnet by the meeting-minutes app, which POSTs recorded
+  # audio to it. No API key and no per-minute cost; audio never leaves the host.
+  # First boot downloads the Whisper model + diarization ONNX models into the
+  # whisperdata volume.
+  whisper:
+    image: hwdsl2/whisper-server:latest
+    environment:
+      WHISPER_MODEL: "small"
+      WHISPER_LANGUAGE: "en"
+      WHISPER_DIARIZATION: "true"      # label who is speaking (SPEAKER_00, 01, …)
+    volumes:
+      - whisperdata:/var/lib/whisper
+    networks: [hubnet]
+
 networks:
   hubnet:
 
 volumes:
   pgdata:
   letsencrypt:
+  whisperdata:

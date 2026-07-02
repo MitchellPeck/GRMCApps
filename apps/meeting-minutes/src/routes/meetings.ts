@@ -6,6 +6,7 @@ import {
   extractAgendaItems, isSupportedAgendaType, summarizeItem, generateReport,
 } from "../claude";
 import { transcribeAudio, hasAudioExtension } from "../whisper";
+import { distinctSpeakers } from "../transcript";
 import {
   createMeeting, listMeetings, getMeeting, updateMeeting, deleteMeeting,
   setAttendees, getAttendeeIds, replaceAgendaItems, addAgendaItem,
@@ -32,7 +33,7 @@ async function readMultipart(req: FastifyRequest): Promise<{ fields: Record<stri
 function uploadErrorResponse(reply: FastifyReply, e: unknown): { ok: false; error: string } {
   if ((e as { code?: string })?.code === "FST_REQ_FILE_TOO_LARGE") {
     reply.code(400);
-    return { ok: false, error: "File is too large (max 25 MB)." };
+    return { ok: false, error: "File is too large (max 50 MB)." };
   }
   reply.code(500);
   return { ok: false, error: (e as Error).message };
@@ -137,7 +138,7 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
     return r;
   });
 
-  // Patch an agenda item: presenters, notes, transcript, status, summary.
+  // Patch an agenda item: presenters, notes, transcript, status, speaker map.
   app.patch("/api/items/:itemId", async (req, reply) => {
     const itemId = Number((req.params as { itemId: string }).itemId);
     const b = (req.body ?? {}) as any;
@@ -148,6 +149,7 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
       notes: b.notes,
       transcript: b.transcript,
       appendTranscript: b.appendTranscript,
+      speakerMap: b.speakerMap && typeof b.speakerMap === "object" ? b.speakerMap : undefined,
       summary: b.summary,
       presenterIds: b.presenterIds ? (b.presenterIds as any[]).map(Number) : undefined,
     });
@@ -161,7 +163,10 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
     return { ok: true };
   });
 
-  // Transcribe an uploaded audio recording for an item (optional Whisper path).
+  // Transcribe (and diarize) a recording for an item. Replaces the item's
+  // transcript with the speaker-attributed result. When exactly one speaker is
+  // detected and the item has presenter(s), auto-map that speaker to the first
+  // presenter so the transcript is named without manual mapping.
   app.post("/api/items/:itemId/transcribe", async (req, reply) => {
     try {
       const itemId = Number((req.params as { itemId: string }).itemId);
@@ -173,10 +178,24 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
         reply.code(400);
         return { ok: false, error: "Upload an audio recording (mp3, m4a, wav, webm, …)." };
       }
-      const text = await transcribeAudio(pool, file);
-      await updateAgendaItem(pool, itemId, { appendTranscript: text });
+      const result = await transcribeAudio(file);
+      const speakers = distinctSpeakers(result.segments);
+
+      const names = await nameMap();
+      const speakerMap: Record<string, string> = {};
+      if (speakers.length === 1 && item.presenter_ids.length) {
+        const name = names.get(item.presenter_ids[0]);
+        if (name) speakerMap[speakers[0]] = name;
+      }
+
+      await updateAgendaItem(pool, itemId, { transcriptSegments: result.segments, speakerMap });
       const updated = await getAgendaItem(pool, itemId);
-      return { ok: true, transcript: updated?.transcript ?? text, added: text };
+      return {
+        ok: true,
+        transcript: updated?.transcript ?? result.text,
+        speakers,
+        speakerMap: updated?.speaker_map ?? speakerMap,
+      };
     } catch (e) {
       return uploadErrorResponse(reply, e);
     }
@@ -190,7 +209,7 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
       if (!item) { reply.code(404); return { ok: false, error: "Agenda item not found." }; }
       const meeting = await getMeeting(pool, item.meeting_id);
       const names = await nameMap();
-      const summary = await summarizeItem(pool, {
+      const result = await summarizeItem(pool, {
         meetingTitle: meeting?.title ?? "",
         itemTitle: item.title,
         itemDescription: item.description,
@@ -198,8 +217,8 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
         notes: item.notes,
         transcript: item.transcript,
       });
-      await updateAgendaItem(pool, itemId, { summary, status: "done" });
-      return { ok: true, summary };
+      await updateAgendaItem(pool, itemId, { summary: result.summary, actionItems: result.actionItems, status: "done" });
+      return { ok: true, summary: result.summary, actionItems: result.actionItems };
     } catch (e) {
       reply.code(400);
       return { ok: false, error: (e as Error).message };
@@ -227,6 +246,7 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
           summary: it.summary,
           notes: it.notes,
           transcript: it.transcript,
+          actionItems: it.action_items,
         })),
       });
       await saveReport(pool, id, report);

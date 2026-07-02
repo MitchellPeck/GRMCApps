@@ -4,7 +4,6 @@ import { getSettingsView, setSetting } from "../settings";
 
 interface SaveBody {
   anthropicKey?: string;
-  openaiKey?: string;
 }
 
 export async function settingsRoutes(app: FastifyInstance): Promise<void> {
@@ -21,8 +20,6 @@ export async function settingsRoutes(app: FastifyInstance): Promise<void> {
       const s = (req.body ?? {}) as SaveBody;
       if (s.anthropicKey && s.anthropicKey.trim())
         await setSetting(pool, "anthropic_api_key", s.anthropicKey.trim());
-      if (s.openaiKey && s.openaiKey.trim())
-        await setSetting(pool, "openai_api_key", s.openaiKey.trim());
       return { ok: true };
     } catch (e) {
       return { ok: false, error: (e as Error).message };
