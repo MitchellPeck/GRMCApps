@@ -1,7 +1,7 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import { pool } from "../db";
 import { getIdentity } from "../identity";
-import { listPeople } from "../people";
+import { listPeople, peopleNamedIn } from "../people";
 import {
   extractAgendaItems, isSupportedAgendaType, summarizeItem, generateReport,
 } from "../claude";
@@ -151,6 +151,7 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
       appendTranscript: b.appendTranscript,
       speakerMap: b.speakerMap && typeof b.speakerMap === "object" ? b.speakerMap : undefined,
       summary: b.summary,
+      actionItems: Array.isArray(b.actionItems) ? b.actionItems : undefined,
       presenterIds: b.presenterIds ? (b.presenterIds as any[]).map(Number) : undefined,
     });
     if (!r.ok) reply.code(r.status);
@@ -217,8 +218,28 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
         notes: item.notes,
         transcript: item.transcript,
       });
-      await updateAgendaItem(pool, itemId, { summary: result.summary, actionItems: result.actionItems, status: "done" });
-      return { ok: true, summary: result.summary, actionItems: result.actionItems };
+
+      // Link people named in the action items: if an action item names someone
+      // in the library, ensure they're a meeting attendee and a presenter of
+      // this item.
+      const people = await listPeople(pool, true);
+      const named = new Set<number>();
+      for (const ai of result.actionItems) {
+        peopleNamedIn(`${ai.owner} ${ai.task}`, people).forEach((pid) => named.add(pid));
+      }
+      let attendeeIds = await getAttendeeIds(pool, item.meeting_id);
+      let presenterIds = item.presenter_ids.slice();
+      if (named.size) {
+        const attSet = new Set(attendeeIds);
+        named.forEach((pid) => attSet.add(pid));
+        if (attSet.size !== attendeeIds.length) { attendeeIds = [...attSet]; await setAttendees(pool, item.meeting_id, attendeeIds); }
+        const presSet = new Set(presenterIds);
+        named.forEach((pid) => presSet.add(pid));
+        presenterIds = [...presSet];
+      }
+
+      await updateAgendaItem(pool, itemId, { summary: result.summary, actionItems: result.actionItems, status: "done", presenterIds });
+      return { ok: true, summary: result.summary, actionItems: result.actionItems, attendeeIds, presenterIds };
     } catch (e) {
       reply.code(400);
       return { ok: false, error: (e as Error).message };
