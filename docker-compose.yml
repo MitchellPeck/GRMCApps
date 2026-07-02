@@ -48,6 +48,26 @@ services:
       retries: 10
     networks: [hubnet]
 
+  # One-shot: ensures every app's role + database exists, then exits. Runs on
+  # each `up` (not just first Postgres init), so adding an app's *_DB_* vars +
+  # a line in db/init/01-databases.sh provisions it automatically — no manual
+  # psql. Idempotent; connects over the network as the superuser (PGHOST/
+  # PGPASSWORD). Apps gate on this via `service_completed_successfully`.
+  db-init:
+    image: postgres:16
+    env_file: .env
+    environment:
+      PGHOST: postgres
+      PGPASSWORD: "${POSTGRES_PASSWORD}"
+    entrypoint: ["bash", "/init/01-databases.sh"]
+    volumes:
+      - ./db/init:/init:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    networks: [hubnet]
+
   hub:
     build:
       context: .
@@ -57,6 +77,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
     networks: [hubnet]
     labels:
       - "traefik.enable=true"
@@ -77,6 +99,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
     networks: [hubnet]
     labels:
       - "traefik.enable=true"
@@ -99,6 +123,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
     networks: [hubnet]
     labels:
       - "traefik.enable=true"
@@ -121,6 +147,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
     networks: [hubnet]
     labels:
       - "traefik.enable=true"
@@ -143,6 +171,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
     networks: [hubnet]
     labels:
       - "traefik.enable=true"
