@@ -41,4 +41,7 @@ VALUES ('social-posts', 'Social Posts', 'social', '📣');
 INSERT INTO apps (slug, name, subdomain, icon)
 VALUES ('approvals', 'Approvals', 'approvals', '✅');
 
+INSERT INTO apps (slug, name, subdomain, icon)
+VALUES ('meeting-minutes', 'Meeting Minutes', 'minutes', '📝');
+
 RESET ROLE;

@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GRMC Meeting Minutes</title>
+<link rel="stylesheet" href="/assets/grmc.css">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<header>
+  <div class="logo">
+    <div class="seal">G</div>
+    <div><h1>GRMC Meeting Minutes</h1><p>Agendas, attendance &amp; AI minutes</p></div>
+  </div>
+  <div class="hright"><span class="hlabel" id="me-label">&hellip;</span></div>
+</header>
+
+<!-- ============ LIST VIEW (tabs) ============ -->
+<div class="layout" id="view-list">
+  <div class="tabs">
+    <button class="tab active" data-tab="meetings">Meetings</button>
+    <button class="tab" data-tab="people">People</button>
+    <button class="tab" data-tab="settings">Settings</button>
+  </div>
+
+  <!-- Meetings -->
+  <div class="panel active" id="p-meetings">
+    <div class="card">
+      <div class="ct">New meeting</div>
+      <div id="new-msg"></div>
+      <div class="field"><label>Title</label><input type="text" id="m-title" placeholder="e.g. April Board Meeting"></div>
+      <div class="grid2">
+        <div class="field"><label>Date</label><input type="text" id="m-date" placeholder="e.g. 2026-04-14 or Apr 14, 7pm"></div>
+        <div class="field"><label>Location</label><input type="text" id="m-loc" placeholder="e.g. Fellowship Hall / Zoom"></div>
+      </div>
+      <div class="field"><label>Description (optional)</label><textarea id="m-desc" placeholder="Purpose or context"></textarea></div>
+      <div class="btn-row"><button class="btn btn-primary" id="btn-new-meeting" data-default="Create meeting">Create meeting</button></div>
+    </div>
+    <div id="meetings-list"><div class="empty">Loading&hellip;</div></div>
+  </div>
+
+  <!-- People library -->
+  <div class="panel" id="p-people">
+    <div class="card">
+      <div class="ct">Add to the people library</div>
+      <div id="person-msg"></div>
+      <div class="grid2">
+        <div class="field"><label>Name</label><input type="text" id="pr-name" placeholder="Full name"></div>
+        <div class="field"><label>Role / title (optional)</label><input type="text" id="pr-title" placeholder="e.g. Treasurer"></div>
+      </div>
+      <div class="field"><label>Email (optional)</label><input type="text" id="pr-email" placeholder="name@grmc.org"></div>
+      <div class="btn-row"><button class="btn btn-gold" id="btn-add-person" data-default="Add person">Add person</button></div>
+    </div>
+    <div class="card">
+      <div class="ct">Library</div>
+      <div id="people-list"><div class="empty">Loading&hellip;</div></div>
+    </div>
+  </div>
+
+  <!-- Settings -->
+  <div class="panel" id="p-settings">
+    <div class="card">
+      <div class="ct">AI settings</div>
+      <div id="settings-msg"></div>
+      <div class="field">
+        <label>Anthropic API key</label>
+        <input type="password" id="s-anthropic" placeholder="sk-ant-...">
+        <div class="hint" id="s-anthropic-hint">Used to extract agendas, summarize items, and write the report.</div>
+      </div>
+      <div class="field">
+        <label>OpenAI API key (optional)</label>
+        <input type="password" id="s-openai" placeholder="sk-...">
+        <div class="hint" id="s-openai-hint">Only needed to transcribe <em>uploaded</em> audio files (Whisper). Live in-browser transcription needs no key.</div>
+      </div>
+      <div class="btn-row"><button class="btn btn-primary" id="btn-save-settings" data-default="Save settings">Save settings</button></div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ DETAIL VIEW (one meeting) ============ -->
+<div class="layout" id="view-detail" style="display:none">
+  <button class="btn-sm back" id="btn-back">&larr; All meetings</button>
+  <div id="detail-body"><div class="empty">Loading&hellip;</div></div>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>

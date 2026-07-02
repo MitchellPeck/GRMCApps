@@ -41,6 +41,7 @@ Cloudflare Tunnel, with no per-device certificate install.
 - whoami app:    https://whoami.grmc.app
 - Social Posts:  https://social.grmc.app
 - Approvals:     https://approvals.grmc.app
+- Meeting Minutes: https://minutes.grmc.app
 - Traefik dashboard (host-local only): http://localhost:8080
 
 ## Apps
@@ -57,6 +58,17 @@ Cloudflare Tunnel, with no per-device certificate install.
   requests bounce back to the submitter, who uploads a new version. Every
   version and decision is kept; data and image bytes live in the `approvals`
   database.
+- **Meeting Minutes** (`minutes.grmc.app`) — run a meeting end-to-end and get
+  AI minutes. Maintain a reusable **library of people**; create a **meeting**,
+  **upload its agenda** (PDF, image, or text) which Claude extracts into an
+  ordered list of items, and pick which people are **present**. Then work down
+  the agenda: for each item choose the presenter(s), capture the discussion by
+  **live AI transcription** (the browser's speech engine — Chrome/Edge, no key)
+  or by uploading an audio recording (optional OpenAI Whisper), plus optional
+  typed notes, and **summarize** the item. Finally **generate a report** —
+  Claude writes full minutes with per-item summaries and a consolidated
+  action-item list. Add the Anthropic key (and optional OpenAI key) in
+  Settings; everything is stored in the `meetingminutes` database.
 
 ## Adding an app
 

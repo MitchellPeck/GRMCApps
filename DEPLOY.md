@@ -71,13 +71,14 @@ ports and no VPN. It runs only on the always-on Mac (it's defined in
    cp ~/.cloudflared/<UUID>.json secrets/cloudflared-creds.json
    ```
 4. Set the UUID in `cloudflared/config.yml` (replace `<TUNNEL_UUID>`).
-5. Point the four hosts at the tunnel — this creates **proxied** CNAMEs and is
+5. Point the app hosts at the tunnel — this creates **proxied** CNAMEs and is
    what makes them reachable from the internet:
    ```bash
    cloudflared tunnel route dns grmc hub.grmc.app
    cloudflared tunnel route dns grmc whoami.grmc.app
    cloudflared tunnel route dns grmc social.grmc.app
    cloudflared tunnel route dns grmc approvals.grmc.app
+   cloudflared tunnel route dns grmc minutes.grmc.app
    ```
 6. In the Cloudflare dashboard, **delete the old `A  *.grmc.app → <LAN IP>`
    record** (the new per-host CNAMEs take over; the wildcard A is the LAN-only
