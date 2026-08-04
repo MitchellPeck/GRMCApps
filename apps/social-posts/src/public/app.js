@@ -12,6 +12,11 @@ async function api(path, { method = 'GET', body } = {}) {
 function v(id){ return document.getElementById(id).value.trim(); }
 function esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
+// Escape a value for a single-quoted JS string inside an on* attribute — these
+// carry DB-backed values (draft keys, series ids), so a stray quote must not
+// break out of the handler.
+function jsq(s){ return esc(String(s==null?'':s).replace(/\\/g,'\\\\').replace(/'/g,"\\'")).replace(/"/g,'&quot;'); }
+
 function setBtn(id, loading, label) {
   var b = document.getElementById(id);
   if (!b) return;
@@ -24,11 +29,6 @@ function copyText(btn, text) {
     var o=btn.textContent; btn.textContent='Copied!'; btn.classList.add('copied');
     setTimeout(function(){ btn.textContent=o; btn.classList.remove('copied'); },2000);
   });
-}
-
-function clearPanel(id) {
-  document.getElementById('p-'+id).querySelectorAll('input,textarea').forEach(function(el){ el.value=''; });
-  var r=document.getElementById('results-'+id); if(r) r.innerHTML='';
 }
 
 function switchTab(id) {
@@ -47,13 +47,37 @@ document.querySelectorAll('.tab').forEach(function(t){
   t.addEventListener('click', function(){ switchTab(t.getAttribute('data-tab')); });
 });
 
-function postCard(label, cls, text, uid) {
+// opts: { date, sourceType, sourceRef } — `date` is the day this post is meant
+// to go out, so the Metricool modal opens on the right date.
+function postCard(label, cls, text, uid, opts) {
+  opts = opts || {};
+  var ctx = "{date:'"+jsq(opts.date)+"',sourceType:'"+jsq(opts.sourceType)+"',sourceRef:'"+jsq(opts.sourceRef)+"'}";
   return '<div class="pcard"><div class="plabel"><span class="'+cls+'">'+esc(label)+'</span>'
     +'<div style="display:flex;gap:6px;align-items:center">'
     +'<button class="btn-sm btn-sm-gold" onclick="copyText(this,document.getElementById(\''+uid+'\').textContent)">Copy</button>'
-    +'<button class="btn-sm" onclick="openMetricool(document.getElementById(\''+uid+'\').textContent)">&#8594; Metricool</button>'
+    +'<button class="btn-sm" onclick="openMetricool(document.getElementById(\''+uid+'\').textContent,'+ctx+')">&#8594; Metricool</button>'
     +'</div></div>'
     +'<div class="ptext" id="'+uid+'">'+esc(text)+'</div></div>';
+}
+
+// One renderer for "here is the Mailchimp issue we found", used by both the
+// preview button and the run results. The server decides what the dates mean —
+// an unsent issue is never captioned as sent.
+function campaignAlertClass(c) { return 'alert ' + (c.isDraft ? 'alert-warn' : 'alert-ok'); }
+
+function campaignAlertBody(c, lead, withLink) {
+  var body = (c.isDraft ? '<strong>DRAFT</strong> &mdash; ' : '')
+    + (lead ? esc(lead) + ' ' : '')
+    + '<strong>' + esc(c.subject || '(no subject)') + '</strong>'
+    + (c.dateLine ? '<br>' + esc(c.dateLine) : '');
+  if (withLink && c.archiveUrl) {
+    body += '<br><a href="'+esc(c.archiveUrl)+'" target="_blank" style="font-size:11px;color:inherit">'+esc(c.archiveUrl)+'</a>';
+  }
+  return body;
+}
+
+function campaignAlert(c, lead, withLink) {
+  return '<div class="'+campaignAlertClass(c)+'">'+campaignAlertBody(c, lead, withLink)+'</div>';
 }
 
 // ── Auth / Settings ───────────────────────────────────────────────────────────
@@ -91,26 +115,6 @@ function saveSettings() {
     .catch(function(e){ setBtn('btn-settings',false,'Save settings'); document.getElementById('results-settings').innerHTML='<div class="alert alert-err">'+esc(e.message)+'</div>'; });
 }
 
-// ── Monday ────────────────────────────────────────────────────────────────────
-function runMonday() {
-  if(!v('m-sermon')){ alert('Please enter the sermon title.'); return; }
-  setBtn('btn-mon', true, 'Drafting...');
-  document.getElementById('results-mon').innerHTML='';
-  api('/api/draft/monday', {method:'POST', body:{ date:v('m-date'), sermon:v('m-sermon'), pulpit:v('m-pulpit'), events:v('m-events'), highlights:v('m-highlights') }})
-    .then(function(res){
-      setBtn('btn-mon',false);
-      var el=document.getElementById('results-mon');
-      if(!res.ok){ el.innerHTML='<div class="alert alert-err">'+esc(res.error)+'</div>'; return; }
-      var html='';
-      if(res.seriesLabel) html+='<div class="alert alert-ok" style="font-size:12px">'+esc(res.seriesLabel)+' — saved to drafts</div>';
-      html+=postCard('Monday - Service recap','lbl-mon',res.posts.monday||'','pm-mon');
-      html+=postCard('Tuesday - Upcoming events','lbl-tue',res.posts.tuesday||'','pm-tue');
-      html+=postCard('Thursday - Series post','lbl-thu',res.posts.thursday||'','pm-thu');
-      el.innerHTML=html;
-    })
-    .catch(function(e){ setBtn('btn-mon',false); document.getElementById('results-mon').innerHTML='<div class="alert alert-err">'+esc(e.message)+'</div>'; });
-}
-
 // ── Wednesday ─────────────────────────────────────────────────────────────────
 function fetchGraceNotesPreview() {
   var sunday = v('w-sunday');
@@ -125,12 +129,9 @@ function fetchGraceNotesPreview() {
         document.getElementById('gn-preview').style.display='block';
         return;
       }
-      var dateLabel = res.sentAt ? new Date(res.sentAt).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '';
-      var isDraft = res.status === 'draft' || res.status === 'paused';
-      document.getElementById('gn-badge').className = isDraft ? 'alert alert-warn' : 'alert alert-ok';
-      document.getElementById('gn-badge').innerHTML = (isDraft ? '<strong>DRAFT</strong> &mdash; ' : '')
-        +'<strong>'+esc(res.subject)+'</strong>'+(dateLabel?' &mdash; '+(isDraft?'created ':'sent ')+dateLabel:'')
-        +(res.archiveUrl ? '<br><a href="'+esc(res.archiveUrl)+'" target="_blank" style="font-size:11px;color:inherit">'+esc(res.archiveUrl)+'</a>' : '');
+      var gnBadge = document.getElementById('gn-badge');
+      gnBadge.className = campaignAlertClass(res);
+      gnBadge.innerHTML = campaignAlertBody(res, '', true);
       document.getElementById('w-content').value=res.preview||'';
       document.getElementById('w-url').value=res.archiveUrl||'';
       document.getElementById('gn-preview').style.display='block';
@@ -154,14 +155,15 @@ function runWed() {
       var el=document.getElementById('results-wed');
       if(!res.ok){ el.innerHTML='<div class="alert alert-err">'+esc(res.error)+'</div>'; return; }
       var html='';
-      if(res.mailchimpFetched){
-        var sentDate = res.sentAt ? new Date(res.sentAt).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '';
-        html+='<div class="alert alert-ok">Grace Notes fetched: <strong>'+esc(res.subject)+'</strong>'+(sentDate?' &mdash; sent '+sentDate:'')+'</div>';
+      if(res.mailchimpFetched && res.campaign){
+        html+=campaignAlert({ subject:res.subject, archiveUrl:res.archiveUrl,
+          isDraft:res.campaign.isDraft, dateLine:res.campaign.dateLine }, 'Grace Notes fetched:', false);
       } else if(res.mailchimpError) {
         html+='<div class="alert alert-warn">Mailchimp unavailable: '+esc(res.mailchimpError)+'. Drafted from manual input.</div>';
       }
-      html+=postCard('Wednesday - Grace Notes','lbl-wed',res.posts.wednesday||'','pw-wed');
-      html+=postCard('Saturday - Invite and preview','lbl-sat',res.posts.saturday||'','pw-sat');
+      var d=res.dates||{};
+      html+=postCard('Wednesday - Grace Notes','lbl-wed',res.posts.wednesday||'','pw-wed',{date:d.wednesday,sourceType:'run',sourceRef:'wednesday'});
+      html+=postCard('Saturday - Invite and preview','lbl-sat',res.posts.saturday||'','pw-sat',{date:d.saturday,sourceType:'run',sourceRef:'saturday'});
       el.innerHTML=html;
     })
     .catch(function(e){ setBtn('btn-wed',false); document.getElementById('results-wed').innerHTML='<div class="alert alert-err">'+esc(e.message)+'</div>'; });
@@ -187,12 +189,9 @@ function fetchBlogPreview() {
         document.getElementById('blog-preview').style.display='block';
         return;
       }
-      var dateLabel = res.sentAt ? new Date(res.sentAt).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '';
-      var isDraft = res.status === 'draft' || res.status === 'paused';
-      document.getElementById('blog-badge').className = isDraft ? 'alert alert-warn' : 'alert alert-ok';
-      document.getElementById('blog-badge').innerHTML = (isDraft ? '<strong>DRAFT</strong> &mdash; ' : '')
-        +'<strong>'+esc(res.subject)+'</strong>'+(dateLabel?' &mdash; '+(isDraft?'created ':'sent ')+dateLabel:'')
-        +(res.archiveUrl ? '<br><a href="'+esc(res.archiveUrl)+'" target="_blank" style="font-size:11px;color:inherit">'+esc(res.archiveUrl)+'</a>' : '');
+      var blogBadge = document.getElementById('blog-badge');
+      blogBadge.className = campaignAlertClass(res);
+      blogBadge.innerHTML = campaignAlertBody(res, '', true);
       document.getElementById('f-content').value=res.preview||'';
       document.getElementById('f-url').value=res.archiveUrl||'';
       document.getElementById('blog-preview').style.display='block';
@@ -216,13 +215,13 @@ function runFriday() {
       var el=document.getElementById('results-fri');
       if(!res.ok){ el.innerHTML='<div class="alert alert-err">'+esc(res.error)+'</div>'; return; }
       var html='';
-      if(res.mailchimpFetched){
-        var sentDate = res.sentAt ? new Date(res.sentAt).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '';
-        html+='<div class="alert alert-ok">Blog fetched: <strong>'+esc(res.subject)+'</strong>'+(sentDate?' &mdash; sent '+sentDate:'')+'</div>';
+      if(res.mailchimpFetched && res.campaign){
+        html+=campaignAlert({ subject:res.subject, archiveUrl:res.archiveUrl,
+          isDraft:res.campaign.isDraft, dateLine:res.campaign.dateLine }, 'Blog fetched:', false);
       } else if(res.mailchimpError){
         html+='<div class="alert alert-warn">Mailchimp unavailable: '+esc(res.mailchimpError)+'. Drafted from manual input.</div>';
       }
-      html+=postCard('Friday - Weekly blog','lbl-thu',res.posts.friday||'','pf-fri');
+      html+=postCard('Friday - Weekly blog','lbl-fri',res.posts.friday||'','pf-fri',{date:(res.dates||{}).friday,sourceType:'run',sourceRef:'friday'});
       el.innerHTML=html;
     })
     .catch(function(e){ setBtn('btn-fri',false); document.getElementById('results-fri').innerHTML='<div class="alert alert-err">'+esc(e.message)+'</div>'; });
@@ -316,7 +315,7 @@ function renderSeriesPosts(seriesId, res) {
         +'<div class="ptext" id="'+uid+'">'+esc(p.draft)+'</div>'
         +'<div style="display:flex;gap:6px;margin-top:6px">'
         +'<button class="btn-sm btn-sm-gold" onclick="copyText(this,document.getElementById(\''+uid+'\').textContent)">Copy</button>'
-        +'<button class="btn-sm" onclick="openMetricool(document.getElementById(\''+uid+'\').textContent,{sourceType:\'series\',sourceRef:\''+seriesId+'-'+p.postIdx+'\'})">&#8594; Metricool</button>'
+        +'<button class="btn-sm" onclick="openMetricool(document.getElementById(\''+uid+'\').textContent,{date:\''+jsq(p.scheduleDate)+'\',sourceType:\'series\',sourceRef:\''+jsq(seriesId)+'-'+p.postIdx+'\'})">&#8594; Metricool</button>'
         +'</div></div>';
     }
     if(p.notes){
@@ -450,14 +449,14 @@ function loadDrafts() {
     .then(function(res){
       if(!res.ok){ document.getElementById('drafts-list').innerHTML='<div class="alert alert-err">'+esc(res.error)+'</div>'; return; }
       if(!res.rows.length){ document.getElementById('drafts-list').innerHTML='<div class="hint" style="padding:8px 0">No drafts yet.</div>'; return; }
-      var m={monday:'lbl-mon',tuesday:'lbl-tue',thursday:'lbl-thu',wednesday:'lbl-wed',saturday:'lbl-sat'};
+      var m={monday:'lbl-mon',tuesday:'lbl-tue',wednesday:'lbl-wed',thursday:'lbl-thu',friday:'lbl-fri',saturday:'lbl-sat'};
       var html='';
       res.rows.forEach(function(r,i){
         var uid='dr-'+i;
         html+='<div class="pcard"><div class="plabel"><span class="'+(m[r.key]||'lbl-mon')+'">'+esc(r.key)+' — '+esc(r.postDate||String(r.dateDrafted).split('T')[0])+'</span>'
           +'<div style="display:flex;gap:6px;align-items:center"><span class="pbadge pb-'+esc(r.status)+'">'+esc(r.status)+'</span>'
           +'<button class="btn-sm btn-sm-gold" onclick="copyText(this,document.getElementById(\''+uid+'\').textContent)">Copy</button>'
-          +'<button class="btn-sm" onclick="openMetricool(document.getElementById(\''+uid+'\').textContent,{sourceType:\'draft\'})">&#8594; Metricool</button>'
+          +'<button class="btn-sm" onclick="openMetricool(document.getElementById(\''+uid+'\').textContent,{date:\''+jsq(r.scheduleDate)+'\',sourceType:\'draft\',sourceRef:\''+jsq(r.key)+'\'})">&#8594; Metricool</button>'
           +'</div></div>'
           +'<div class="ptext" id="'+uid+'">'+esc(r.text)+'</div></div>';
       });
@@ -468,15 +467,48 @@ function loadDrafts() {
 
 // ── Metricool ─────────────────────────────────────────────────────────────────
 var _mcCtx = { sourceType:'', sourceRef:'' };
+
+var DAY_NAMES = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+var MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+// Read a YYYY-MM-DD box without letting the browser reinterpret it as UTC
+// midnight (which shows the day before in every US timezone).
+function describeDate(iso){
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(iso||'')) return '';
+  var p=iso.split('-').map(Number);
+  var d=new Date(p[0],p[1]-1,p[2]);
+  return DAY_NAMES[d.getDay()]+', '+MONTH_NAMES[p[1]-1]+' '+p[2];
+}
+
+function updateDateHint(){
+  var hint=document.getElementById('mc-date-hint');
+  if(hint) hint.textContent=describeDate(document.getElementById('mc-date').value);
+}
+
+// Show only the control for the chosen image source, so the send path is never
+// ambiguous about which image it should use.
+function switchImageSource(){
+  var mode=document.getElementById('mc-image-source').value;
+  ['upload','approved','url'].forEach(function(k){
+    document.getElementById('mc-src-'+k).style.display = (mode===k) ? 'block' : 'none';
+  });
+  if(mode!=='upload') document.getElementById('mc-file').value='';
+  if(mode!=='url') document.getElementById('mc-imgurl').value='';
+  if(mode!=='approved') document.getElementById('mc-approved').value='';
+}
+
+// opts.date is the day this post belongs to (this week's Wednesday for a
+// Wednesday draft, the series post's own date for a series draft).
 function openMetricool(text, opts){
   opts = opts || {};
   _mcCtx = { sourceType: opts.sourceType||'', sourceRef: opts.sourceRef||'' };
   document.getElementById('mc-text').value = text || '';
-  var d = opts.date || new Date().toISOString().split('T')[0];
-  document.getElementById('mc-date').value = d;
+  document.getElementById('mc-date').value = opts.date || new Date().toLocaleDateString('en-CA');
   document.getElementById('mc-time').value = (window._mcDefaults && _mcDefaults.time) || '09:00';
-  document.getElementById('mc-imgurl').value = '';
+  document.getElementById('mc-image-source').value = 'none';
   document.getElementById('mc-msg').innerHTML = '';
+  switchImageSource();
+  updateDateHint();
   document.getElementById('mc-modal').style.display = 'flex';
   // Populate approved-image select
   var sel = document.getElementById('mc-approved');
@@ -491,20 +523,44 @@ function openMetricool(text, opts){
     });
   }).catch(function(){ /* silently ignore if approvals not available */ });
 }
+
 function closeMetricool(){ document.getElementById('mc-modal').style.display='none'; }
+
+// Resolve the chosen image into the fields the send endpoint expects. Uploads
+// are read into a data URL here; the server puts them on R2 like it already
+// does for approved images.
+function readMetricoolImage(){
+  var mode=document.getElementById('mc-image-source').value;
+  if(mode==='approved') return Promise.resolve({ approvedImageId: document.getElementById('mc-approved').value });
+  if(mode==='url') return Promise.resolve({ imageUrl: document.getElementById('mc-imgurl').value.trim() });
+  if(mode!=='upload') return Promise.resolve({});
+  var file=document.getElementById('mc-file').files[0];
+  if(!file) return Promise.reject(new Error('Choose a file to upload, or pick a different image source.'));
+  if(file.size > 10*1024*1024) return Promise.reject(new Error('That image is larger than 10 MB.'));
+  return new Promise(function(resolve, reject){
+    var reader=new FileReader();
+    reader.onload=function(){ resolve({ imageData: String(reader.result) }); };
+    reader.onerror=function(){ reject(new Error('Could not read that file.')); };
+    reader.readAsDataURL(file);
+  });
+}
+
 function submitMetricool(){
   var networks = [];
   if (document.getElementById('mc-fb').checked) networks.push('facebook');
   if (document.getElementById('mc-ig').checked) networks.push('instagram');
+  // Metricool still calls X "twitter" in its API.
+  if (document.getElementById('mc-x').checked) networks.push('twitter');
+  if (!networks.length) { document.getElementById('mc-msg').innerHTML='<div class="alert alert-err">Pick at least one network.</div>'; return; }
   var dateTime = document.getElementById('mc-date').value + 'T' + (document.getElementById('mc-time').value||'09:00') + ':00';
   var tz = (window._mcDefaults && _mcDefaults.tz) || 'America/New_York';
-  var approvedImageId = document.getElementById('mc-approved').value;
   setBtn('mc-send-btn', true, 'Sending...');
-  api('/api/metricool/send', { method:'POST', body:{
-    text: document.getElementById('mc-text').value, networks: networks, dateTime: dateTime, timezone: tz,
-    imageUrl: document.getElementById('mc-imgurl').value, approvedImageId: approvedImageId,
-    sourceType: _mcCtx.sourceType, sourceRef: _mcCtx.sourceRef
-  }}).then(function(res){
+  readMetricoolImage().then(function(image){
+    var body = { text: document.getElementById('mc-text').value, networks: networks, dateTime: dateTime, timezone: tz,
+      sourceType: _mcCtx.sourceType, sourceRef: _mcCtx.sourceRef };
+    Object.keys(image).forEach(function(k){ body[k]=image[k]; });
+    return api('/api/metricool/send', { method:'POST', body: body });
+  }).then(function(res){
     setBtn('mc-send-btn', false);
     var el = document.getElementById('mc-msg');
     if(!res.ok){ el.innerHTML = '<div class="alert alert-err">'+esc(res.error)+'</div>'; return; }
@@ -512,6 +568,7 @@ function submitMetricool(){
     el.innerHTML = '<div class="alert alert-ok">Sent to Metricool — scheduled '+esc(res.scheduledFor)+'.'+extra+'</div>';
   }).catch(function(e){ setBtn('mc-send-btn', false); document.getElementById('mc-msg').innerHTML = '<div class="alert alert-err">'+esc(e.message)+'</div>'; });
 }
+
 function loadBrands(){
   var btn=document.getElementById('btn-load-brands'); if(btn){btn.disabled=true;btn.textContent='Loading...';}
   api('/api/metricool/brands').then(function(res){
@@ -524,13 +581,17 @@ function loadBrands(){
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────
-document.getElementById('m-date').value=new Date().toISOString().split('T')[0];
-document.getElementById('f-date').value=new Date().toISOString().split('T')[0];
-// Default w-sunday to next Sunday
+// en-CA renders as YYYY-MM-DD in the browser's own timezone, which is what
+// <input type="date"> wants — toISOString() would hand back the UTC day.
+function todayLocal(){ return new Date().toLocaleDateString('en-CA'); }
+
+document.getElementById('f-date').value=todayLocal();
+// Default w-sunday to the coming Sunday.
 (function(){
   var d=new Date(); var day=d.getDay(); var diff=day===0?7:7-day;
   d.setDate(d.getDate()+diff);
-  var el=document.getElementById('w-sunday'); if(el) el.value=d.toISOString().split('T')[0];
+  var el=document.getElementById('w-sunday'); if(el) el.value=d.toLocaleDateString('en-CA');
 })();
-document.getElementById('ns-start').value=new Date().toISOString().split('T')[0];
+document.getElementById('ns-start').value=todayLocal();
+document.getElementById('mc-date').addEventListener('change', updateDateHint);
 checkAuthStatus();

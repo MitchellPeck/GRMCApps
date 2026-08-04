@@ -1,5 +1,6 @@
 import { Pool } from "pg";
 import { getSetting } from "./settings";
+import { DEFAULT_TZ, formatMonthDayYear } from "./dates";
 
 // Identical to the Code.gs header/footer stripping, factored into one function.
 export function cleanCampaignText(plainText: string): string {
@@ -32,11 +33,66 @@ async function getMailchimpAuth(pool: Pool): Promise<MailchimpAuth> {
   };
 }
 
+const MONTH_WORDS = ["january","february","march","april","may","june","july","august","september","october","november","december"];
+
+// Grace Notes and blog subjects carry the issue's own date ("Grace Notes -
+// August 5, 2026 - Weekly Update"). That date is the one worth showing: an
+// unsent issue's create_time is just when someone started the draft, and
+// labelling it "sent" was where the wrong dates came from.
+export function parseIssueDate(subject: string): string {
+  const s = subject || "";
+  const words = s.match(/\b([A-Za-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})\b/);
+  if (words) {
+    const idx = MONTH_WORDS.findIndex((m) => m.startsWith(words[1].toLowerCase()) && words[1].length >= 3);
+    if (idx !== -1) return `${words[3]}-${String(idx + 1).padStart(2, "0")}-${String(Number(words[2])).padStart(2, "0")}`;
+  }
+  const numeric = s.match(/\b(\d{1,2})\/(\d{1,2})\/(\d{4})\b/);
+  if (numeric) return `${numeric[3]}-${numeric[1].padStart(2, "0")}-${numeric[2].padStart(2, "0")}`;
+  return "";
+}
+
+// Mailchimp's draft status is "save" (there is no "draft"), and only sent or
+// scheduled campaigns carry a send_time.
+export function isDraftStatus(status: string): boolean {
+  return ["sent", "sending", "schedule"].indexOf(status) === -1;
+}
+
+export interface CampaignDates {
+  status: string;
+  sentAt: string;
+  createdAt: string;
+  issueDate: string;
+}
+
+// One honest line about when this issue is dated and where it stands, e.g.
+// "Issue Aug 5, 2026 · draft, created Jul 31, 2026".
+export function campaignDateLine(c: CampaignDates, tz: string = DEFAULT_TZ): string {
+  const parts: string[] = [];
+  if (c.issueDate) parts.push("Issue " + formatMonthDayYear(c.issueDate, tz));
+  if (c.status === "sent" || c.status === "sending") {
+    const when = formatMonthDayYear(c.sentAt || c.createdAt, tz);
+    parts.push(when ? "sent " + when : "sent");
+  } else if (c.status === "schedule") {
+    const when = formatMonthDayYear(c.sentAt || "", tz);
+    parts.push(when ? "scheduled to send " + when : "scheduled");
+  } else {
+    const when = formatMonthDayYear(c.createdAt, tz);
+    parts.push(when ? "draft, created " + when : "draft");
+  }
+  return parts.join(" · ");
+}
+
 export interface CampaignContent {
   subject: string;
   archiveUrl: string;
   status: string;
+  /** Empty unless Mailchimp actually sent or scheduled the campaign. */
   sentAt: string;
+  createdAt: string;
+  /** Parsed out of the subject line; empty when the subject carries no date. */
+  issueDate: string;
+  isDraft: boolean;
+  dateLine: string;
   preview: string;
 }
 
@@ -71,11 +127,21 @@ async function getLatestCampaign(
   ).json();
   const cleaned = cleanCampaignText(contentRes.plain_text || "");
 
+  const subject = target.settings.subject_line || "";
+  const dates: CampaignDates = {
+    status: target.status || "",
+    sentAt: target.send_time || "",
+    createdAt: target.create_time || "",
+    issueDate: parseIssueDate(subject),
+  };
+  const tz = (await getSetting(pool, "default_timezone")) || DEFAULT_TZ;
+
   return {
-    subject: target.settings.subject_line,
+    subject,
     archiveUrl: target.archive_url || "",
-    status: target.status,
-    sentAt: target.send_time || target.create_time,
+    ...dates,
+    isDraft: isDraftStatus(dates.status),
+    dateLine: campaignDateLine(dates, tz),
     preview: cleaned.substring(0, 4000),
   };
 }

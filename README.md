@@ -46,12 +46,24 @@ Cloudflare Tunnel, with no per-device certificate install.
 
 ## Apps
 
+Every app shares one design system (`shared/ui/grmc.css`) and one header:
+the wordmark links back to the hub and an **Apps** switcher jumps straight
+between apps. Both are served to each app at `/assets/` (see *Shared UI* below).
+
 - **whoami** (`whoami.grmc.app`) — validation app echoing identity headers.
 - **Social Posts** (`social.grmc.app`) — drafts GRMC social posts with Claude,
-  pulls Grace Notes / blog from Mailchimp, manages multi-week post series.
-  Configure the Anthropic + Mailchimp keys in its Settings tab (stored in the
-  `socialposts` database). Source ported from the Apps Script tool in
-  `docs/reference/social-posts/`. Send drafted posts straight to Metricool as scheduled drafts (Settings → Metricool: API token + User ID + Blog ID via 'Load brands'), optionally attaching an **approved graphic from the Approvals app** — published to a public Cloudflare R2 URL so Metricool can fetch it (Settings → Image hosting). Requires the Metricool Advanced plan.
+  pulls Grace Notes / blog from Mailchimp, manages multi-week post series. Two
+  runs: **Wednesday** (Grace Notes post + Saturday invite) and **Friday** (weekly
+  blog post). Configure the Anthropic + Mailchimp keys in its Settings tab
+  (stored in the `socialposts` database). Source ported from the Apps Script
+  tool in `docs/reference/social-posts/`. Send drafted posts straight to
+  Metricool as scheduled drafts on Facebook, Instagram and X (Settings →
+  Metricool: API token + User ID + Blog ID via 'Load brands'). A post with an
+  associated weekday opens the scheduler on that day of the current week. You
+  can attach an image by **uploading one** or by picking an **approved graphic
+  from the Approvals app** — either is published to a public Cloudflare R2 URL
+  so Metricool can fetch it (Settings → Image hosting). Requires the Metricool
+  Advanced plan.
 - **Approvals** (`approvals.grmc.app`) — request and grant sign-off on graphics.
   Submitters upload an image and pick an approver from a roster (managed in
   Settings); the approver approves, rejects, or requests changes. Change
@@ -85,3 +97,22 @@ Cloudflare Tunnel, with no per-device certificate install.
 4. Add a service to `docker-compose.yml` with the Traefik labels —
    ``Host(`<name>.${BASE_DOMAIN}`)``, `tls=true`, and the
    `hub-forward-auth@file` middleware (copy the `whoami` service).
+5. Copy the shared UI into the image and load it on the page (see below). The
+   app then appears in every other app's switcher automatically.
+
+## Shared UI
+
+`shared/ui/` is the single source of truth for how the apps look and how you
+move between them:
+
+- `grmc.css` — design tokens and the shared component vocabulary (header,
+  tabs, cards, forms, buttons, alerts, badges).
+- `grmc-nav.js` — links the header wordmark home to the hub and injects the
+  **Apps** switcher. It reads the live registry from the hub's `/api/apps`
+  (session-authenticated, and readable only from our own subdomains), falling
+  back to a built-in list if the hub is unreachable.
+
+Each app's Dockerfile copies both into `src/public/assets/`, and each page
+loads `/assets/grmc.css` plus `/assets/grmc-nav.js`. The switcher needs no
+per-app configuration: it derives the base domain from the host it is served
+from, and marks the current app by matching its subdomain.

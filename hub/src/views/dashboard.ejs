@@ -13,7 +13,7 @@
         <div><h1>GRMC Apps</h1><p>Workspace</p></div>
       </div>
       <div class="hright">
-        <span class="hlabel"><%= user.email %></span>
+        <span class="hlabel" id="me-label"><%= user.email %></span>
         <a class="btn-hdr" href="/auth/logout" style="text-decoration:none">Sign out</a>
       </div>
     </header>
@@ -32,5 +32,6 @@
         <% }); %>
       </div>
     </div>
+    <script src="/assets/grmc-nav.js"></script>
   </body>
 </html>

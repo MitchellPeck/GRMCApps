@@ -15,6 +15,19 @@ export function publicUrlFor(base: string, key: string): string {
   return `${base.replace(/\/+$/, "")}/${key}`;
 }
 
+const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
+
+// Decode the data URL an <input type="file"> was read into. Rejects anything
+// that isn't an image so we never hand Metricool an arbitrary blob.
+export function decodeImageDataUrl(dataUrl: string): { bytes: Buffer; contentType: string } {
+  const m = /^data:(image\/[a-z0-9.+-]+);base64,(.+)$/is.exec((dataUrl || "").trim());
+  if (!m) throw new Error("Uploaded file must be an image.");
+  const bytes = Buffer.from(m[2], "base64");
+  if (!bytes.length) throw new Error("Uploaded image is empty.");
+  if (bytes.length > MAX_UPLOAD_BYTES) throw new Error("Uploaded image is larger than 10 MB.");
+  return { bytes, contentType: m[1].toLowerCase() };
+}
+
 export interface R2Creds { accountId: string; accessKeyId: string; secretAccessKey: string; bucket: string; publicBaseUrl: string; }
 export async function getR2Creds(pool: Pool): Promise<R2Creds> {
   const accountId = await getSetting(pool, "r2_account_id");

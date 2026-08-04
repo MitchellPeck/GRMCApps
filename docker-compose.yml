@@ -97,7 +97,9 @@ services:
       - "com.centurylinklabs.watchtower.enable=true"
 
   whoami:
-    build: ./apps/whoami
+    build:
+      context: .
+      dockerfile: apps/whoami/Dockerfile
     image: ghcr.io/mitchellpeck/grmc-whoami:latest
     restart: unless-stopped
     environment:

@@ -1,6 +1,7 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { buildSchedulerPayload, suggestDateTime, charWarnings } from "./metricool";
+import { buildSchedulerPayload, charWarnings } from "./metricool";
+import { decodeImageDataUrl } from "./r2";
 
 test("buildSchedulerPayload shapes the Metricool body", () => {
   const p = buildSchedulerPayload({
@@ -20,15 +21,26 @@ test("buildSchedulerPayload includes media when given a url", () => {
   assert.deepEqual(p.media, ["https://pub/x.jpg"]);
 });
 
-test("suggestDateTime maps a weekday key to the next such day at the default time", () => {
-  const iso = suggestDateTime({ kind: "weekday", weekday: "monday" }, { refDate: "2026-06-10", time: "09:00" });
-  assert.equal(iso, "2026-06-15T09:00:00");
-  const iso2 = suggestDateTime({ kind: "seriesDate", label: "Jun 16" }, { refDate: "2026-06-10", time: "09:00" });
-  assert.equal(iso2, "2026-06-16T09:00:00");
+test("buildSchedulerPayload carries X through as Metricool's twitter provider", () => {
+  const p = buildSchedulerPayload({ text: "x", networks: ["facebook", "instagram", "twitter"], dateTime: "2026-06-15T09:00:00", timezone: "America/New_York", mediaUrl: "" });
+  assert.deepEqual(p.providers, [{ network: "facebook" }, { network: "instagram" }, { network: "twitter" }]);
 });
 
-test("charWarnings flags Instagram over 2200", () => {
+test("charWarnings flags Instagram over 2200 and labels X by its real name", () => {
   const w = charWarnings("a".repeat(2300), ["instagram"]);
   assert.ok(w.some((m) => m.toLowerCase().includes("instagram")));
   assert.equal(charWarnings("short", ["instagram", "facebook"]).length, 0);
+  const x = charWarnings("a".repeat(300), ["twitter"]);
+  assert.equal(x.length, 1);
+  assert.ok(x[0].startsWith("X limit is 280"), x[0]);
+});
+
+test("decodeImageDataUrl accepts image data urls and rejects anything else", () => {
+  const gif = "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==";
+  const out = decodeImageDataUrl(gif);
+  assert.equal(out.contentType, "image/gif");
+  assert.ok(out.bytes.length > 0);
+  assert.throws(() => decodeImageDataUrl("data:application/pdf;base64,AAAA"), /must be an image/);
+  assert.throws(() => decodeImageDataUrl("https://example.com/x.jpg"), /must be an image/);
+  assert.throws(() => decodeImageDataUrl(""), /must be an image/);
 });

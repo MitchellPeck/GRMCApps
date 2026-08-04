@@ -1,6 +1,8 @@
 import { Pool } from "pg";
 import { HISTORY_SERIES_POSTS, VOICE } from "./voice";
 import { callClaude, stripJsonFences } from "./claude";
+import { suggestDate } from "./dates";
+import { referenceDate } from "./schedule";
 
 export interface SeriesRow {
   id: string; name: string; description: string; context: string;
@@ -9,10 +11,8 @@ export interface SeriesRow {
 export interface SeriesPost {
   seriesId: string; postIdx: number; date: string; phase: string;
   title: string; sub: string; status: string; draft: string; notes: string;
-}
-export interface ThursdayItem {
-  seriesId: string; seriesName: string; context: string; postIdx: number;
-  total: number; date: string; title: string; sub: string; phase: string;
+  /** The post's `date` label ("Aug 5") resolved to YYYY-MM-DD for scheduling. */
+  scheduleDate: string;
 }
 
 const FIELD_COLUMNS: Record<string, string> = {
@@ -60,9 +60,11 @@ export async function getAllSeries(pool: Pool): Promise<{ ok: true; series: Seri
 export async function getSeriesPosts(pool: Pool, seriesId: string): Promise<{ ok: true; posts: SeriesPost[] } | { ok: false; error: string }> {
   try {
     const r = await pool.query("SELECT * FROM series_posts WHERE series_id = $1 ORDER BY post_idx", [seriesId]);
+    const ref = await referenceDate(pool);
     const posts = r.rows.map((row) => ({
       seriesId: row.series_id, postIdx: Number(row.post_idx), date: row.date, phase: row.phase,
       title: row.title, sub: row.sub, status: row.status, draft: row.draft, notes: row.notes,
+      scheduleDate: suggestDate({ kind: "seriesDate", label: row.date }, ref),
     }));
     return { ok: true, posts };
   } catch (e) { return { ok: false, error: (e as Error).message }; }
@@ -179,38 +181,4 @@ export async function generateSeriesPostsWithClaude(pool: Pool, params: Generate
     const raw = stripJsonFences(await callClaude(pool, sys, lines.join("\n")));
     return { ok: true, posts: JSON.parse(raw) };
   } catch (e) { return { ok: false, error: (e as Error).message }; }
-}
-
-// Port of getActiveSeriesThursdayItem: nearest non-posted dated post (by 'Mon DD')
-// across ACTIVE series to a reference date.
-export async function getActiveSeriesThursdayItem(pool: Pool, dateStr?: string): Promise<ThursdayItem | null> {
-  try {
-    const ref = dateStr ? new Date(dateStr + "T12:00:00") : new Date();
-    const year = ref.getFullYear();
-    const months: Record<string, number> = { Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5, Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11 };
-    const all = await getAllSeries(pool);
-    if (!all.ok) return null;
-    const active = all.series.filter((s) => s.status === "active");
-    let best: ThursdayItem | null = null;
-    let minDiff = Infinity;
-    for (const s of active) {
-      const pr = await getSeriesPosts(pool, s.id);
-      if (!pr.ok) continue;
-      for (const p of pr.posts) {
-        if (p.status === "posted") continue;
-        const parts = p.date.split(" ");
-        if (parts.length < 2 || !(parts[0] in months)) continue;
-        const d = new Date(year, months[parts[0]], parseInt(parts[1], 10), 12);
-        const diff = Math.abs(ref.getTime() - d.getTime());
-        if (diff < minDiff) {
-          minDiff = diff;
-          best = {
-            seriesId: s.id, seriesName: s.name, context: s.context, postIdx: p.postIdx,
-            total: pr.posts.length, date: p.date, title: p.title, sub: p.sub, phase: p.phase,
-          };
-        }
-      }
-    }
-    return best;
-  } catch { return null; }
 }

@@ -7,7 +7,7 @@ export async function mailchimpRoutes(app: FastifyInstance): Promise<void> {
     try {
       const sundayDate = (req.query as { sundayDate?: string }).sundayDate || null;
       const gn = await getLatestGraceNotes(pool, sundayDate);
-      return { ok: true, subject: gn.subject, archiveUrl: gn.archiveUrl, status: gn.status, sentAt: gn.sentAt, preview: gn.preview };
+      return { ok: true, ...gn };
     } catch (e) {
       return { ok: false, error: (e as Error).message };
     }
@@ -16,7 +16,7 @@ export async function mailchimpRoutes(app: FastifyInstance): Promise<void> {
   app.get("/api/blog", async () => {
     try {
       const blog = await getLatestBlog(pool);
-      return { ok: true, subject: blog.subject, archiveUrl: blog.archiveUrl, status: blog.status, sentAt: blog.sentAt, preview: blog.preview };
+      return { ok: true, ...blog };
     } catch (e) {
       return { ok: false, error: (e as Error).message };
     }

@@ -3,12 +3,12 @@ import { test } from "node:test";
 import { Pool } from "pg";
 import {
   getAllSeries, getSeriesPosts, createSeries,
-  updateSeriesPostField, updateSeriesMeta, getActiveSeriesThursdayItem,
+  updateSeriesPostField, updateSeriesMeta,
 } from "./series";
 
 const pool = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
 
-test("series CRUD, history seed, and thursday matcher", async () => {
+test("series CRUD and history seed", async () => {
   await pool.query("DELETE FROM series_posts");
   await pool.query("DELETE FROM series");
 
@@ -42,8 +42,9 @@ test("series CRUD, history seed, and thursday matcher", async () => {
   assert.ok(foundSeries, "created series present");
   assert.equal(foundSeries.status, "paused");
 
-  const thu = await getActiveSeriesThursdayItem(pool, "2026-06-10");
-  assert.ok(thu && thu.title.length > 0, "matcher returns a candidate from an active series");
+  // Series dates are stored as "Jun 9" labels; the API resolves each to a real
+  // calendar date so the Metricool date box can prefill it.
+  assert.match(after.posts[0].scheduleDate, /^\d{4}-06-09$/);
 
   await pool.query("DELETE FROM series_posts");
   await pool.query("DELETE FROM series");
