@@ -23,38 +23,15 @@
 
 <div class="layout">
   <div class="tabs">
-    <button class="tab active" data-tab="mon">Monday run</button>
-    <button class="tab" data-tab="wed">Wednesday run</button>
+    <button class="tab active" data-tab="wed">Wednesday run</button>
     <button class="tab" data-tab="fri">Friday run</button>
     <button class="tab" data-tab="series">Series</button>
     <button class="tab" data-tab="drafts">Drafts</button>
     <button class="tab" data-tab="settings">Settings</button>
   </div>
 
-  <!-- MONDAY -->
-  <div id="p-mon" class="panel active">
-    <div class="card">
-      <div class="ct">Service info</div>
-      <div class="row2">
-        <div class="field"><label>Sunday date</label><input type="date" id="m-date"></div>
-        <div class="field"><label>Sermon title</label><input type="text" id="m-sermon" placeholder="e.g. Faithful in the Middle"></div>
-      </div>
-      <div class="field"><label>Pulpit AI summary</label><textarea id="m-pulpit" style="min-height:90px" placeholder="Paste Pulpit AI summary here"></textarea></div>
-    </div>
-    <div class="card">
-      <div class="ct">Events and highlights</div>
-      <div class="field"><label>Upcoming events</label><textarea id="m-events" placeholder="One per line: name, date, time, location"></textarea><div class="hint">Include 2-3. Claude picks best 1-2.</div></div>
-      <div class="field"><label>People / highlights (optional)</label><textarea id="m-highlights" style="min-height:52px" placeholder="e.g. Rev. Bacon preaching first solo sermon"></textarea></div>
-    </div>
-    <div class="btn-row">
-      <button class="btn btn-primary" id="btn-mon" data-default="Draft posts" onclick="runMonday()">Draft posts</button>
-      <button class="btn btn-secondary" onclick="clearPanel('mon')">Clear</button>
-    </div>
-    <div id="results-mon" class="results"></div>
-  </div>
-
   <!-- WEDNESDAY -->
-  <div id="p-wed" class="panel">
+  <div id="p-wed" class="panel active">
     <div class="card">
       <div class="ct">Upcoming Sunday</div>
       <div class="row2">
@@ -217,23 +194,38 @@
   </div>
 </div>
 
-<script src="/app.js"></script>
-
 <div id="mc-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:50;align-items:center;justify-content:center">
   <div class="card" style="max-width:520px;width:92%;max-height:90vh;overflow:auto">
     <div class="ct">Send to Metricool</div>
     <div class="field"><label>Post text</label><textarea id="mc-text" style="min-height:120px"></textarea></div>
     <div class="field"><label>Networks</label>
-      <label style="font-weight:400"><input type="checkbox" id="mc-fb" checked> Facebook</label>
-      <label style="font-weight:400;margin-left:12px"><input type="checkbox" id="mc-ig" checked> Instagram</label>
+      <label class="check"><input type="checkbox" id="mc-fb" checked> Facebook</label>
+      <label class="check"><input type="checkbox" id="mc-ig" checked> Instagram</label>
+      <label class="check"><input type="checkbox" id="mc-x" checked> X</label>
     </div>
     <div class="row2">
-      <div class="field"><label>Date</label><input type="date" id="mc-date"></div>
+      <div class="field"><label>Date</label><input type="date" id="mc-date"><div class="hint" id="mc-date-hint"></div></div>
       <div class="field"><label>Time</label><input type="time" id="mc-time"></div>
     </div>
     <div id="mc-image-area">
-      <div class="field"><label>Approved image</label><select id="mc-approved"></select></div>
-      <div class="field"><label>Image URL (optional, must be public)</label><input type="text" id="mc-imgurl" placeholder="https://..."></div>
+      <div class="field"><label>Image</label>
+        <select id="mc-image-source" onchange="switchImageSource()">
+          <option value="none">No image</option>
+          <option value="upload">Upload an image</option>
+          <option value="approved">Choose an approved image</option>
+          <option value="url">Use an image URL</option>
+        </select>
+      </div>
+      <div class="field" id="mc-src-upload" style="display:none">
+        <label>File</label><input type="file" id="mc-file" accept="image/*">
+        <div class="hint">JPG, PNG, GIF or WebP, up to 10 MB.</div>
+      </div>
+      <div class="field" id="mc-src-approved" style="display:none">
+        <label>Approved image</label><select id="mc-approved"></select>
+      </div>
+      <div class="field" id="mc-src-url" style="display:none">
+        <label>Image URL (must be public)</label><input type="text" id="mc-imgurl" placeholder="https://...">
+      </div>
     </div>
     <div id="mc-msg"></div>
     <div class="btn-row">
@@ -242,5 +234,7 @@
     </div>
   </div>
 </div>
+<script src="/assets/grmc-nav.js"></script>
+<script src="/app.js"></script>
 </body>
 </html>

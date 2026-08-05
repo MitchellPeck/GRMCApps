@@ -6,7 +6,8 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "dev": "tsc --watch"
+    "dev": "tsc --watch",
+    "test": "tsc && node --test --test-concurrency=1 \"dist/**/*.test.js\""
   },
   "dependencies": {
     "@fastify/cookie": "^10.0.1",

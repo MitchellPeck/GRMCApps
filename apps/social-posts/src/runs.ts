@@ -1,38 +1,17 @@
 import { Pool } from "pg";
 import { VOICE } from "./voice";
 import { callClaude, stripJsonFences } from "./claude";
-import { getActiveSeriesThursdayItem, updateSeriesPostField } from "./series";
 import { getLatestGraceNotes, getLatestBlog, CampaignContent } from "./mailchimp";
 import { savePostDrafts } from "./drafts";
+import { scheduleDatesFor } from "./schedule";
 
-export async function draftMondayPosts(pool: Pool, params: any, createdBy: string): Promise<any> {
-  try {
-    const thu = await getActiveSeriesThursdayItem(pool, params.date);
-    const lines: string[] = ["Draft three GRMC social posts.", "", VOICE, "", "--- CONTEXT ---",
-      "SUNDAY DATE: " + (params.date || "this past Sunday"), "SERMON TITLE: " + params.sermon];
-    if (params.pulpit)     { lines.push("", "PULPIT AI SUMMARY:", params.pulpit); }
-    if (params.events)     { lines.push("", "UPCOMING EVENTS:", params.events); }
-    if (params.highlights) { lines.push("", "PEOPLE / HIGHLIGHTS:", params.highlights); }
-    if (thu) {
-      lines.push("", "THURSDAY SERIES - post " + (thu.postIdx + 1) + " of " + thu.total + " (" + thu.date + ') from series "' + thu.seriesName + '":');
-      lines.push(thu.title + " - " + thu.sub);
-    }
-    lines.push("", "--- POSTS TO DRAFT ---", "",
-      "1. MONDAY - Service recap", "Celebratory, invites people who missed to feel the energy. Reference sermon theme meaningfully.",
-      "", "2. TUESDAY - Upcoming events", "Highlight 1-2 events max. Clear CTA with date/time/location.");
-    if (thu) {
-      lines.push("", "3. THURSDAY - " + thu.seriesName + " series post (" + thu.date + ")",
-        "Topic: " + thu.title + ". Angle: " + thu.sub,
-        "Educational but not lecture-y. Next chapter in an unfolding story. Series context: " + thu.context);
-    } else {
-      lines.push("", "3. THURSDAY - no active series post scheduled for this week. Write a general GRMC community post.");
-    }
-    const sys = 'You draft social media posts for Grace Resurrection Methodist Church (GRMC) in Marietta, GA. Return ONLY a JSON object with keys "monday", "tuesday", "thursday" each a string. No markdown fences, just valid JSON.';
-    const posts = JSON.parse(stripJsonFences(await callClaude(pool, sys, lines.join("\n"))));
-    await savePostDrafts(pool, "monday", params.date || "", posts, createdBy);
-    if (thu) await updateSeriesPostField(pool, thu.seriesId, thu.postIdx, "status", "drafted");
-    return { ok: true, posts, seriesLabel: thu ? "Post " + (thu.postIdx + 1) + " of " + thu.total + ": " + thu.title : "" };
-  } catch (e) { return { ok: false, error: (e as Error).message }; }
+// What the UI needs to caption a fetched campaign without re-deriving it.
+function campaignSummary(c: CampaignContent | null) {
+  if (!c) return null;
+  return {
+    status: c.status, isDraft: c.isDraft, dateLine: c.dateLine,
+    issueDate: c.issueDate, sentAt: c.sentAt, createdAt: c.createdAt,
+  };
 }
 
 export async function draftWedPosts(pool: Pool, params: any, createdBy: string): Promise<any> {
@@ -59,7 +38,11 @@ export async function draftWedPosts(pool: Pool, params: any, createdBy: string):
     const sys = 'You draft social media posts for Grace Resurrection Methodist Church (GRMC) in Marietta, GA. Return ONLY a JSON object with keys "wednesday" and "saturday" each a string. No markdown fences, just valid JSON.';
     const posts = JSON.parse(stripJsonFences(await callClaude(pool, sys, lines.join("\n"))));
     await savePostDrafts(pool, "wednesday", params.sundayDate || "", posts, createdBy);
-    return { ok: true, posts, mailchimpFetched: !!graceNotes, mailchimpError, archiveUrl, subject, sentAt: graceNotes ? graceNotes.sentAt : "" };
+    return {
+      ok: true, posts, mailchimpFetched: !!graceNotes, mailchimpError, archiveUrl, subject,
+      campaign: campaignSummary(graceNotes),
+      dates: await scheduleDatesFor(pool, Object.keys(posts)),
+    };
   } catch (e) { return { ok: false, error: (e as Error).message }; }
 }
 
@@ -88,6 +71,10 @@ export async function draftFridayPost(pool: Pool, params: any, createdBy: string
     const sys = 'You draft social media posts for Grace Resurrection Methodist Church (GRMC) in Marietta, GA. Return ONLY a JSON object with key "friday" containing the post text string. No markdown fences, just valid JSON.';
     const posts = JSON.parse(stripJsonFences(await callClaude(pool, sys, lines.join("\n"))));
     await savePostDrafts(pool, "friday", params.date || "", posts, createdBy);
-    return { ok: true, posts, mailchimpFetched: !!blog, mailchimpError, archiveUrl, subject, sentAt: blog ? blog.sentAt : "" };
+    return {
+      ok: true, posts, mailchimpFetched: !!blog, mailchimpError, archiveUrl, subject,
+      campaign: campaignSummary(blog),
+      dates: await scheduleDatesFor(pool, Object.keys(posts)),
+    };
   } catch (e) { return { ok: false, error: (e as Error).message }; }
 }

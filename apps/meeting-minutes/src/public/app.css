@@ -1,6 +1,5 @@
 /* Meeting Minutes — bespoke components (inherits grmc.css tokens). */
-.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-@media(max-width:560px){.grid2{grid-template-columns:1fr}}
+/* .grid2 lives in the shared grmc.css. */
 .back{margin-bottom:16px}
 
 /* Meeting list rows */
