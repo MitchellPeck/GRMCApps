@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { renderTranscript, distinctSpeakers, friendlyLabel } from "./transcript";
+import { renderTranscript, distinctSpeakers, friendlyLabel, resolveSpeakerName } from "./transcript";
 import { DiarizedSegment } from "./whisper";
 
 const seg = (text: string, speaker: string): DiarizedSegment => ({ text, speaker, start: 0, end: 0 });
@@ -40,4 +40,30 @@ test("renderTranscript with no speaker labels returns plain joined text", () => 
 
 test("renderTranscript empty for no segments", () => {
   assert.equal(renderTranscript([], {}), "");
+});
+
+test("renderTranscript merges consecutive turns that resolve to the same name", () => {
+  const segs = [
+    seg("I move we approve it.", "SPEAKER_00"),
+    seg("Seconded, if that helps.", "SPEAKER_02"),
+    seg("Any discussion?", "SPEAKER_00"),
+  ];
+  const out = renderTranscript(segs, { SPEAKER_00: "Alice", SPEAKER_02: "Alice" });
+  assert.equal(out, "Alice: I move we approve it. Seconded, if that helps. Any discussion?");
+});
+
+test("renderTranscript still separates turns resolving to different names", () => {
+  const segs = [
+    seg("I move we approve it.", "SPEAKER_00"),
+    seg("Seconded.", "SPEAKER_02"),
+  ];
+  const out = renderTranscript(segs, { SPEAKER_00: "Alice", SPEAKER_02: "Bob" });
+  assert.equal(out, "Alice: I move we approve it.\nBob: Seconded.");
+});
+
+test("resolveSpeakerName prefers the mapped name and falls back to Speaker N", () => {
+  const order = ["SPEAKER_01", "SPEAKER_00"];
+  assert.equal(resolveSpeakerName("SPEAKER_01", { SPEAKER_01: "Alice" }, order), "Alice");
+  assert.equal(resolveSpeakerName("SPEAKER_00", { SPEAKER_01: "Alice" }, order), "Speaker 2");
+  assert.equal(resolveSpeakerName("SPEAKER_00", { SPEAKER_00: "   " }, order), "Speaker 2");
 });

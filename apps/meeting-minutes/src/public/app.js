@@ -480,20 +480,28 @@ function distinctSpeakersJS(segments){
   (segments||[]).forEach(function(s){ if(s.speaker && seen.indexOf(s.speaker)<0) seen.push(s.speaker); });
   return seen;
 }
-// Mirror of server transcript.ts renderTranscript so remapping updates instantly.
+// Mirror of server transcript.ts resolveSpeakerName.
+function resolveSpeakerNameJS(speaker, map, order){
+  var mapped = map ? map[speaker] : '';
+  if(mapped && mapped.trim()) return mapped.trim();
+  var idx = order.indexOf(speaker);
+  return idx >= 0 ? ('Speaker '+(idx+1)) : 'Speaker';
+}
+// Mirror of server transcript.ts renderTranscript so remapping updates
+// instantly. Merges consecutive turns that resolve to the same display name.
 function renderTranscriptJS(segments, map){
   if(!segments || !segments.length) return '';
   var order=distinctSpeakersJS(segments);
   if(!order.length) return segments.map(function(s){return s.text;}).join(' ').trim();
-  var lines=[], cur=null, buf=[];
+  var lines=[], curName=null, buf=[];
   function flush(){
-    if(cur===null || !buf.length) return;
-    var name=(map[cur] && map[cur].trim()) || ('Speaker '+(order.indexOf(cur)+1));
-    lines.push(name+': '+buf.join(' ').trim()); buf=[];
+    if(curName===null || !buf.length) return;
+    lines.push(curName+': '+buf.join(' ').trim()); buf=[];
   }
   segments.forEach(function(s){
-    var spk=s.speaker || order[0];
-    if(spk!==cur){ flush(); cur=spk; }
+    var spk = s.speaker || order[0];
+    var name = resolveSpeakerNameJS(spk, map||{}, order);
+    if(name!==curName){ flush(); curName=name; }
     buf.push(s.text);
   });
   flush();
