@@ -85,7 +85,7 @@ function openModal(opts){
     return out;
   }
   function done(err){
-    if(err){ setBtn('modal-save', false); msg('modal-msg','err',err); return; }
+    if(err){ setBtn('modal-save', false); setBtn('modal-danger-btn', false); msg('modal-msg','err',err); return; }
     closeModal();
   }
   function save(){
