@@ -290,8 +290,8 @@ self-introduction, who answers which question, a person's stated role, and who
 owns which topic.
 
 Respond with ONLY a JSON object, no prose around it, mapping every label to a
-person's name copied EXACTLY from the list of people present, or to "" when you
-genuinely cannot tell:
+person's name — the name only, WITHOUT any parenthetical title, copied exactly
+from the list of people present — or to "" when you genuinely cannot tell:
 { "Speaker 1": "Alice Smith", "Speaker 2": "Alice Smith", "Speaker 3": "" }
 
 Never output a name that is not in the list of people present. Prefer "" over a
@@ -312,7 +312,9 @@ export function parseSpeakerMap(raw: string, speakerOrder: string[], allowedName
     if (!m) continue;
     const label = speakerOrder[Number(m[1]) - 1];
     if (!label) continue;
-    const name = allowed.get(String(value ?? "").trim().toLowerCase());
+    const candidate = String(value ?? "").trim();
+    const name = allowed.get(candidate.toLowerCase())
+      ?? allowed.get(candidate.replace(/\s*\([^()]*\)\s*$/, "").trim().toLowerCase());
     if (name) out[label] = name;
   }
   return out;
@@ -323,7 +325,7 @@ export function parseSpeakerMap(raw: string, speakerOrder: string[], allowedName
 // {} so a transcription is never lost to a reconciliation problem.
 export async function reconcileSpeakers(pool: Pool, input: ReconcileInput): Promise<SpeakerMap> {
   if (!input.speakerOrder.length || !input.transcript.trim() || !input.attendees.length) return {};
-  const names = input.attendees.map((a) => a.replace(/\s*\(.*\)\s*$/, "").trim()).filter(Boolean);
+  const names = input.attendees.map((a) => a.replace(/\s*\([^()]*\)\s*$/, "").trim()).filter(Boolean);
   const parts = [
     `Meeting: ${input.meetingTitle}`,
     `Agenda item: ${input.itemTitle}`,

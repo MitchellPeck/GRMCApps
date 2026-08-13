@@ -115,3 +115,7 @@ test("parseSpeakerMap tolerates fenced JSON and malformed output", () => {
   assert.deepEqual(parseSpeakerMap('["Speaker 1"]', ORDER, NAMES), {});
   assert.deepEqual(parseSpeakerMap("", ORDER, NAMES), {});
 });
+
+test("parseSpeakerMap tolerates a name echoed with its title", () => {
+  assert.deepEqual(parseSpeakerMap('{"Speaker 1":"Alice Smith (Chair)"}', ORDER, NAMES), { SPEAKER_00: "Alice Smith" });
+});
