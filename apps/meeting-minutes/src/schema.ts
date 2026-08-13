@@ -80,8 +80,6 @@ CREATE TABLE IF NOT EXISTS agenda_item_presenters (
   PRIMARY KEY (item_id, person_id)
 );
 
-CREATE INDEX IF NOT EXISTS agenda_items_meeting_idx ON agenda_items (meeting_id, position);
-
 -- Every audio recording ever attached to an agenda item. Files live on the
 -- minutesdata volume; rows are never deleted except by cascade, so a recording
 -- stays downloadable and re-transcribable for the life of the meeting.
@@ -95,4 +93,6 @@ CREATE TABLE IF NOT EXISTS item_recordings (
   created_at    timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS item_recordings_item_idx ON item_recordings (item_id, id);
+
+CREATE INDEX IF NOT EXISTS agenda_items_meeting_idx ON agenda_items (meeting_id, position);
 `;
