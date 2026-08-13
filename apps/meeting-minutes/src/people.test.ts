@@ -110,3 +110,26 @@ test("matchPersonByName finds a full name embedded in a longer phrase", () => {
   const people = [person(1, "Jane Doe")];
   assert.equal(matchPersonByName("Treasurer Jane Doe", people), 1);
 });
+
+test("updatePerson can set active and leaves it alone when omitted", { skip: !url }, async () => {
+  const pool = new Pool({ connectionString: url });
+  await pool.query("DELETE FROM people");
+
+  const added = await addPerson(pool, "Jane Doe", "jane@x.com", "Treasurer");
+  assert.ok(added.ok);
+  const id = (added as { ok: true; id: number }).id;
+
+  await updatePerson(pool, id, "Jane Doe", "jane@x.com", "Chair", false);
+  let found = (await listPeople(pool, true)).find((p) => p.id === id)!;
+  assert.equal(found.title, "Chair");
+  assert.equal(found.active, false);
+
+  // Omitting `active` must preserve the stored value.
+  await updatePerson(pool, id, "Jane R Doe", "jane@x.com", "Chair");
+  found = (await listPeople(pool, true)).find((p) => p.id === id)!;
+  assert.equal(found.name, "Jane R Doe");
+  assert.equal(found.active, false);
+
+  await pool.query("DELETE FROM people");
+  await pool.end();
+});

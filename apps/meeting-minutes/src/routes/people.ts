@@ -2,7 +2,7 @@ import { FastifyInstance } from "fastify";
 import { pool } from "../db";
 import { addPerson, listPeople, setPersonActive, updatePerson } from "../people";
 
-interface AddBody { name?: string; email?: string; title?: string }
+interface AddBody { name?: string; email?: string; title?: string; active?: boolean }
 interface ToggleBody { active?: boolean }
 
 export async function peopleRoutes(app: FastifyInstance): Promise<void> {
@@ -26,7 +26,8 @@ export async function peopleRoutes(app: FastifyInstance): Promise<void> {
     const id = Number((req.params as { id: string }).id);
     if (!Number.isFinite(id)) { reply.code(400); return { ok: false, error: "Bad id." }; }
     const b = (req.body ?? {}) as AddBody;
-    const r = await updatePerson(pool, id, b.name ?? "", b.email ?? "", b.title ?? "");
+    const active = typeof b.active === "boolean" ? b.active : undefined;
+    const r = await updatePerson(pool, id, b.name ?? "", b.email ?? "", b.title ?? "", active);
     if (!r.ok) reply.code(400);
     return r;
   });

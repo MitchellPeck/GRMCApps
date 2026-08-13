@@ -55,12 +55,16 @@ export async function addPerson(
   }
 }
 
+// Update every editable field of a person in one call. `active` is optional:
+// when omitted the stored value is preserved, so a plain profile edit never
+// silently reactivates someone.
 export async function updatePerson(
   pool: Pool,
   id: number,
   name: string,
   email: string,
-  title: string
+  title: string,
+  active?: boolean
 ): Promise<AddResult> {
   const n = name.trim();
   const e = email.trim().toLowerCase();
@@ -68,8 +72,11 @@ export async function updatePerson(
   if (e && !e.includes("@")) return { ok: false, error: "Enter a valid email or leave it blank." };
   try {
     const r = await pool.query(
-      "UPDATE people SET name = $2, email = $3, title = $4 WHERE id = $1 RETURNING id",
-      [id, n, e, title.trim()]
+      `UPDATE people
+          SET name = $2, email = $3, title = $4,
+              active = COALESCE($5, active)
+        WHERE id = $1 RETURNING id`,
+      [id, n, e, title.trim(), active === undefined ? null : active]
     );
     if (!r.rows[0]) return { ok: false, error: "Person not found." };
     return { ok: true, id };
