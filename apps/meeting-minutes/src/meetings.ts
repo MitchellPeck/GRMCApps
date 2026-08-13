@@ -2,6 +2,7 @@ import { Pool } from "pg";
 import { ExtractedItem, ActionItem } from "./claude";
 import { DiarizedSegment } from "./whisper";
 import { SpeakerMap, renderTranscript } from "./transcript";
+import { listPeople, matchPersonByName } from "./people";
 
 export interface MeetingRow {
   id: number;
@@ -161,16 +162,30 @@ export async function replaceAgendaItems(
   items: ExtractedItem[],
   agendaFileName: string
 ): Promise<void> {
+  // Resolve presenter names up front, outside the transaction. Unresolvable
+  // names are dropped. Attendance is untouched: an import never adds anyone to
+  // meeting_attendees.
+  const people = await listPeople(pool, true);
+  const presenterIds = items.map((it) => (it.presenter ? matchPersonByName(it.presenter, people) : null));
+
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
     await client.query("DELETE FROM agenda_items WHERE meeting_id = $1", [meetingId]);
     let pos = 0;
     for (const it of items) {
-      await client.query(
-        "INSERT INTO agenda_items (meeting_id, position, title, description) VALUES ($1, $2, $3, $4)",
-        [meetingId, pos++, it.title, it.description]
+      const inserted = await client.query(
+        "INSERT INTO agenda_items (meeting_id, position, title, description) VALUES ($1, $2, $3, $4) RETURNING id",
+        [meetingId, pos, it.title, it.description]
       );
+      const pid = presenterIds[pos];
+      if (pid !== null) {
+        await client.query(
+          "INSERT INTO agenda_item_presenters (item_id, person_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+          [Number(inserted.rows[0].id), pid]
+        );
+      }
+      pos++;
     }
     await client.query("UPDATE meetings SET agenda_file_name = $2, updated_at = now() WHERE id = $1", [
       meetingId,

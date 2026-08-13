@@ -135,3 +135,39 @@ test("createMeeting/addAgendaItem require titles", { skip: !url }, async () => {
   assert.equal(noTitle.ok, false);
   await pool.end();
 });
+
+test("replaceAgendaItems links resolvable presenters and ignores the rest", { skip: !url }, async () => {
+  const pool = new Pool({ connectionString: url });
+  await reset(pool);
+
+  const a = await addPerson(pool, "Jane Doe", "jane@x.com", "Treasurer");
+  const b = await addPerson(pool, "Bob Jones", "bob@x.com", "Clerk");
+  assert.ok(a.ok && b.ok);
+  const janeId = (a as { ok: true; id: number }).id;
+
+  const m = await createMeeting(pool, {
+    title: "Board", meetingDate: "", location: "", description: "", email: "", name: "",
+  });
+  assert.ok(m.ok);
+  const meetingId = (m as { ok: true; status: number; id: number }).id;
+
+  await replaceAgendaItems(pool, meetingId, [
+    { title: "Budget", description: "Q2", presenter: "Jane Doe" },
+    { title: "Grounds", description: "", presenter: "Doe" },        // unique last name
+    { title: "Missions", description: "", presenter: "Carlos Vega" }, // not in the library
+    { title: "Open floor", description: "", presenter: "" },
+  ], "agenda.pdf");
+
+  const items = await listAgendaItems(pool, meetingId);
+  assert.equal(items.length, 4);
+  assert.deepEqual(items[0].presenter_ids, [janeId]);
+  assert.deepEqual(items[1].presenter_ids, [janeId]);
+  assert.deepEqual(items[2].presenter_ids, []);
+  assert.deepEqual(items[3].presenter_ids, []);
+
+  // Importing an agenda must never add attendees.
+  assert.deepEqual(await getAttendeeIds(pool, meetingId), []);
+
+  await reset(pool);
+  await pool.end();
+});
