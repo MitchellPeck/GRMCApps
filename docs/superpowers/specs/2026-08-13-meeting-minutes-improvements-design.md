@@ -371,6 +371,20 @@ Using the existing setup (`tsc` then `node --test` over `dist/*.test.js`):
 - Queue worker: state transitions on success, on Whisper failure, and on
   restart recovery from a `processing` row.
 
+## 8. Exportable / printable report
+
+*(Added 2026-08-13 mid-implementation at the user's request.)*
+
+- `GET /api/meetings/:id/report.md` streams the stored Markdown report as an
+  attachment (404 until a report exists). The filename is slugged from the
+  meeting date and title, e.g. `2026-04-14-april-board-meeting-minutes.md`.
+- A **Print / PDF** button beside the report triggers `window.print()`; an
+  `@media print` stylesheet (guarded with `:has(#report-box .report)` so other
+  views print normally) isolates the rendered report, so the browser's print
+  dialog yields a clean paper or PDF copy.
+- A **Download .md** link exposes the endpoint. Both controls appear only once
+  a report exists.
+
 ## Out of scope
 
 - Live/streaming transcription during recording.
