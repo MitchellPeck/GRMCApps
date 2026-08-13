@@ -130,6 +130,18 @@ test("updatePerson can set active and leaves it alone when omitted", { skip: !ur
   assert.equal(found.name, "Jane R Doe");
   assert.equal(found.active, false);
 
+  // Explicitly setting active back to true must also stick.
+  await updatePerson(pool, id, "Jane R Doe", "jane@x.com", "Chair", true);
+  found = (await listPeople(pool, true)).find((p) => p.id === id)!;
+  assert.equal(found.active, true);
+
+  // Omitting `active` again must preserve `true` too — a naive implementation
+  // that forces active to false on every omission would fail this leg.
+  await updatePerson(pool, id, "Jane R Doe", "jane@x.com", "Moderator");
+  found = (await listPeople(pool, true)).find((p) => p.id === id)!;
+  assert.equal(found.title, "Moderator");
+  assert.equal(found.active, true);
+
   await pool.query("DELETE FROM people");
   await pool.end();
 });
