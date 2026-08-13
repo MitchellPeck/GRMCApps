@@ -3,6 +3,7 @@ import { ExtractedItem, ActionItem } from "./claude";
 import { DiarizedSegment } from "./whisper";
 import { SpeakerMap, renderTranscript } from "./transcript";
 import { listPeople, matchPersonByName } from "./people";
+import { SpeakerStat, speakerStats } from "./speakers";
 
 export interface MeetingRow {
   id: number;
@@ -20,6 +21,8 @@ export interface MeetingRow {
   updated_at: string;
 }
 
+export type TranscribeStatus = "idle" | "queued" | "processing" | "done" | "error";
+
 export interface AgendaItem {
   id: number;
   meeting_id: number;
@@ -33,6 +36,9 @@ export interface AgendaItem {
   speaker_map: SpeakerMap;
   summary: string;
   action_items: ActionItem[];
+  transcribe_status: TranscribeStatus;
+  transcribe_error: string;
+  speaker_stats: SpeakerStat[];
   presenter_ids: number[];
 }
 
@@ -50,6 +56,9 @@ function mapItemRow(row: any, presenterIds: number[]): AgendaItem {
     speaker_map: row.speaker_map && typeof row.speaker_map === "object" ? row.speaker_map : {},
     summary: row.summary,
     action_items: Array.isArray(row.action_items) ? row.action_items : [],
+    transcribe_status: (row.transcribe_status ?? "idle") as TranscribeStatus,
+    transcribe_error: row.transcribe_error ?? "",
+    speaker_stats: speakerStats(Array.isArray(row.transcript_segments) ? row.transcript_segments : []),
     presenter_ids: presenterIds,
   };
 }
@@ -333,4 +342,53 @@ export async function saveReport(pool: Pool, meetingId: number, report: string):
     "UPDATE meetings SET report = $2, report_generated_at = now(), status = 'completed', updated_at = now() WHERE id = $1",
     [meetingId, report]
   );
+}
+
+// ── Transcription job state ─────────────────────────────────────────────────
+
+// Move an item's transcription job to a new state. Entering `processing`
+// stamps the start time; entering a terminal state stamps the finish time.
+// Any state other than `error` clears the stored error message.
+export async function setTranscribeStatus(
+  pool: Pool,
+  itemId: number,
+  status: TranscribeStatus,
+  error = ""
+): Promise<void> {
+  await pool.query(
+    `UPDATE agenda_items
+        SET transcribe_status = $2,
+            transcribe_error  = CASE WHEN $2 = 'error' THEN $3 ELSE '' END,
+            transcribe_started_at  = CASE WHEN $2 = 'processing' THEN now() ELSE transcribe_started_at END,
+            transcribe_finished_at = CASE WHEN $2 IN ('done','error') THEN now() ELSE transcribe_finished_at END
+      WHERE id = $1`,
+    [itemId, status, error]
+  );
+}
+
+// Item ids whose transcription never finished — used on boot to re-enqueue
+// work that a container restart interrupted.
+export async function listUnfinishedTranscriptions(pool: Pool): Promise<number[]> {
+  const r = await pool.query(
+    "SELECT id FROM agenda_items WHERE transcribe_status IN ('queued','processing') ORDER BY id"
+  );
+  return r.rows.map((row) => Number(row.id));
+}
+
+// Lightweight per-item state for the frontend status poll.
+export async function listItemStatuses(
+  pool: Pool,
+  meetingId: number
+): Promise<Array<{ id: number; transcribeStatus: TranscribeStatus; transcribeError: string; hasSummary: boolean }>> {
+  const r = await pool.query(
+    `SELECT id, transcribe_status, transcribe_error, (summary <> '') AS has_summary
+       FROM agenda_items WHERE meeting_id = $1 ORDER BY position, id`,
+    [meetingId]
+  );
+  return r.rows.map((row) => ({
+    id: Number(row.id),
+    transcribeStatus: (row.transcribe_status ?? "idle") as TranscribeStatus,
+    transcribeError: row.transcribe_error ?? "",
+    hasSummary: !!row.has_summary,
+  }));
 }

@@ -6,6 +6,7 @@ import {
   createMeeting, listMeetings, getMeeting, updateMeeting, deleteMeeting,
   setAttendees, getAttendeeIds, replaceAgendaItems, addAgendaItem,
   listAgendaItems, getAgendaItem, updateAgendaItem, deleteAgendaItem, saveReport,
+  setTranscribeStatus, listUnfinishedTranscriptions, listItemStatuses,
 } from "./meetings";
 
 const url = process.env.TEST_DATABASE_URL;
@@ -167,6 +168,68 @@ test("replaceAgendaItems links resolvable presenters and ignores the rest", { sk
 
   // Importing an agenda must never add attendees.
   assert.deepEqual(await getAttendeeIds(pool, meetingId), []);
+
+  await reset(pool);
+  await pool.end();
+});
+
+test("transcription status transitions and speaker stats", { skip: !url }, async () => {
+  const pool = new Pool({ connectionString: url });
+  await reset(pool);
+  const m = await createMeeting(pool, {
+    title: "Board", meetingDate: "", location: "", description: "", email: "", name: "",
+  });
+  assert.ok(m.ok);
+  const meetingId = (m as { ok: true; status: number; id: number }).id;
+  const added = await addAgendaItem(pool, meetingId, "Budget", "");
+  assert.ok(added.ok);
+  const itemId = (added as { ok: true; status: number; id: number }).id;
+
+  // A brand-new item is idle with no error.
+  let item = (await getAgendaItem(pool, itemId))!;
+  assert.equal(item.transcribe_status, "idle");
+  assert.equal(item.transcribe_error, "");
+  assert.deepEqual(item.speaker_stats, []);
+
+  await setTranscribeStatus(pool, itemId, "queued");
+  assert.deepEqual(await listUnfinishedTranscriptions(pool), [itemId]);
+
+  await setTranscribeStatus(pool, itemId, "processing");
+  assert.deepEqual(await listUnfinishedTranscriptions(pool), [itemId]);
+
+  await setTranscribeStatus(pool, itemId, "error", "whisper unreachable");
+  item = (await getAgendaItem(pool, itemId))!;
+  assert.equal(item.transcribe_status, "error");
+  assert.equal(item.transcribe_error, "whisper unreachable");
+  assert.deepEqual(await listUnfinishedTranscriptions(pool), []);
+
+  // Moving to done clears the previous error message.
+  await setTranscribeStatus(pool, itemId, "done");
+  item = (await getAgendaItem(pool, itemId))!;
+  assert.equal(item.transcribe_status, "done");
+  assert.equal(item.transcribe_error, "");
+
+  // Stats are derived from the stored segments, sorted by talk time.
+  await updateAgendaItem(pool, itemId, {
+    transcriptSegments: [
+      { text: "Short.", speaker: "SPEAKER_00", start: 0, end: 1 },
+      { text: "A considerably longer contribution.", speaker: "SPEAKER_01", start: 1, end: 9 },
+    ],
+    speakerMap: {},
+  });
+  item = (await getAgendaItem(pool, itemId))!;
+  assert.equal(item.speaker_stats.length, 2);
+  assert.equal(item.speaker_stats[0].speaker, "SPEAKER_01");
+  assert.equal(item.speaker_stats[0].label, "Speaker 2");
+
+  const statuses = await listItemStatuses(pool, meetingId);
+  assert.equal(statuses.length, 1);
+  assert.equal(statuses[0].id, itemId);
+  assert.equal(statuses[0].transcribeStatus, "done");
+  assert.equal(statuses[0].hasSummary, false);
+
+  await updateAgendaItem(pool, itemId, { summary: "We discussed the budget." });
+  assert.equal((await listItemStatuses(pool, meetingId))[0].hasSummary, true);
 
   await reset(pool);
   await pool.end();
