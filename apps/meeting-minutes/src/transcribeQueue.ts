@@ -27,7 +27,7 @@ export interface QueueDeps {
   reconcile(job: TranscribeJob, segments: DiarizedSegment[]): Promise<SpeakerMap>;
   setStatus(itemId: number, status: TranscribeStatus, error?: string): Promise<void>;
   saveResult(job: TranscribeJob, segments: DiarizedSegment[], map: SpeakerMap): Promise<void>;
-  log(message: string): void;
+  log(message: string): void; // must not throw; the queue guards every call site anyway
 }
 
 export interface Queue {
@@ -47,6 +47,13 @@ export function createQueue(deps: QueueDeps): Queue {
     while (idleWaiters.length) idleWaiters.shift()!();
   }
 
+  // deps.log is documented as must-not-throw, but we guard anyway: a throwing
+  // logger (e.g. EPIPE on stdout) must never be mistaken for a job failure or
+  // escape as an unhandled rejection.
+  function safeLog(message: string): void {
+    try { deps.log(message); } catch { /* logging must never break the queue */ }
+  }
+
   async function runOne(job: TranscribeJob): Promise<void> {
     await deps.setStatus(job.itemId, "processing");
     const started = Date.now();
@@ -60,7 +67,7 @@ export function createQueue(deps: QueueDeps): Queue {
     const audioSeconds = segments.length ? segments[segments.length - 1].end : 0;
     const elapsed = (Date.now() - started) / 1000;
     const factor = audioSeconds > 0 ? (elapsed / audioSeconds).toFixed(2) : "n/a";
-    deps.log(
+    safeLog(
       `transcribed item ${job.itemId}: ${audioSeconds.toFixed(1)}s audio in ${elapsed.toFixed(1)}s (realtime factor ${factor})`
     );
   }
@@ -75,7 +82,7 @@ export function createQueue(deps: QueueDeps): Queue {
           await runOne(job);
         } catch (e) {
           const message = (e as Error).message || "Transcription failed.";
-          deps.log(`transcription failed for item ${job.itemId}: ${message}`);
+          safeLog(`transcription failed for item ${job.itemId}: ${message}`);
           try { await deps.setStatus(job.itemId, "error", message); } catch { /* nothing left to do */ }
         }
       }

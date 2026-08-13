@@ -120,3 +120,19 @@ test("idle resolves immediately when nothing is queued", async () => {
   await q.idle();
   assert.equal(q.size(), 0);
 });
+
+test("a throwing log dep never corrupts status or stops the queue", async () => {
+  const { deps, events } = spyDeps({
+    log: () => { throw new Error("EPIPE"); },
+    transcribe: async (j): Promise<TranscriptionResult> => {
+      if (j.itemId === 1) throw new Error("whisper unreachable");
+      return { text: "", segments: [seg("x", "SPEAKER_00", 0, 1)] };
+    },
+  });
+  const q = createQueue(deps);
+  q.enqueue(job(1)); q.enqueue(job(2));
+  await q.idle();
+  assert.ok(events.includes("status:1:error:whisper unreachable"));
+  assert.ok(events.includes("status:2:done"));
+  assert.ok(!events.some((e) => e.startsWith("status:2:error")));
+});
