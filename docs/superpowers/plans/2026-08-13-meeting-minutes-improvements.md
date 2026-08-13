@@ -2908,7 +2908,7 @@ function pollOnce(){
       renderAttendeeChips();
       state.items.forEach(function(x){ renderPresenterChips(x); renderSpeakerMap(x); });
     }
-    if(!settled.length){ if(anyTranscribing()) startPolling(); return; }
+    if(!settled.length){ afterPollRound(); return; }
     // Something finished — pull the full detail so we get segments, speaker map
     // and the rendered transcript, then decide about summaries.
     return api('/api/meetings/'+state.meeting.id).then(function(det){
@@ -2917,9 +2917,16 @@ function pollOnce(){
         var live=state.items.filter(function(x){ return x.id===it.id; })[0];
         if(live) onTranscriptionSettled(live);
       });
-      if(anyTranscribing()) startPolling();
+      afterPollRound();
     });
   }).catch(function(){ if(anyTranscribing()) startPolling(); });
+}
+
+// Keep polling while work remains; once the queue drains, honour a pending
+// "Generate report" click by re-invoking it automatically.
+function afterPollRound(){
+  if(anyTranscribing()){ startPolling(); return; }
+  if(state.reportPending){ state.reportPending=false; generateReport(); }
 }
 
 // A transcription just finished. Its content is new, so any old summary is
@@ -2952,13 +2959,13 @@ function summarizeIfNeeded(it){
 
 - [ ] **Step 4: Start and stop polling with the meeting view**
 
-In `openMeeting`, add `stopPolling();` next to the existing `stopRecording();` call at the top, and add this line at the end of the `.then()` callback, right after `renderDetail();`:
+In `openMeeting`, add `stopPolling(); state.reportPending=false;` next to the existing `stopRecording();` call at the top, and add this line at the end of the `.then()` callback, right after `renderDetail();`:
 
 ```javascript
     if(anyTranscribing()) startPolling();
 ```
 
-In `showList`, add `stopPolling();` immediately after the existing `stopRecording();` call.
+In `showList`, add `stopPolling(); state.reportPending=false;` immediately after the existing `stopRecording();` call.
 
 - [ ] **Step 5: Make the report wait for transcriptions**
 
@@ -2969,8 +2976,11 @@ Replace the first half of `generateReport` — everything from `setBtn('btn-repo
   if(state.openItemId){ var open=state.items.filter(function(x){return x.id===state.openItemId;})[0]; if(open) collapseItem(open); }
   var busy=state.items.filter(function(it){ return isTranscribing(it); });
   if(busy.length){
-    setBtn('btn-report', false);
-    msg('report-msg','info','Waiting for '+busy.length+' transcription'+(busy.length===1?'':'s')+' to finish. Try again once they are done.');
+    // Wait for the queue: the poller re-invokes generateReport once the last
+    // transcription settles, so the user clicks once and the report follows.
+    msg('report-msg','info','Waiting for '+busy.length+' transcription'+(busy.length===1?'':'s')+' to finish&hellip;');
+    setBtn('btn-report', true, 'Waiting…');
+    state.reportPending=true;
     startPolling();
     return;
   }
@@ -2988,7 +2998,7 @@ This is the acceptance test for the user's main complaint. Rebuild, then:
 4. Record item 2 while item 1 is still transcribing. Confirm item 2 shows **Queued to transcribe** and only starts once item 1 finishes.
 5. When item 1's transcription lands, confirm its badge goes to **Summarizing…** on its own (it is closed), then **Summary ready**, and that its transcript textarea is filled in with named speakers.
 6. Open item 3, record, and leave it **open** when transcription finishes. Confirm no summary fires until you collapse it.
-7. Click "Generate report" while something is still transcribing. Confirm it refuses with the "Waiting for N transcriptions" message rather than producing a report from a half-done item.
+7. Click "Generate report" while something is still transcribing. Confirm it shows "Waiting for N transcriptions…", keeps the button disabled, and then proceeds automatically — summaries first, then the report — once the last transcription lands, without another click.
 8. Reload the page mid-transcription. Confirm the badge still shows the correct state and the result still arrives.
 9. Click "Transcribe again" on a stored recording. Confirm the badge returns to **Queued to transcribe**, the job runs, and the transcript is regenerated from the original audio.
 10. Restart the container mid-transcription (`docker compose restart meeting-minutes`). Confirm the app log reports `re-queued 1 interrupted transcription(s)` and the transcript still arrives without re-recording.
