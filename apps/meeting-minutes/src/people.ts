@@ -106,3 +106,33 @@ export function peopleNamedIn(text: string, people: Person[]): number[] {
   }
   return ids;
 }
+
+function firstNameOf(fullName: string): string {
+  return fullName.trim().split(/\s+/)[0] ?? "";
+}
+
+function lastNameOf(fullName: string): string {
+  const parts = fullName.trim().split(/\s+/);
+  return parts.length > 1 ? parts[parts.length - 1] : "";
+}
+
+// Resolve a presenter name written in an agenda document to a library person.
+// Tries the full name, then a last name, then a first name, and accepts a
+// fallback only when exactly one person matches. Ambiguous or unknown names
+// return null rather than being guessed at.
+export function matchPersonByName(name: string, people: Person[]): number | null {
+  const raw = name.trim();
+  if (raw.length < 2) return null;
+
+  const byFull = peopleNamedIn(raw, people);
+  if (byFull.length === 1) return byFull[0];
+
+  const lower = raw.toLowerCase();
+  const byLast = people.filter((p) => lastNameOf(p.name).toLowerCase() === lower);
+  if (byLast.length === 1) return byLast[0].id;
+
+  const byFirst = people.filter((p) => firstNameOf(p.name).toLowerCase() === lower);
+  if (byFirst.length === 1) return byFirst[0].id;
+
+  return null;
+}

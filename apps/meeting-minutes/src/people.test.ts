@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import { Pool } from "pg";
-import { addPerson, updatePerson, listPeople, setPersonActive, peopleNamedIn, Person } from "./people";
+import { addPerson, updatePerson, listPeople, setPersonActive, peopleNamedIn, matchPersonByName, Person } from "./people";
 
 const url = process.env.TEST_DATABASE_URL;
 
@@ -67,4 +67,46 @@ test("addPerson validates name and email", { skip: !url }, async () => {
   const badEmail = await addPerson(pool, "X", "not-an-email", "");
   assert.equal(badEmail.ok, false);
   await pool.end();
+});
+
+const person = (id: number, name: string): Person =>
+  ({ id, name, email: "", title: "", active: true });
+
+test("matchPersonByName matches a full name case-insensitively", () => {
+  const people = [person(1, "Jane Doe"), person(2, "Bob Jones")];
+  assert.equal(matchPersonByName("jane doe", people), 1);
+  assert.equal(matchPersonByName("  Jane Doe  ", people), 1);
+});
+
+test("matchPersonByName falls back to a unique last name", () => {
+  const people = [person(1, "Jane Doe"), person(2, "Bob Jones")];
+  assert.equal(matchPersonByName("Doe", people), 1);
+});
+
+test("matchPersonByName falls back to a unique first name", () => {
+  const people = [person(1, "Jane Doe"), person(2, "Bob Jones")];
+  assert.equal(matchPersonByName("Bob", people), 2);
+});
+
+test("matchPersonByName refuses an ambiguous last name", () => {
+  const people = [person(1, "Jane Doe"), person(2, "John Doe")];
+  assert.equal(matchPersonByName("Doe", people), null);
+});
+
+test("matchPersonByName refuses an ambiguous first name", () => {
+  const people = [person(1, "Jane Doe"), person(2, "Jane Smith")];
+  assert.equal(matchPersonByName("Jane", people), null);
+});
+
+test("matchPersonByName returns null for unknown, blank, and one-character names", () => {
+  const people = [person(1, "Jane Doe")];
+  assert.equal(matchPersonByName("Carlos Vega", people), null);
+  assert.equal(matchPersonByName("   ", people), null);
+  assert.equal(matchPersonByName("J", people), null);
+  assert.equal(matchPersonByName("Jane Doe", []), null);
+});
+
+test("matchPersonByName finds a full name embedded in a longer phrase", () => {
+  const people = [person(1, "Jane Doe")];
+  assert.equal(matchPersonByName("Treasurer Jane Doe", people), 1);
 });
