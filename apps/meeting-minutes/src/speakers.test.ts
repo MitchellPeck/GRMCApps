@@ -86,3 +86,20 @@ test("absorbMicroTurns handles empty and single-segment input", () => {
   const one = [seg("a", "SPEAKER_00", 0, 1)];
   assert.deepEqual(absorbMicroTurns(one).map((s) => s.speaker), ["SPEAKER_00"]);
 });
+
+test("absorbMicroTurns resolves adjacent ambiguous short turns leftmost-first", () => {
+  // When two adjacent short turns are both eligible (sandwiched between
+  // same-speaker neighbors), the leftmost wins — a deliberate tie-break.
+  // Later reconciliation passes handle residual ambiguity.
+  const segs = [
+    seg("Long intro from speaker zero", "SPEAKER_00", 0, 4),
+    seg("uh", "SPEAKER_01", 4, 4.5),
+    seg("hmm", "SPEAKER_00", 4.5, 5.4),
+    seg("Long outro from speaker one", "SPEAKER_01", 5.4, 9),
+  ];
+  const out = absorbMicroTurns(segs);
+  // Leftmost (SPEAKER_01 at index 1) is absorbed first → SPEAKER_00.
+  // After rescan, SPEAKER_00 at index 2 is now adjacent to SPEAKER_00 at index 0,
+  // so it doesn't qualify (cur.speaker === prev.speaker). Result: all SPEAKER_00.
+  assert.deepEqual(out.map((s) => s.speaker), ["SPEAKER_00", "SPEAKER_00", "SPEAKER_00", "SPEAKER_01"]);
+});

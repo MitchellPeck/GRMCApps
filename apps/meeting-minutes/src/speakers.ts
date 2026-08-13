@@ -39,6 +39,9 @@ export function absorbMicroTurns(
   for (;;) {
     const turns = buildTurns(out);
     let merged = false;
+    // Adjacent turns from buildTurns always differ in speaker. When two adjacent short
+    // turns are both eligible for absorption, the leftmost wins (tie-break is deliberate;
+    // later reconciliation passes clean up residual ambiguity).
     for (let i = 1; i < turns.length - 1; i++) {
       const prev = turns[i - 1];
       const cur = turns[i];
