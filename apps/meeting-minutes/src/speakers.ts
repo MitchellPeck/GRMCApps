@@ -1,4 +1,5 @@
 import { DiarizedSegment } from "./whisper";
+import { SpeakerMap, distinctSpeakers, friendlyLabel } from "./transcript";
 
 // A turn shorter than this, sandwiched between two turns of the same other
 // speaker, is treated as a diarization glitch rather than a real interjection.
@@ -55,4 +56,64 @@ export function absorbMicroTurns(
     }
     if (!merged) return out;
   }
+}
+
+const SAMPLE_MAX_CHARS = 80;
+
+// Per-voice talk time and a representative quote. Rendered in the "Who is
+// speaking?" rows so several near-identical "Speaker N" entries can be told
+// apart. `label` is positional (first-appearance order), matching
+// friendlyLabel; the array itself is sorted by talk time descending.
+export interface SpeakerStat {
+  speaker: string;  // raw diarization label, e.g. "SPEAKER_00"
+  label: string;    // "Speaker 1", "Speaker 2", …
+  seconds: number;
+  share: number;    // 0..1 of total labelled speaking time
+  sample: string;
+}
+
+export function speakerStats(segments: DiarizedSegment[]): SpeakerStat[] {
+  const order = distinctSpeakers(segments);
+  if (!order.length) return [];
+  const seconds = new Map<string, number>();
+  const longest = new Map<string, string>();
+  for (const s of segments) {
+    if (!s.speaker) continue;
+    seconds.set(s.speaker, (seconds.get(s.speaker) ?? 0) + Math.max(0, s.end - s.start));
+    const best = longest.get(s.speaker) ?? "";
+    if (s.text.length > best.length) longest.set(s.speaker, s.text);
+  }
+  const total = [...seconds.values()].reduce((a, b) => a + b, 0);
+  return order
+    .map((speaker) => {
+      const raw = longest.get(speaker) ?? "";
+      const sample = raw.length > SAMPLE_MAX_CHARS ? `${raw.slice(0, SAMPLE_MAX_CHARS)}…` : raw;
+      const secs = seconds.get(speaker) ?? 0;
+      return { speaker, label: friendlyLabel(speaker, order), seconds: secs, share: total > 0 ? secs / total : 0, sample };
+    })
+    .sort((a, b) => b.seconds - a.seconds);
+}
+
+// The label that spoke the most. Ties resolve to whichever appeared first.
+export function dominantSpeaker(segments: DiarizedSegment[]): string {
+  const stats = speakerStats(segments);
+  return stats.length ? stats[0].speaker : "";
+}
+
+// Map the busiest voice to the agenda item's presenter. Callers must only pass
+// a presenter who is a selected attendee of the meeting. Never overwrites an
+// existing assignment, and does nothing if the presenter already owns a voice.
+export function assignPresenterToDominant(
+  segments: DiarizedSegment[],
+  map: SpeakerMap,
+  presenterName: string
+): SpeakerMap {
+  const name = presenterName.trim();
+  if (!name) return map;
+  const taken = Object.values(map).some((n) => n.trim().toLowerCase() === name.toLowerCase());
+  if (taken) return map;
+  const dom = dominantSpeaker(segments);
+  if (!dom) return map;
+  if (map[dom] && map[dom].trim()) return map;
+  return { ...map, [dom]: name };
 }

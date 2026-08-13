@@ -1,6 +1,8 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { buildTurns, absorbMicroTurns } from "./speakers";
+import {
+  buildTurns, absorbMicroTurns, speakerStats, dominantSpeaker, assignPresenterToDominant,
+} from "./speakers";
 import { DiarizedSegment } from "./whisper";
 
 const seg = (text: string, speaker: string, start: number, end: number): DiarizedSegment =>
@@ -102,4 +104,74 @@ test("absorbMicroTurns resolves adjacent ambiguous short turns leftmost-first", 
   // After rescan, SPEAKER_00 at index 2 is now adjacent to SPEAKER_00 at index 0,
   // so it doesn't qualify (cur.speaker === prev.speaker). Result: all SPEAKER_00.
   assert.deepEqual(out.map((s) => s.speaker), ["SPEAKER_00", "SPEAKER_00", "SPEAKER_00", "SPEAKER_01"]);
+});
+
+test("speakerStats ranks by talk time and keeps first-appearance labels", () => {
+  const segs = [
+    seg("Short opener.", "SPEAKER_00", 0, 2),
+    seg("A much longer explanation of the budget position.", "SPEAKER_01", 2, 12),
+    seg("Right.", "SPEAKER_00", 12, 13),
+  ];
+  const stats = speakerStats(segs);
+  assert.equal(stats.length, 2);
+  assert.equal(stats[0].speaker, "SPEAKER_01");
+  assert.equal(stats[0].label, "Speaker 2");   // second to appear
+  assert.equal(stats[0].seconds, 10);
+  assert.equal(stats[1].speaker, "SPEAKER_00");
+  assert.equal(stats[1].label, "Speaker 1");
+  assert.equal(stats[1].seconds, 3);
+  assert.equal(Math.round(stats[0].share * 100), 77);
+  assert.equal(stats[0].sample, "A much longer explanation of the budget position.");
+});
+
+test("speakerStats ignores unlabelled segments and returns empty for none", () => {
+  assert.deepEqual(speakerStats([]), []);
+  assert.deepEqual(speakerStats([seg("hi", "", 0, 1)]), []);
+});
+
+test("speakerStats truncates a long sample quote", () => {
+  const long = "x".repeat(200);
+  const stats = speakerStats([seg(long, "SPEAKER_00", 0, 5)]);
+  assert.equal(stats[0].sample.length, 81); // 80 chars + the single "…" character
+  assert.ok(stats[0].sample.endsWith("…"));
+});
+
+test("dominantSpeaker picks the label with the most total speaking time", () => {
+  const segs = [
+    seg("a", "SPEAKER_00", 0, 2),
+    seg("b", "SPEAKER_01", 2, 3),
+    seg("c", "SPEAKER_01", 3, 4),
+    seg("d", "SPEAKER_00", 4, 9),
+  ];
+  assert.equal(dominantSpeaker(segs), "SPEAKER_00");
+  assert.equal(dominantSpeaker([]), "");
+});
+
+test("assignPresenterToDominant maps the busiest voice to the presenter", () => {
+  const segs = [
+    seg("a", "SPEAKER_00", 0, 10),
+    seg("b", "SPEAKER_01", 10, 12),
+  ];
+  assert.deepEqual(assignPresenterToDominant(segs, {}, "Alice Smith"), { SPEAKER_00: "Alice Smith" });
+});
+
+test("assignPresenterToDominant is a no-op when the presenter already has a voice", () => {
+  const segs = [
+    seg("a", "SPEAKER_00", 0, 10),
+    seg("b", "SPEAKER_01", 10, 12),
+  ];
+  const map = { SPEAKER_01: "alice smith" };
+  assert.deepEqual(assignPresenterToDominant(segs, map, "Alice Smith"), map);
+});
+
+test("assignPresenterToDominant never overwrites an existing name on the busiest voice", () => {
+  const segs = [seg("a", "SPEAKER_00", 0, 10), seg("b", "SPEAKER_01", 10, 12)];
+  const map = { SPEAKER_00: "Bob Jones" };
+  assert.deepEqual(assignPresenterToDominant(segs, map, "Alice Smith"), map);
+});
+
+test("assignPresenterToDominant is a no-op without a presenter or segments", () => {
+  const segs = [seg("a", "SPEAKER_00", 0, 10)];
+  assert.deepEqual(assignPresenterToDominant(segs, {}, "  "), {});
+  assert.deepEqual(assignPresenterToDominant([], {}, "Alice Smith"), {});
 });
