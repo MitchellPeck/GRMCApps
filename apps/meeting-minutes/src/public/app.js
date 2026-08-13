@@ -24,6 +24,106 @@ function msg(id, kind, text){
 }
 function fmtDate(s){ if(!s) return ''; try { return new Date(s).toLocaleString(); } catch(e){ return s; } }
 
+// ── Modal ───────────────────────────────────────────────────────────────────
+// One shared dialog for every edit flow. Fields are declared as data; onSave
+// receives the collected values plus a done(errorOrNull) callback so it can
+// keep the modal open and show a server error.
+var modalEsc = null;
+
+function closeModal(){
+  var root=document.getElementById('modal-root');
+  if(root) root.innerHTML='';
+  if(modalEsc){ document.removeEventListener('keydown', modalEsc); modalEsc=null; }
+}
+
+function modalFieldHtml(f){
+  var id='mf-'+f.id;
+  if(f.type==='checkbox'){
+    return '<div class="field modal-check"><input type="checkbox" id="'+id+'"'+(f.value?' checked':'')+'>'
+      +'<label for="'+id+'" style="margin:0">'+esc(f.label)+'</label></div>';
+  }
+  var input;
+  if(f.type==='textarea'){
+    input='<textarea id="'+id+'" placeholder="'+esc(f.placeholder||'')+'">'+esc(f.value||'')+'</textarea>';
+  } else if(f.type==='select'){
+    input='<select id="'+id+'">'+(f.options||[]).map(function(o){
+      return '<option value="'+esc(o.value)+'"'+(String(o.value)===String(f.value)?' selected':'')+'>'+esc(o.label)+'</option>';
+    }).join('')+'</select>';
+  } else {
+    input='<input type="text" id="'+id+'" value="'+esc(f.value||'')+'" placeholder="'+esc(f.placeholder||'')+'">';
+  }
+  return '<div class="field"><label for="'+id+'">'+esc(f.label)+'</label>'+input+'</div>';
+}
+
+function openModal(opts){
+  closeModal();
+  var root=document.getElementById('modal-root');
+  if(!root) return;
+  var fields=opts.fields||[];
+  var h='<div class="modal-backdrop" id="modal-backdrop"><div class="modal" role="dialog" aria-modal="true">'
+    +'<h3>'+esc(opts.title)+'</h3>'
+    +'<div id="modal-msg"></div>'
+    +fields.map(modalFieldHtml).join('');
+  if(opts.danger){
+    h+='<div class="modal-danger"><div class="hint">'+esc(opts.danger.hint)+'</div>'
+      +'<div class="field"><input type="text" id="mf-danger-confirm" placeholder="'+esc(opts.danger.confirmText)+'"></div>'
+      +'<button class="btn btn-danger" id="modal-danger-btn" data-default="'+esc(opts.danger.label)+'" disabled>'+esc(opts.danger.label)+'</button></div>';
+  }
+  h+='<div class="modal-actions">'
+    +'<button class="btn btn-secondary" id="modal-cancel">Cancel</button>'
+    +'<button class="btn btn-primary" id="modal-save" data-default="'+esc(opts.saveLabel||'Save')+'">'+esc(opts.saveLabel||'Save')+'</button>'
+    +'</div></div></div>';
+  root.innerHTML=h;
+
+  function values(){
+    var out={};
+    fields.forEach(function(f){
+      var el=document.getElementById('mf-'+f.id);
+      if(!el) return;
+      out[f.id] = f.type==='checkbox' ? el.checked : el.value;
+    });
+    return out;
+  }
+  function done(err){
+    if(err){ setBtn('modal-save', false); msg('modal-msg','err',err); return; }
+    closeModal();
+  }
+  function save(){
+    var vals=values();
+    var missing=fields.filter(function(f){ return f.required && !String(vals[f.id]||'').trim(); })[0];
+    if(missing){ msg('modal-msg','err',missing.label+' is required.'); return; }
+    msg('modal-msg','',''); setBtn('modal-save', true, 'Saving...');
+    opts.onSave(vals, done);
+  }
+
+  document.getElementById('modal-save').addEventListener('click', save);
+  document.getElementById('modal-cancel').addEventListener('click', closeModal);
+  document.getElementById('modal-backdrop').addEventListener('click', function(e){
+    if(e.target && e.target.id==='modal-backdrop') closeModal();
+  });
+  modalEsc=function(e){
+    if(e.key==='Escape'){ closeModal(); return; }
+    if(e.key==='Enter' && e.target && e.target.tagName!=='TEXTAREA'){ save(); }
+  };
+  document.addEventListener('keydown', modalEsc);
+
+  if(opts.danger){
+    var confirmEl=document.getElementById('mf-danger-confirm');
+    var dangerBtn=document.getElementById('modal-danger-btn');
+    confirmEl.addEventListener('input', function(){
+      dangerBtn.disabled = confirmEl.value.trim() !== opts.danger.confirmText;
+    });
+    dangerBtn.addEventListener('click', function(){
+      if(dangerBtn.disabled) return;
+      setBtn('modal-danger-btn', true, 'Deleting...');
+      opts.danger.onConfirm(done);
+    });
+  }
+
+  var first=fields[0];
+  if(first){ var fe=document.getElementById('mf-'+first.id); if(fe) fe.focus(); }
+}
+
 // Minimal, safe Markdown → HTML (headings, bullets, bold, paragraphs).
 function renderMarkdown(md){
   var lines = String(md||'').split(/\r?\n/), out=[], inList=false;
