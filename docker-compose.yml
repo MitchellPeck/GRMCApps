@@ -182,6 +182,9 @@ services:
       MEETINGMINUTES_DB_NAME: "${MEETINGMINUTES_DB_NAME}"
       # Self-hosted transcription (internal, keyless).
       WHISPER_REST_URL: "http://whisper:9000"
+      MINUTES_DATA_DIR: "/data"
+    volumes:
+      - minutesdata:/data
     depends_on:
       postgres:
         condition: service_healthy
@@ -241,3 +244,4 @@ volumes:
   pgdata:
   letsencrypt:
   whisperdata:
+  minutesdata:

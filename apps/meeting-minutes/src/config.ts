@@ -11,4 +11,8 @@ export const config = {
   // keyless). Recorded audio is POSTed to the OpenAI-compatible REST endpoint;
   // audio never leaves the host.
   whisperRestUrl: process.env.WHISPER_REST_URL || "http://whisper:9000",
+  // Persistent storage for meeting audio, mounted from the `minutesdata`
+  // volume. Recordings are kept for the life of the meeting so a transcription
+  // can always be retried or the original audio downloaded.
+  dataDir: process.env.MINUTES_DATA_DIR || "/data",
 };
