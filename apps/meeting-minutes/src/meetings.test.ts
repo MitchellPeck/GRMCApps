@@ -41,8 +41,8 @@ test("full meeting lifecycle: attendees, agenda, presenters, summary, report", {
 
   // Agenda extraction replace
   await replaceAgendaItems(pool, meetingId, [
-    { title: "Budget", description: "Q2" },
-    { title: "Missions", description: "" },
+    { title: "Budget", description: "Q2", presenter: "" },
+    { title: "Missions", description: "", presenter: "" },
   ], "agenda.pdf");
   let items = await listAgendaItems(pool, meetingId);
   assert.equal(items.length, 2);
@@ -50,7 +50,7 @@ test("full meeting lifecycle: attendees, agenda, presenters, summary, report", {
   assert.equal((await getMeeting(pool, meetingId))!.agenda_file_name, "agenda.pdf");
 
   // Re-upload replaces
-  await replaceAgendaItems(pool, meetingId, [{ title: "Only", description: "" }], "a2.pdf");
+  await replaceAgendaItems(pool, meetingId, [{ title: "Only", description: "", presenter: "" }], "a2.pdf");
   items = await listAgendaItems(pool, meetingId);
   assert.equal(items.length, 1);
 

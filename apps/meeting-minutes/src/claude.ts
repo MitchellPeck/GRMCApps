@@ -48,6 +48,7 @@ async function callClaude(
 export interface ExtractedItem {
   title: string;
   description: string;
+  presenter: string; // as written in the document; "" when none is named
 }
 
 // The set of upload types we can hand to Claude for agenda extraction.
@@ -63,9 +64,14 @@ const EXTRACT_SYSTEM = `You extract the agenda items from a meeting agenda docum
 Return ONLY a JSON array. Each element is an object with:
   "title": a short label for the agenda item (required)
   "description": any sub-points, context, or details for that item ("" if none)
-Preserve the order items appear in the document. Do not invent items. Ignore
-headers, footers, page numbers, and boilerplate. If the document has no
-discernible agenda items, return [].`;
+  "presenter": the name of the person presenting, leading, or reporting on this
+    item, written exactly as it appears in the document ("" if none is named)
+Put a presenter's name in "presenter" ONLY. Strip phrasing like "Presented by
+Jane Doe", "— Jane Doe", "(Jane Doe)", or "Report from Jane Doe" out of both
+"title" and "description"; do not leave the name duplicated there.
+Preserve the order items appear in the document. Do not invent items or
+presenters. Ignore headers, footers, page numbers, and boilerplate. If the
+document has no discernible agenda items, return [].`;
 
 // Ask Claude to turn an uploaded agenda file into an ordered list of items.
 export async function extractAgendaItems(
@@ -109,6 +115,7 @@ export function parseItems(raw: string): ExtractedItem[] {
     .map((el) => ({
       title: String(el?.title ?? "").trim(),
       description: String(el?.description ?? "").trim(),
+      presenter: String(el?.presenter ?? "").trim(),
     }))
     .filter((el) => el.title.length > 0);
 }

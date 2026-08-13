@@ -62,3 +62,20 @@ test("parseSummary falls back to raw text when not JSON", () => {
   assert.equal(r.summary, "plain summary text");
   assert.deepEqual(r.actionItems, []);
 });
+
+test("parseItems reads the presenter field", () => {
+  const raw = '[{"title":"Budget","description":"Q2 numbers","presenter":"Jane Doe"}]';
+  assert.deepEqual(parseItems(raw), [{ title: "Budget", description: "Q2 numbers", presenter: "Jane Doe" }]);
+});
+
+test("parseItems defaults a missing or blank presenter to an empty string", () => {
+  const raw = '[{"title":"Budget","description":""},{"title":"Missions","description":"","presenter":"   "}]';
+  assert.deepEqual(parseItems(raw), [
+    { title: "Budget", description: "", presenter: "" },
+    { title: "Missions", description: "", presenter: "" },
+  ]);
+});
+
+test("parseItems trims a padded presenter name", () => {
+  assert.equal(parseItems('[{"title":"T","description":"","presenter":"  Jane Doe  "}]')[0].presenter, "Jane Doe");
+});
