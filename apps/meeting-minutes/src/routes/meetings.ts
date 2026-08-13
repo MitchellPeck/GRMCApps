@@ -1,17 +1,20 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
+import { createReadStream, existsSync } from "node:fs";
 import { pool } from "../db";
 import { getIdentity } from "../identity";
 import { listPeople, peopleNamedIn } from "../people";
 import {
   extractAgendaItems, isSupportedAgendaType, summarizeItem, generateReport,
 } from "../claude";
-import { transcribeAudio, hasAudioExtension } from "../whisper";
-import { distinctSpeakers } from "../transcript";
+import { hasAudioExtension } from "../whisper";
 import {
   createMeeting, listMeetings, getMeeting, updateMeeting, deleteMeeting,
   setAttendees, getAttendeeIds, replaceAgendaItems, addAgendaItem,
   listAgendaItems, getAgendaItem, updateAgendaItem, deleteAgendaItem, saveReport,
+  setTranscribeStatus, listItemStatuses,
 } from "../meetings";
+import { enqueueTranscription, enqueueStoredRecording } from "../transcribeQueue";
+import { saveRecording, getRecording, listRecordings } from "../recordings";
 
 interface UploadFile { fileName: string; mimeType: string; buffer: Buffer }
 
@@ -57,11 +60,15 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
     const id = Number((req.params as { id: string }).id);
     const meeting = await getMeeting(pool, id);
     if (!meeting) { reply.code(404); return { ok: false, error: "Meeting not found." }; }
+    const items = await listAgendaItems(pool, id);
+    const withRecordings = await Promise.all(
+      items.map(async (it) => ({ ...it, recordings: await listRecordings(pool, it.id) }))
+    );
     return {
       ok: true,
       meeting,
       attendeeIds: await getAttendeeIds(pool, id),
-      items: await listAgendaItems(pool, id),
+      items: withRecordings,
     };
   });
 
@@ -164,10 +171,10 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
     return { ok: true };
   });
 
-  // Transcribe (and diarize) a recording for an item. Replaces the item's
-  // transcript with the speaker-attributed result. When exactly one speaker is
-  // detected and the item has presenter(s), auto-map that speaker to the first
-  // presenter so the transcript is named without manual mapping.
+  // Accept a recording for an item and queue it for transcription. The audio is
+  // written to the data volume BEFORE the job is queued, so a container restart
+  // can resume it and the recording is always recoverable. Returns immediately —
+  // the caller polls /api/meetings/:id/status for progress.
   app.post("/api/items/:itemId/transcribe", async (req, reply) => {
     try {
       const itemId = Number((req.params as { itemId: string }).itemId);
@@ -179,27 +186,57 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
         reply.code(400);
         return { ok: false, error: "Upload an audio recording (mp3, m4a, wav, webm, …)." };
       }
-      const result = await transcribeAudio(file);
-      const speakers = distinctSpeakers(result.segments);
-
-      const names = await nameMap();
-      const speakerMap: Record<string, string> = {};
-      if (speakers.length === 1 && item.presenter_ids.length) {
-        const name = names.get(item.presenter_ids[0]);
-        if (name) speakerMap[speakers[0]] = name;
-      }
-
-      await updateAgendaItem(pool, itemId, { transcriptSegments: result.segments, speakerMap });
-      const updated = await getAgendaItem(pool, itemId);
-      return {
-        ok: true,
-        transcript: updated?.transcript ?? result.text,
-        speakers,
-        speakerMap: updated?.speaker_map ?? speakerMap,
-      };
+      const rec = await saveRecording(pool, itemId, file);
+      await setTranscribeStatus(pool, itemId, "queued");
+      enqueueTranscription({
+        itemId,
+        recordingId: rec.id,
+        path: rec.storage_path,
+        fileName: rec.file_name,
+        mimeType: rec.mime_type,
+      });
+      reply.code(202);
+      return { ok: true, recordingId: rec.id, status: "queued" };
     } catch (e) {
       return uploadErrorResponse(reply, e);
     }
+  });
+
+  // Re-run transcription on a recording that is already stored.
+  app.post("/api/items/:itemId/retranscribe", async (req, reply) => {
+    const itemId = Number((req.params as { itemId: string }).itemId);
+    const b = (req.body ?? {}) as { recordingId?: number };
+    const recordingId = Number(b.recordingId);
+    if (!Number.isFinite(recordingId)) { reply.code(400); return { ok: false, error: "A recordingId is required." }; }
+    const queued = await enqueueStoredRecording(itemId, recordingId);
+    if (!queued) { reply.code(404); return { ok: false, error: "That recording is no longer available." }; }
+    reply.code(202);
+    return { ok: true, status: "queued" };
+  });
+
+  // Lightweight poll for the meeting detail view: per-item job state plus the
+  // attendee list, which summarization can change behind the user's back.
+  app.get("/api/meetings/:id/status", async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    if (!(await getMeeting(pool, id))) { reply.code(404); return { ok: false, error: "Meeting not found." }; }
+    return {
+      ok: true,
+      items: await listItemStatuses(pool, id),
+      attendeeIds: await getAttendeeIds(pool, id),
+    };
+  });
+
+  // Stream a stored recording back. Recordings are kept for the life of the
+  // meeting so the original audio is always retrievable.
+  app.get("/api/recordings/:id/download", async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    const rec = await getRecording(pool, id);
+    if (!rec || !rec.storage_path) { reply.code(404); return { ok: false, error: "Recording not found." }; }
+    if (!existsSync(rec.storage_path)) { reply.code(404); return { ok: false, error: "Recording file is missing." }; }
+    const safeName = (rec.file_name || `recording-${rec.id}`).replace(/["\\\r\n]/g, "");
+    reply.header("content-type", rec.mime_type || "application/octet-stream");
+    reply.header("content-disposition", `attachment; filename="${safeName}"`);
+    return reply.send(createReadStream(rec.storage_path));
   });
 
   // Summarize a single agenda item with Claude.
