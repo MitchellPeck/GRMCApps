@@ -293,6 +293,7 @@ export async function updateAgendaItem(
     actionItems?: ActionItem[];
     presenterIds?: number[];
     transcriptSource?: string;
+    speakerOrder?: string[];
   }
 ): Promise<Result<{}>> {
   const existing = await getAgendaItem(pool, itemId);
@@ -320,7 +321,7 @@ export async function updateAgendaItem(
       const map = fields.speakerMap !== undefined ? fields.speakerMap : existing.speaker_map;
       if (fields.transcriptSegments !== undefined) add("transcript_segments", JSON.stringify(segs));
       if (fields.speakerMap !== undefined) add("speaker_map", JSON.stringify(map));
-      add("transcript", renderTranscript(segs, map));
+      add("transcript", renderTranscript(segs, map, fields.speakerOrder));
     } else if (fields.transcript !== undefined) add("transcript", fields.transcript);
     else if (fields.appendTranscript !== undefined && fields.appendTranscript.trim()) {
       const joined = existing.transcript

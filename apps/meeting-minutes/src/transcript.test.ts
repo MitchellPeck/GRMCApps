@@ -67,3 +67,10 @@ test("resolveSpeakerName prefers the mapped name and falls back to Speaker N", (
   assert.equal(resolveSpeakerName("SPEAKER_00", { SPEAKER_01: "Alice" }, order), "Speaker 2");
   assert.equal(resolveSpeakerName("SPEAKER_00", { SPEAKER_00: "   " }, order), "Speaker 2");
 });
+
+test("renderTranscript numbers unmapped speakers from an explicit meeting-wide order", () => {
+  const segs = [seg("Hi.", "SPEAKER_03")];
+  assert.equal(renderTranscript(segs, {}, ["SPEAKER_00", "SPEAKER_03"]), "Speaker 2: Hi.");
+  // Without the explicit order, local numbering applies.
+  assert.equal(renderTranscript(segs, {}), "Speaker 1: Hi.");
+});

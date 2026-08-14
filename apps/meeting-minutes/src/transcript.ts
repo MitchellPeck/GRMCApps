@@ -30,11 +30,14 @@ export function resolveSpeakerName(speaker: string, map: SpeakerMap, order: stri
 // Consecutive segments that resolve to the SAME DISPLAY NAME are merged into
 // one line — several raw labels can map to one person after reconciliation.
 // When no segment carries a speaker label, falls back to plain joined text.
-export function renderTranscript(segments: DiarizedSegment[], map: SpeakerMap): string {
+export function renderTranscript(
+  segments: DiarizedSegment[],
+  map: SpeakerMap,
+  order?: string[]
+): string {
   if (!segments.length) return "";
-  const order = distinctSpeakers(segments);
-  if (!order.length) {
-    // No diarization labels — just the text.
+  const ord = order && order.length ? order : distinctSpeakers(segments);
+  if (!ord.length) {
     return segments.map((s) => s.text).join(" ").trim();
   }
   const lines: string[] = [];
@@ -46,8 +49,8 @@ export function renderTranscript(segments: DiarizedSegment[], map: SpeakerMap): 
     buf = [];
   };
   for (const s of segments) {
-    const spk = s.speaker || (order[0] ?? "SPEAKER_00");
-    const name = resolveSpeakerName(spk, map, order);
+    const spk = s.speaker || (ord[0] ?? "SPEAKER_00");
+    const name = resolveSpeakerName(spk, map, ord);
     if (name !== curName) { flush(); curName = name; }
     buf.push(s.text);
   }
