@@ -5,6 +5,7 @@ import { SpeakerMap, renderTranscript } from "./transcript";
 import { listPeople, matchPersonByName } from "./people";
 import { SpeakerStat, speakerStats } from "./speakers";
 import { removeRecordingFiles, removeMeetingRecordingFiles } from "./recordings";
+import { chronologicalSpeakerOrder } from "./segmentation";
 
 export type MeetingRecordingStatus = "idle" | "recording" | "queued" | "processing" | "done" | "error";
 
@@ -480,4 +481,49 @@ export async function setMeetingSpeakerMap(pool: Pool, meetingId: number, map: S
     meetingId,
     JSON.stringify(map),
   ]);
+}
+
+// Store the meeting-wide speaker map and re-render every meeting-sourced
+// topic against it in one transaction. New names invalidate summaries.
+export async function rewriteMeetingSpeakerMap(
+  pool: Pool,
+  meetingId: number,
+  rawMap: Record<string, unknown>
+): Promise<void> {
+  const map: SpeakerMap = {};
+  for (const [k, v] of Object.entries(rawMap ?? {})) {
+    const name = String(v ?? "").trim();
+    if (name) map[k] = name;
+  }
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("UPDATE meetings SET speaker_map = $2, updated_at = now() WHERE id = $1", [
+      meetingId, JSON.stringify(map),
+    ]);
+    const r = await client.query(
+      `SELECT id, transcript_segments FROM agenda_items
+        WHERE meeting_id = $1 AND transcript_source = 'meeting' ORDER BY position, id`,
+      [meetingId]
+    );
+    const perItem = r.rows.map((row) =>
+      (Array.isArray(row.transcript_segments) ? row.transcript_segments : []) as DiarizedSegment[]
+    );
+    const order = chronologicalSpeakerOrder(perItem);
+    for (let i = 0; i < r.rows.length; i++) {
+      await client.query(
+        `UPDATE agenda_items
+            SET speaker_map = $2, transcript = $3, summary = '', action_items = '[]'::jsonb, status = 'pending'
+          WHERE id = $1`,
+        [Number(r.rows[i].id), JSON.stringify(map), renderTranscript(perItem[i], map, order)]
+      );
+    }
+    await client.query("UPDATE meetings SET updated_at = now() WHERE id = $1", [meetingId]);
+    await client.query("COMMIT");
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
 }

@@ -1,5 +1,6 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import { createReadStream, existsSync } from "node:fs";
+import { extname } from "node:path";
 import { pool } from "../db";
 import { getIdentity } from "../identity";
 import { listPeople, peopleNamedIn } from "../people";
@@ -7,14 +8,19 @@ import {
   extractAgendaItems, isSupportedAgendaType, summarizeItem, generateReport,
 } from "../claude";
 import { hasAudioExtension } from "../whisper";
+import { speakerStats } from "../speakers";
 import {
   createMeeting, listMeetings, getMeeting, updateMeeting, deleteMeeting,
   setAttendees, getAttendeeIds, replaceAgendaItems, addAgendaItem,
   listAgendaItems, getAgendaItem, updateAgendaItem, deleteAgendaItem, saveReport,
   setTranscribeStatus, listItemStatuses, reportFileName,
+  setMeetingRecordingStatus, addTopicMarker, rewriteMeetingSpeakerMap,
 } from "../meetings";
-import { enqueueTranscription, enqueueStoredRecording } from "../transcribeQueue";
-import { saveRecording, getRecording, listRecordings } from "../recordings";
+import { enqueueTranscription, enqueueStoredRecording, enqueueMeetingProcessing } from "../transcribeQueue";
+import {
+  saveRecording, getRecording, listRecordings,
+  createMeetingRecording, appendMeetingChunk, finishMeetingRecording, getMeetingRecording, listMeetingRecordings,
+} from "../recordings";
 
 interface UploadFile { fileName: string; mimeType: string; buffer: Buffer }
 
@@ -64,11 +70,17 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
     const withRecordings = await Promise.all(
       items.map(async (it) => ({ ...it, recordings: await listRecordings(pool, it.id) }))
     );
+    const meetingSourced = withRecordings.filter((it) => it.transcript_source === "meeting");
+    const meetingSpeakerStats = speakerStats(
+      meetingSourced.flatMap((it) => it.transcript_segments).slice().sort((a, b) => a.start - b.start)
+    );
     return {
       ok: true,
       meeting,
       attendeeIds: await getAttendeeIds(pool, id),
       items: withRecordings,
+      meetingRecordings: await listMeetingRecordings(pool, id),
+      meetingSpeakerStats,
     };
   });
 
@@ -109,6 +121,23 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
     if (!(await getMeeting(pool, id))) { reply.code(404); return { ok: false, error: "Meeting not found." }; }
     const b = (req.body ?? {}) as { personIds?: number[] };
     await setAttendees(pool, id, (b.personIds ?? []).map(Number));
+    return { ok: true };
+  });
+
+  // Save the meeting-wide speaker→name map and re-render every meeting-sourced
+  // topic against it (one transaction; see rewriteMeetingSpeakerMap).
+  app.put("/api/meetings/:id/speaker-map", async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    if (!Number.isFinite(id) || !(await getMeeting(pool, id))) {
+      reply.code(404);
+      return { ok: false, error: "Meeting not found." };
+    }
+    const b = (req.body ?? {}) as { speakerMap?: unknown };
+    if (!b.speakerMap || typeof b.speakerMap !== "object" || Array.isArray(b.speakerMap)) {
+      reply.code(400);
+      return { ok: false, error: "speakerMap must be an object." };
+    }
+    await rewriteMeetingSpeakerMap(pool, id, b.speakerMap as Record<string, unknown>);
     return { ok: true };
   });
 
@@ -214,15 +243,92 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
     return { ok: true, status: "queued" };
   });
 
+  // Start a whole-meeting recording: create the (empty) file + row and flip
+  // the meeting into "recording". Chunks then append via /chunk below.
+  app.post("/api/meetings/:id/recording/start", async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    if (!Number.isFinite(id) || !(await getMeeting(pool, id))) {
+      reply.code(404);
+      return { ok: false, error: "Meeting not found." };
+    }
+    const b = (req.body ?? {}) as { mimeType?: string };
+    const rec = await createMeetingRecording(pool, id, b.mimeType ?? "");
+    await setMeetingRecordingStatus(pool, id, "recording");
+    return { ok: true, recordingId: rec.id };
+  });
+
+  // Append one uploaded chunk to a whole-meeting recording (multipart file).
+  app.post("/api/meeting-recordings/:rid/chunk", async (req, reply) => {
+    try {
+      const rid = Number((req.params as { rid: string }).rid);
+      if (!Number.isFinite(rid)) { reply.code(404); return { ok: false, error: "Recording not found." }; }
+      const { file } = await readMultipart(req);
+      if (!file) { reply.code(400); return { ok: false, error: "An audio chunk is required." }; }
+      const byteSize = await appendMeetingChunk(pool, rid, file.buffer);
+      return { ok: true, byteSize };
+    } catch (e) {
+      if ((e as Error).message === "Recording not found.") {
+        reply.code(404);
+        return { ok: false, error: "Recording not found." };
+      }
+      return uploadErrorResponse(reply, e);
+    }
+  });
+
+  // Record a topic switch while capturing: "at second N the meeting moved to
+  // item X". Processing turns these into per-item audio windows.
+  app.post("/api/meeting-recordings/:rid/marker", async (req, reply) => {
+    const rid = Number((req.params as { rid: string }).rid);
+    const b = (req.body ?? {}) as { itemId?: number; atSeconds?: number };
+    const itemId = Number(b.itemId);
+    const atSeconds = Number(b.atSeconds);
+    if (!Number.isFinite(itemId) || !Number.isFinite(atSeconds)) {
+      reply.code(400);
+      return { ok: false, error: "itemId and atSeconds must be numbers." };
+    }
+    if (!Number.isFinite(rid) || !(await getMeetingRecording(pool, rid))) {
+      reply.code(404);
+      return { ok: false, error: "Recording not found." };
+    }
+    await addTopicMarker(pool, rid, itemId, atSeconds);
+    return { ok: true };
+  });
+
+  // Stop capturing: stamp the recording finished and queue it for processing.
+  app.post("/api/meeting-recordings/:rid/finish", async (req, reply) => {
+    const rid = Number((req.params as { rid: string }).rid);
+    const rec = Number.isFinite(rid) ? await getMeetingRecording(pool, rid) : null;
+    if (!rec) { reply.code(404); return { ok: false, error: "Recording not found." }; }
+    await finishMeetingRecording(pool, rid);
+    const queued = await enqueueMeetingProcessing(rec.meeting_id, rid);
+    if (!queued) { reply.code(404); return { ok: false, error: "That recording is no longer available." }; }
+    reply.code(202);
+    return { ok: true, status: "queued" };
+  });
+
+  // Retry / reprocess a stored whole-meeting recording without re-stamping it
+  // finished (used after a processing failure, or to redo a segmentation).
+  app.post("/api/meeting-recordings/:rid/reprocess", async (req, reply) => {
+    const rid = Number((req.params as { rid: string }).rid);
+    const rec = Number.isFinite(rid) ? await getMeetingRecording(pool, rid) : null;
+    if (!rec) { reply.code(404); return { ok: false, error: "Recording not found." }; }
+    const queued = await enqueueMeetingProcessing(rec.meeting_id, rid);
+    if (!queued) { reply.code(404); return { ok: false, error: "That recording is no longer available." }; }
+    reply.code(202);
+    return { ok: true, status: "queued" };
+  });
+
   // Lightweight poll for the meeting detail view: per-item job state plus the
   // attendee list, which summarization can change behind the user's back.
   app.get("/api/meetings/:id/status", async (req, reply) => {
     const id = Number((req.params as { id: string }).id);
-    if (!(await getMeeting(pool, id))) { reply.code(404); return { ok: false, error: "Meeting not found." }; }
+    const meeting = await getMeeting(pool, id);
+    if (!meeting) { reply.code(404); return { ok: false, error: "Meeting not found." }; }
     return {
       ok: true,
       items: await listItemStatuses(pool, id),
       attendeeIds: await getAttendeeIds(pool, id),
+      meeting: { recordingStatus: meeting.recording_status, recordingError: meeting.recording_error },
     };
   });
 
@@ -237,6 +343,23 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
     // chars > 0xFF in header values), falling back to a generated name.
     const cleaned = (rec.file_name || "").replace(/["\\\r\n]/g, "").replace(/[^\x20-\x7E]/g, "").trim();
     const safeName = cleaned || `recording-${rec.id}`;
+    reply.header("content-type", rec.mime_type || "application/octet-stream");
+    reply.header("content-disposition", `attachment; filename="${safeName}"`);
+    return reply.send(createReadStream(rec.storage_path));
+  });
+
+  // Stream a stored whole-meeting recording back, same lifetime/hygiene as
+  // the per-item download above. There is no stored file_name, so the
+  // filename is built from the ids plus the extension already on disk.
+  app.get("/api/meeting-recordings/:rid/download", async (req, reply) => {
+    const rid = Number((req.params as { rid: string }).rid);
+    const rec = Number.isFinite(rid) ? await getMeetingRecording(pool, rid) : null;
+    if (!rec || !rec.storage_path) { reply.code(404); return { ok: false, error: "Recording not found." }; }
+    if (!existsSync(rec.storage_path)) { reply.code(404); return { ok: false, error: "Recording file is missing." }; }
+    const ext = extname(rec.storage_path).replace(/^\./, "") || "webm";
+    const rawName = `meeting-${rec.meeting_id}-recording-${rec.id}.${ext}`;
+    const cleaned = rawName.replace(/["\\\r\n]/g, "").replace(/[^\x20-\x7E]/g, "").trim();
+    const safeName = cleaned || `meeting-recording-${rec.id}`;
     reply.header("content-type", rec.mime_type || "application/octet-stream");
     reply.header("content-disposition", `attachment; filename="${safeName}"`);
     return reply.send(createReadStream(rec.storage_path));

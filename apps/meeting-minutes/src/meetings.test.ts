@@ -8,7 +8,7 @@ import {
   listAgendaItems, getAgendaItem, updateAgendaItem, deleteAgendaItem, saveReport,
   setTranscribeStatus, listUnfinishedTranscriptions, listItemStatuses, reportFileName,
   setMeetingRecordingStatus, listUnfinishedMeetingProcessing, addTopicMarker,
-  listTopicMarkers, setMeetingSpeakerMap,
+  listTopicMarkers, setMeetingSpeakerMap, rewriteMeetingSpeakerMap,
 } from "./meetings";
 import { appendMeetingChunk, getMeetingRecording } from "./recordings";
 
@@ -354,6 +354,43 @@ test("meeting chunks append in order and deleteMeeting removes the file", { skip
 
   await deleteMeeting(pool, meetingId);
   await assert.rejects(access(audioPath));
+  await reset(pool);
+  await pool.end();
+});
+
+test("rewriteMeetingSpeakerMap renames every meeting-sourced topic with meeting-wide numbering", { skip: !url }, async () => {
+  const pool = new Pool({ connectionString: url });
+  await reset(pool);
+  const m = await createMeeting(pool, { title: "Board", meetingDate: "", location: "", description: "", email: "", name: "" });
+  assert.ok(m.ok);
+  const meetingId = (m as { ok: true; status: number; id: number }).id;
+  const a = await addAgendaItem(pool, meetingId, "Budget", "");
+  const b = await addAgendaItem(pool, meetingId, "Missions", "");
+  assert.ok(a.ok && b.ok);
+  const aId = (a as { ok: true; status: number; id: number }).id;
+  const bId = (b as { ok: true; status: number; id: number }).id;
+
+  const order = ["SPEAKER_00", "SPEAKER_01"];
+  await updateAgendaItem(pool, aId, {
+    transcriptSegments: [{ text: "Numbers look good.", speaker: "SPEAKER_00", start: 0, end: 5 }],
+    speakerMap: {}, transcriptSource: "meeting", speakerOrder: order, summary: "stale A",
+  });
+  await updateAgendaItem(pool, bId, {
+    transcriptSegments: [{ text: "Trip is planned.", speaker: "SPEAKER_01", start: 30, end: 35 }],
+    speakerMap: {}, transcriptSource: "meeting", speakerOrder: order, summary: "stale B",
+  });
+  // Meeting-wide numbering: item B's only voice is Speaker 2, not Speaker 1.
+  assert.equal((await getAgendaItem(pool, bId))!.transcript, "Speaker 2: Trip is planned.");
+
+  await rewriteMeetingSpeakerMap(pool, meetingId, { SPEAKER_00: "Alice", IGNORED: "" });
+  const aAfter = (await getAgendaItem(pool, aId))!;
+  const bAfter = (await getAgendaItem(pool, bId))!;
+  assert.equal(aAfter.transcript, "Alice: Numbers look good.");
+  assert.equal(bAfter.transcript, "Speaker 2: Trip is planned.");
+  assert.equal(aAfter.summary, "");
+  assert.equal(aAfter.status, "pending");
+  assert.deepEqual((await getMeeting(pool, meetingId))!.speaker_map, { SPEAKER_00: "Alice" });
+
   await reset(pool);
   await pool.end();
 });
