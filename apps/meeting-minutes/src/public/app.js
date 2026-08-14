@@ -85,7 +85,18 @@ function openModal(opts){
     return out;
   }
   function done(err){
-    if(err){ setBtn('modal-save', false); setBtn('modal-danger-btn', false); msg('modal-msg','err',err); return; }
+    if(err){
+      setBtn('modal-save', false); setBtn('modal-danger-btn', false);
+      // A failed action must never leave the danger gate open: re-apply the
+      // typed-confirmation check after the reset.
+      if(opts.danger){
+        var dc=document.getElementById('mf-danger-confirm');
+        var db=document.getElementById('modal-danger-btn');
+        if(db) db.disabled = !dc || dc.value.trim() !== opts.danger.confirmText;
+      }
+      msg('modal-msg','err',err);
+      return;
+    }
     closeModal();
   }
   function save(){
