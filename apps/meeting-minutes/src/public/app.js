@@ -512,6 +512,49 @@ function renderItems(){
   state.items.forEach(function(it){ wireItem(it); });
 }
 
+// Update everything about one already-rendered item without touching the
+// open/collapsed state — the poll runs every 3s and must never collapse the
+// topic the user is typing in.
+function refreshItemView(it){
+  refreshBadge(it);
+  renderSpeakerMap(it);
+  renderRecordings(it);
+  var tx=document.getElementById('tx-'+it.id);
+  if(tx && document.activeElement!==tx && tx.value!==it.transcript) tx.value=it.transcript;
+  var sumEl=document.getElementById('sum-'+it.id);
+  if(sumEl) sumEl.innerHTML=summaryHtml(it);
+  var rs=document.getElementById('recstat-'+it.id);
+  if(rs){
+    if(it.transcribe_status==='queued') rs.textContent='Queued — transcription starts when the one ahead finishes.';
+    else if(it.transcribe_status==='processing') rs.innerHTML='<span class="spin" style="border-top-color:var(--navy)"></span> Transcribing &amp; identifying speakers&hellip;';
+    else if(it.transcribe_status==='error') rs.innerHTML='<span style="color:var(--rej-fg)">'+esc(it.transcribe_error||'Transcription failed.')+'</span>';
+    else rs.textContent='';
+  }
+}
+
+// Merge a freshly fetched item list into state. Rebuilds the DOM only when the
+// set of items actually changed; otherwise patches each card in place.
+function syncItems(fresh){
+  var sameSet = state.items.length===fresh.length && state.items.every(function(old, i){ return old.id===fresh[i].id; });
+  if(!sameSet){ state.items=fresh; renderItems(); return; }
+  fresh.forEach(function(f, i){
+    var it=state.items[i];
+    it.title=f.title; it.description=f.description;
+    it.transcribe_status=f.transcribe_status; it.transcribe_error=f.transcribe_error;
+    it.transcript_segments=f.transcript_segments; it.speaker_map=f.speaker_map;
+    it.speaker_stats=f.speaker_stats; it.recordings=f.recordings||[];
+    it.presenter_ids=f.presenter_ids;
+    // Never clobber text the user is actively editing.
+    var tx=document.getElementById('tx-'+it.id);
+    if(!tx || document.activeElement!==tx) it.transcript=f.transcript;
+    var nt=document.getElementById('nt-'+it.id);
+    if(!nt || document.activeElement!==nt) it.notes=f.notes;
+    if(!it._summarizing && !it._dirty){ it.summary=f.summary; it.action_items=f.action_items; }
+    refreshItemView(it);
+    renderPresenterChips(it);
+  });
+}
+
 function itemHtml(it, idx){
   return '<div class="item" id="item-'+it.id+'">'
     +'<div class="ihead" data-toggle-item="'+it.id+'">'
@@ -531,6 +574,7 @@ function itemHtml(it, idx){
         +'<span class="rec-status" id="recstat-'+it.id+'"></span>'
       +'</div>'
       +'<div class="speakers" id="spk-'+it.id+'"></div>'
+      +'<div class="recordings" id="rec-'+it.id+'"></div>'
       +'<textarea id="tx-'+it.id+'" placeholder="Record or upload audio to transcribe. Speakers are labeled once you record; you can also edit this text." style="margin-top:6px">'+esc(it.transcript)+'</textarea>'
       +'<div class="sublbl">Notes (typed)</div>'
       +'<textarea id="nt-'+it.id+'" placeholder="Optional manual notes">'+esc(it.notes)+'</textarea>'
@@ -548,11 +592,19 @@ function itemHtml(it, idx){
 // True when the item has content worth summarizing.
 function itemHasContent(it){ return !!((it.transcript && it.transcript.trim()) || (it.notes && it.notes.trim())); }
 
-// The header status badge inner HTML for an item's current summary state.
+// True while this item's audio is queued or being transcribed.
+function isTranscribing(it){
+  return it.transcribe_status==='queued' || it.transcribe_status==='processing';
+}
+
+// The header status badge for an item's current transcription + summary state.
 function itemBadgeInner(it){
-  if(it._summarizing) return '<span class="badge b-pending"><span class="spin" style="border-top-color:var(--pending-fg)"></span> Summary generating</span>';
+  if(it.transcribe_status==='queued') return '<span class="badge b-pending">Queued to transcribe</span>';
+  if(it.transcribe_status==='processing') return '<span class="badge b-pending"><span class="spin" style="border-top-color:var(--pending-fg)"></span> Transcribing&hellip;</span>';
+  if(it.transcribe_status==='error') return '<span class="badge b-rejected">Transcription failed</span>';
+  if(it._summarizing) return '<span class="badge b-pending"><span class="spin" style="border-top-color:var(--pending-fg)"></span> Summarizing&hellip;</span>';
   if(it._summaryError) return '<span class="badge b-rejected">Summary failed</span>';
-  if(it.summary && !it._dirty) return '<span class="badge b-approved">Summary generated</span>';
+  if(it.summary && !it._dirty) return '<span class="badge b-approved">Summary ready</span>';
   if(itemHasContent(it)) return '<span class="badge b-changes_requested">Needs summary</span>';
   return '';
 }
@@ -579,6 +631,7 @@ function wireItem(it){
   document.querySelector('[data-toggle-item="'+it.id+'"]').addEventListener('click', function(){ toggleItemOpen(it); });
   renderPresenterChips(it);
   renderSpeakerMap(it);
+  renderRecordings(it);
   var tx=document.getElementById('tx-'+it.id);
   var nt=document.getElementById('nt-'+it.id);
   tx.addEventListener('blur', function(){
@@ -721,6 +774,23 @@ function renderSpeakerMap(it){
       invalidateSummary(it);
     });
   });
+}
+
+// Every recording ever attached to this item. They are kept for the life of
+// the meeting, so the original audio is always downloadable. Task 17 adds the
+// "Transcribe again" action here, once the poller exists to watch the job.
+function renderRecordings(it){
+  var el=document.getElementById('rec-'+it.id); if(!el) return;
+  var recs=it.recordings||[];
+  if(!recs.length){ el.innerHTML=''; return; }
+  el.innerHTML='<div class="sublbl">Recordings</div><ul class="rec-list">'
+    + recs.map(function(r){
+        var size=r.byte_size ? (Math.round(r.byte_size/1024/102.4)/10)+' MB' : '';
+        return '<li><span class="rec-name">'+esc(r.file_name||('recording '+r.id))+'</span>'
+          +(size?'<span class="rec-size">'+esc(size)+'</span>':'')
+          +'<a class="btn-sm" href="/api/recordings/'+r.id+'/download">Download</a></li>';
+      }).join('')
+    + '</ul>';
 }
 
 function renderPresenterChips(it){
