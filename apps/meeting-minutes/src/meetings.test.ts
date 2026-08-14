@@ -6,6 +6,7 @@ import {
   createMeeting, listMeetings, getMeeting, updateMeeting, deleteMeeting,
   setAttendees, getAttendeeIds, replaceAgendaItems, addAgendaItem,
   listAgendaItems, getAgendaItem, updateAgendaItem, deleteAgendaItem, saveReport,
+  setTranscribeStatus, listUnfinishedTranscriptions, listItemStatuses, reportFileName,
 } from "./meetings";
 
 const url = process.env.TEST_DATABASE_URL;
@@ -41,8 +42,8 @@ test("full meeting lifecycle: attendees, agenda, presenters, summary, report", {
 
   // Agenda extraction replace
   await replaceAgendaItems(pool, meetingId, [
-    { title: "Budget", description: "Q2" },
-    { title: "Missions", description: "" },
+    { title: "Budget", description: "Q2", presenter: "" },
+    { title: "Missions", description: "", presenter: "" },
   ], "agenda.pdf");
   let items = await listAgendaItems(pool, meetingId);
   assert.equal(items.length, 2);
@@ -50,7 +51,7 @@ test("full meeting lifecycle: attendees, agenda, presenters, summary, report", {
   assert.equal((await getMeeting(pool, meetingId))!.agenda_file_name, "agenda.pdf");
 
   // Re-upload replaces
-  await replaceAgendaItems(pool, meetingId, [{ title: "Only", description: "" }], "a2.pdf");
+  await replaceAgendaItems(pool, meetingId, [{ title: "Only", description: "", presenter: "" }], "a2.pdf");
   items = await listAgendaItems(pool, meetingId);
   assert.equal(items.length, 1);
 
@@ -134,4 +135,141 @@ test("createMeeting/addAgendaItem require titles", { skip: !url }, async () => {
   const noTitle = await createMeeting(pool, { title: " ", meetingDate: "", location: "", description: "", email: "", name: "" });
   assert.equal(noTitle.ok, false);
   await pool.end();
+});
+
+test("replaceAgendaItems links resolvable presenters and ignores the rest", { skip: !url }, async () => {
+  const pool = new Pool({ connectionString: url });
+  await reset(pool);
+
+  const a = await addPerson(pool, "Jane Doe", "jane@x.com", "Treasurer");
+  const b = await addPerson(pool, "Bob Jones", "bob@x.com", "Clerk");
+  assert.ok(a.ok && b.ok);
+  const janeId = (a as { ok: true; id: number }).id;
+
+  const m = await createMeeting(pool, {
+    title: "Board", meetingDate: "", location: "", description: "", email: "", name: "",
+  });
+  assert.ok(m.ok);
+  const meetingId = (m as { ok: true; status: number; id: number }).id;
+
+  await replaceAgendaItems(pool, meetingId, [
+    { title: "Budget", description: "Q2", presenter: "Jane Doe" },
+    { title: "Grounds", description: "", presenter: "Doe" },        // unique last name
+    { title: "Missions", description: "", presenter: "Carlos Vega" }, // not in the library
+    { title: "Open floor", description: "", presenter: "" },
+  ], "agenda.pdf");
+
+  const items = await listAgendaItems(pool, meetingId);
+  assert.equal(items.length, 4);
+  assert.deepEqual(items[0].presenter_ids, [janeId]);
+  assert.deepEqual(items[1].presenter_ids, [janeId]);
+  assert.deepEqual(items[2].presenter_ids, []);
+  assert.deepEqual(items[3].presenter_ids, []);
+
+  // Importing an agenda must never add attendees.
+  assert.deepEqual(await getAttendeeIds(pool, meetingId), []);
+
+  await reset(pool);
+  await pool.end();
+});
+
+test("transcription status transitions and speaker stats", { skip: !url }, async () => {
+  const pool = new Pool({ connectionString: url });
+  await reset(pool);
+  const m = await createMeeting(pool, {
+    title: "Board", meetingDate: "", location: "", description: "", email: "", name: "",
+  });
+  assert.ok(m.ok);
+  const meetingId = (m as { ok: true; status: number; id: number }).id;
+  const added = await addAgendaItem(pool, meetingId, "Budget", "");
+  assert.ok(added.ok);
+  const itemId = (added as { ok: true; status: number; id: number }).id;
+
+  // A brand-new item is idle with no error.
+  let item = (await getAgendaItem(pool, itemId))!;
+  assert.equal(item.transcribe_status, "idle");
+  assert.equal(item.transcribe_error, "");
+  assert.deepEqual(item.speaker_stats, []);
+
+  await setTranscribeStatus(pool, itemId, "queued");
+  assert.deepEqual(await listUnfinishedTranscriptions(pool), [itemId]);
+
+  await setTranscribeStatus(pool, itemId, "processing");
+  assert.deepEqual(await listUnfinishedTranscriptions(pool), [itemId]);
+
+  await setTranscribeStatus(pool, itemId, "error", "whisper unreachable");
+  item = (await getAgendaItem(pool, itemId))!;
+  assert.equal(item.transcribe_status, "error");
+  assert.equal(item.transcribe_error, "whisper unreachable");
+  assert.deepEqual(await listUnfinishedTranscriptions(pool), []);
+
+  // Moving to done clears the previous error message.
+  await setTranscribeStatus(pool, itemId, "done");
+  item = (await getAgendaItem(pool, itemId))!;
+  assert.equal(item.transcribe_status, "done");
+  assert.equal(item.transcribe_error, "");
+
+  // Stats are derived from the stored segments, sorted by talk time.
+  await updateAgendaItem(pool, itemId, {
+    transcriptSegments: [
+      { text: "Short.", speaker: "SPEAKER_00", start: 0, end: 1 },
+      { text: "A considerably longer contribution.", speaker: "SPEAKER_01", start: 1, end: 9 },
+    ],
+    speakerMap: {},
+  });
+  item = (await getAgendaItem(pool, itemId))!;
+  assert.equal(item.speaker_stats.length, 2);
+  assert.equal(item.speaker_stats[0].speaker, "SPEAKER_01");
+  assert.equal(item.speaker_stats[0].label, "Speaker 2");
+
+  const statuses = await listItemStatuses(pool, meetingId);
+  assert.equal(statuses.length, 1);
+  assert.equal(statuses[0].id, itemId);
+  assert.equal(statuses[0].transcribeStatus, "done");
+  assert.equal(statuses[0].hasSummary, false);
+
+  await updateAgendaItem(pool, itemId, { summary: "We discussed the budget." });
+  assert.equal((await listItemStatuses(pool, meetingId))[0].hasSummary, true);
+
+  await reset(pool);
+  await pool.end();
+});
+
+test("deleteMeeting removes the recordings' audio files", { skip: !url }, async () => {
+  const pool = new Pool({ connectionString: url });
+  await reset(pool);
+  const m = await createMeeting(pool, { title: "Board", meetingDate: "", location: "", description: "", email: "", name: "" });
+  assert.ok(m.ok);
+  const meetingId = (m as { ok: true; status: number; id: number }).id;
+  const added = await addAgendaItem(pool, meetingId, "Budget", "");
+  assert.ok(added.ok);
+  const itemId = (added as { ok: true; status: number; id: number }).id;
+
+  const { mkdtemp, writeFile: writeTmp, access } = await import("node:fs/promises");
+  const { join: joinPath } = await import("node:path");
+  const { tmpdir } = await import("node:os");
+  const dir = await mkdtemp(joinPath(tmpdir(), "mm-rec-"));
+  const audioPath = joinPath(dir, "1.webm");
+  await writeTmp(audioPath, Buffer.from("fake-audio"));
+  await pool.query(
+    "INSERT INTO item_recordings (item_id, file_name, mime_type, byte_size, storage_path) VALUES ($1,'a.webm','audio/webm',10,$2)",
+    [itemId, audioPath]
+  );
+
+  await deleteMeeting(pool, meetingId);
+  await assert.rejects(access(audioPath)); // file gone
+  assert.equal((await listMeetings(pool)).length, 0);
+  await reset(pool);
+  await pool.end();
+});
+
+test("reportFileName slugs the title and date into a safe filename", () => {
+  assert.equal(reportFileName("April Board Meeting", "2026-04-14"), "2026-04-14-april-board-meeting-minutes.md");
+  assert.equal(reportFileName("Budget & Finance!!", ""), "budget-finance-minutes.md");
+  assert.equal(reportFileName("Board", "Apr 14, 7pm"), "apr-14-7pm-board-minutes.md");
+});
+
+test("reportFileName falls back when the title has no usable characters", () => {
+  assert.equal(reportFileName("###", ""), "meeting-minutes.md");
+  assert.equal(reportFileName("", ""), "meeting-minutes.md");
 });

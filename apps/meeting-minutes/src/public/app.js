@@ -24,6 +24,117 @@ function msg(id, kind, text){
 }
 function fmtDate(s){ if(!s) return ''; try { return new Date(s).toLocaleString(); } catch(e){ return s; } }
 
+// ── Modal ───────────────────────────────────────────────────────────────────
+// One shared dialog for every edit flow. Fields are declared as data; onSave
+// receives the collected values plus a done(errorOrNull) callback so it can
+// keep the modal open and show a server error.
+var modalEsc = null;
+
+function closeModal(){
+  var root=document.getElementById('modal-root');
+  if(root) root.innerHTML='';
+  if(modalEsc){ document.removeEventListener('keydown', modalEsc); modalEsc=null; }
+}
+
+function modalFieldHtml(f){
+  var id='mf-'+f.id;
+  if(f.type==='checkbox'){
+    return '<div class="field modal-check"><input type="checkbox" id="'+id+'"'+(f.value?' checked':'')+'>'
+      +'<label for="'+id+'" style="margin:0">'+esc(f.label)+'</label></div>';
+  }
+  var input;
+  if(f.type==='textarea'){
+    input='<textarea id="'+id+'" placeholder="'+esc(f.placeholder||'')+'">'+esc(f.value||'')+'</textarea>';
+  } else if(f.type==='select'){
+    input='<select id="'+id+'">'+(f.options||[]).map(function(o){
+      return '<option value="'+esc(o.value)+'"'+(String(o.value)===String(f.value)?' selected':'')+'>'+esc(o.label)+'</option>';
+    }).join('')+'</select>';
+  } else {
+    input='<input type="text" id="'+id+'" value="'+esc(f.value||'')+'" placeholder="'+esc(f.placeholder||'')+'">';
+  }
+  return '<div class="field"><label for="'+id+'">'+esc(f.label)+'</label>'+input+'</div>';
+}
+
+function openModal(opts){
+  closeModal();
+  var root=document.getElementById('modal-root');
+  if(!root) return;
+  var fields=opts.fields||[];
+  var h='<div class="modal-backdrop" id="modal-backdrop"><div class="modal" role="dialog" aria-modal="true">'
+    +'<h3>'+esc(opts.title)+'</h3>'
+    +'<div id="modal-msg"></div>'
+    +fields.map(modalFieldHtml).join('');
+  if(opts.danger){
+    h+='<div class="modal-danger"><div class="hint">'+esc(opts.danger.hint)+'</div>'
+      +'<div class="field"><input type="text" id="mf-danger-confirm" placeholder="'+esc(opts.danger.confirmText)+'"></div>'
+      +'<button class="btn btn-danger" id="modal-danger-btn" data-default="'+esc(opts.danger.label)+'" disabled>'+esc(opts.danger.label)+'</button></div>';
+  }
+  h+='<div class="modal-actions">'
+    +'<button class="btn btn-secondary" id="modal-cancel">Cancel</button>'
+    +'<button class="btn btn-primary" id="modal-save" data-default="'+esc(opts.saveLabel||'Save')+'">'+esc(opts.saveLabel||'Save')+'</button>'
+    +'</div></div></div>';
+  root.innerHTML=h;
+
+  function values(){
+    var out={};
+    fields.forEach(function(f){
+      var el=document.getElementById('mf-'+f.id);
+      if(!el) return;
+      out[f.id] = f.type==='checkbox' ? el.checked : el.value;
+    });
+    return out;
+  }
+  function done(err){
+    if(err){
+      setBtn('modal-save', false); setBtn('modal-danger-btn', false);
+      // A failed action must never leave the danger gate open: re-apply the
+      // typed-confirmation check after the reset.
+      if(opts.danger){
+        var dc=document.getElementById('mf-danger-confirm');
+        var db=document.getElementById('modal-danger-btn');
+        if(db) db.disabled = !dc || dc.value.trim() !== opts.danger.confirmText;
+      }
+      msg('modal-msg','err',err);
+      return;
+    }
+    closeModal();
+  }
+  function save(){
+    var vals=values();
+    var missing=fields.filter(function(f){ return f.required && !String(vals[f.id]||'').trim(); })[0];
+    if(missing){ msg('modal-msg','err',missing.label+' is required.'); return; }
+    msg('modal-msg','',''); setBtn('modal-save', true, 'Saving...');
+    opts.onSave(vals, done);
+  }
+
+  document.getElementById('modal-save').addEventListener('click', save);
+  document.getElementById('modal-cancel').addEventListener('click', closeModal);
+  document.getElementById('modal-backdrop').addEventListener('click', function(e){
+    if(e.target && e.target.id==='modal-backdrop') closeModal();
+  });
+  modalEsc=function(e){
+    if(e.key==='Escape'){ closeModal(); return; }
+    if(e.key==='Enter' && e.target && e.target.tagName!=='TEXTAREA'){ save(); }
+  };
+  document.addEventListener('keydown', modalEsc);
+
+  if(opts.danger){
+    var confirmEl=document.getElementById('mf-danger-confirm');
+    var dangerBtn=document.getElementById('modal-danger-btn');
+    confirmEl.addEventListener('input', function(){
+      dangerBtn.disabled = confirmEl.value.trim() !== opts.danger.confirmText;
+    });
+    dangerBtn.addEventListener('click', function(){
+      if(dangerBtn.disabled) return;
+      setBtn('modal-danger-btn', true, 'Deleting...');
+      opts.danger.onConfirm(done);
+    });
+  }
+
+  var first=fields[0];
+  if(first){ var fe=document.getElementById('mf-'+first.id); if(fe) fe.focus(); }
+}
+
 // Minimal, safe Markdown → HTML (headings, bullets, bold, paragraphs).
 function renderMarkdown(md){
   var lines = String(md||'').split(/\r?\n/), out=[], inList=false;
@@ -63,6 +174,7 @@ document.querySelectorAll('.tab').forEach(function(t){
 });
 function showList(){
   stopRecording();
+  stopPolling(); state.reportPending=false;
   // Summarize the item left open, so nothing is lost on the way out.
   if(state.openItemId && state.items){
     var open=state.items.filter(function(x){return x.id===state.openItemId;})[0];
@@ -153,12 +265,23 @@ function loadPeople(){
 
 function editPerson(id, people){
   var p = people.filter(function(x){ return x.id===id; })[0]; if(!p) return;
-  var name=prompt('Name:', p.name); if(name===null) return;
-  var title=prompt('Role / title (optional):', p.title||''); if(title===null) return;
-  var email=prompt('Email (optional):', p.email||''); if(email===null) return;
-  api('/api/people/'+id, { method:'PUT', body:{ name:name, title:title, email:email } }).then(function(res){
-    if(!res.ok){ msg('person-msg','err',res.error); return; }
-    loadPeople();
+  openModal({
+    title: 'Edit person',
+    fields: [
+      { id:'name', label:'Name', type:'text', value:p.name, required:true },
+      { id:'title', label:'Role / title', type:'text', value:p.title||'', placeholder:'e.g. Treasurer' },
+      { id:'email', label:'Email', type:'text', value:p.email||'', placeholder:'name@grmc.org' },
+      { id:'active', label:'Active (appears in attendee lists)', type:'checkbox', value:!!p.active }
+    ],
+    onSave: function(v, done){
+      api('/api/people/'+id, { method:'PUT', body:{
+        name:v.name, title:v.title, email:v.email, active:v.active
+      }}).then(function(res){
+        if(!res.ok){ done(res.error||'Could not save.'); return; }
+        done(null);
+        loadPeople();
+      }).catch(function(e){ done(e.message); });
+    }
   });
 }
 
@@ -203,6 +326,7 @@ function personName(id){ var p=state.peopleById[id]; return p ? p.name : '#'+id;
 
 function openMeeting(id){
   stopRecording();
+  stopPolling(); state.reportPending=false;
   showDetail();
   document.getElementById('detail-body').innerHTML='<div class="empty">Loading&hellip;</div>';
   Promise.all([ api('/api/people?all=1'), api('/api/meetings/'+id) ]).then(function(r){
@@ -214,6 +338,7 @@ function openMeeting(id){
     state.attendeeIds = det.attendeeIds;
     state.items = det.items;
     renderDetail();
+    if(anyTranscribing()) startPolling();
   });
 }
 
@@ -248,7 +373,11 @@ function renderDetail(){
   // Report
   h+='<hr class="hr"><div class="section-title">Report</div>'
     +'<div id="report-msg"></div>'
-    +'<div class="btn-row"><button class="btn btn-gold" id="btn-report" data-default="'+(m.report?'Regenerate report':'Generate report')+'">'+(m.report?'Regenerate report':'Generate report')+'</button></div>'
+    +'<div class="btn-row"><button class="btn btn-gold" id="btn-report" data-default="'+(m.report?'Regenerate report':'Generate report')+'">'+(m.report?'Regenerate report':'Generate report')+'</button>'
+    +'<span id="report-actions"'+(m.report?'':' style="display:none"')+'>'
+    +'<a class="btn btn-secondary" id="btn-report-dl" href="/api/meetings/'+m.id+'/report.md" download>Download .md</a> '
+    +'<button class="btn btn-secondary" id="btn-report-print" data-default="Print / PDF">Print / PDF</button>'
+    +'</span></div>'
     +'<div id="report-box" style="margin-top:14px">'+(m.report?'<div class="report">'+renderMarkdown(m.report)+'</div>':'')+'</div>';
 
   document.getElementById('detail-body').innerHTML=h;
@@ -260,18 +389,48 @@ function renderDetail(){
   document.getElementById('btn-upload-agenda').addEventListener('click', uploadAgenda);
   document.getElementById('btn-add-item').addEventListener('click', addItemManually);
   document.getElementById('btn-report').addEventListener('click', generateReport);
+  document.getElementById('btn-report-print').addEventListener('click', function(){ window.print(); });
 }
 
 function editMeeting(){
   var m=state.meeting;
-  var title=prompt('Meeting title:', m.title); if(title===null||!title.trim()) return;
-  var date=prompt('Date:', m.meeting_date||''); if(date===null) return;
-  var loc=prompt('Location:', m.location||''); if(loc===null) return;
-  api('/api/meetings/'+m.id, { method:'PATCH', body:{ title:title, meetingDate:date, location:loc } }).then(function(res){
-    if(!res.ok) return;
-    m.title=title.trim(); m.meeting_date=date.trim(); m.location=loc.trim();
-    document.getElementById('d-title-txt').textContent=m.title;
-    document.getElementById('d-meta-txt').innerHTML=[m.meeting_date,m.location].filter(Boolean).map(esc).join(' &middot; ');
+  openModal({
+    title: 'Edit meeting',
+    fields: [
+      { id:'title', label:'Title', type:'text', value:m.title, required:true },
+      { id:'date', label:'Date', type:'text', value:m.meeting_date||'', placeholder:'e.g. 2026-04-14 or Apr 14, 7pm' },
+      { id:'loc', label:'Location', type:'text', value:m.location||'', placeholder:'e.g. Fellowship Hall / Zoom' },
+      { id:'desc', label:'Description', type:'textarea', value:m.description||'' },
+      { id:'status', label:'Status', type:'select', value:m.status||'draft', options:[
+        { value:'draft', label:'Draft' },
+        { value:'in_progress', label:'In progress' },
+        { value:'completed', label:'Completed' }
+      ]}
+    ],
+    onSave: function(v, done){
+      api('/api/meetings/'+m.id, { method:'PATCH', body:{
+        title:v.title, meetingDate:v.date, location:v.loc, description:v.desc, status:v.status
+      }}).then(function(res){
+        if(!res.ok){ done(res.error||'Could not save.'); return; }
+        m.title=v.title.trim(); m.meeting_date=v.date.trim();
+        m.location=v.loc.trim(); m.description=v.desc.trim(); m.status=v.status;
+        document.getElementById('d-title-txt').textContent=m.title;
+        document.getElementById('d-meta-txt').innerHTML=[m.meeting_date,m.location].filter(Boolean).map(esc).join(' &middot; ');
+        done(null);
+      }).catch(function(e){ done(e.message); });
+    },
+    danger: {
+      label: 'Delete meeting',
+      hint: 'Deleting this meeting also deletes its agenda items, transcripts, recordings, and report. This cannot be undone. Type the meeting title to confirm.',
+      confirmText: m.title,
+      onConfirm: function(done){
+        api('/api/meetings/'+m.id, { method:'DELETE' }).then(function(res){
+          if(res && res.ok===false){ done(res.error||'Could not delete.'); return; }
+          done(null);
+          showList();
+        }).catch(function(e){ done(e.message); });
+      }
+    }
   });
 }
 
@@ -293,8 +452,12 @@ function toggleAttendee(pid){
   if(i>=0) state.attendeeIds.splice(i,1); else state.attendeeIds.push(pid);
   api('/api/meetings/'+state.meeting.id+'/attendees', { method:'PUT', body:{ personIds:state.attendeeIds } });
   renderAttendeeChips();
-  // Presenter options depend on attendees — refresh open item bodies.
-  state.items.forEach(function(it){ renderPresenterChips(it); });
+  // Both presenter chips and the speaker dropdowns are built from the attendee
+  // list, so both have to be rebuilt the moment it changes.
+  state.items.forEach(function(it){
+    renderPresenterChips(it);
+    renderSpeakerMap(it);
+  });
 }
 
 // ── Agenda upload / add ─────────────────────────────────────────────────────
@@ -313,13 +476,42 @@ function uploadAgenda(){
   }).catch(function(e){ setBtn('btn-upload-agenda', false); msg('agenda-msg','err',e.message); });
 }
 function addItemManually(){
-  var title=prompt('Agenda item title:'); if(!title||!title.trim()) return;
-  var desc=prompt('Details (optional):')||'';
-  api('/api/meetings/'+state.meeting.id+'/items', { method:'POST', body:{ title:title, description:desc } }).then(function(res){
-    if(!res.ok){ msg('agenda-msg','err',res.error); return; }
-    api('/api/meetings/'+state.meeting.id).then(function(det){
-      if(det.ok){ state.items=det.items; renderItems(); }
-    });
+  openModal({
+    title: 'Add agenda item',
+    saveLabel: 'Add item',
+    fields: [
+      { id:'title', label:'Title', type:'text', value:'', required:true },
+      { id:'desc', label:'Details (optional)', type:'textarea', value:'' }
+    ],
+    onSave: function(v, done){
+      api('/api/meetings/'+state.meeting.id+'/items', { method:'POST', body:{ title:v.title, description:v.desc } })
+        .then(function(res){
+          if(!res.ok){ done(res.error||'Could not add the item.'); return; }
+          done(null);
+          return api('/api/meetings/'+state.meeting.id).then(function(det){
+            if(det.ok){ state.items=det.items; renderItems(); }
+          });
+        }).catch(function(e){ done(e.message); });
+    }
+  });
+}
+
+function editItem(it){
+  openModal({
+    title: 'Edit agenda item',
+    fields: [
+      { id:'title', label:'Title', type:'text', value:it.title, required:true },
+      { id:'desc', label:'Details (optional)', type:'textarea', value:it.description||'' }
+    ],
+    onSave: function(v, done){
+      api('/api/items/'+it.id, { method:'PATCH', body:{ title:v.title, description:v.desc.trim() } })
+        .then(function(res){
+          if(!res.ok){ done(res.error||'Could not save.'); return; }
+          it.title=v.title.trim(); it.description=v.desc.trim();
+          done(null);
+          renderItems();
+        }).catch(function(e){ done(e.message); });
+    }
   });
 }
 
@@ -330,6 +522,55 @@ function renderItems(){
   if(!state.items.length){ wrap.innerHTML='<div class="empty">No agenda items yet. Upload an agenda or add items manually.</div>'; return; }
   wrap.innerHTML=state.items.map(function(it, idx){ return itemHtml(it, idx); }).join('');
   state.items.forEach(function(it){ wireItem(it); });
+}
+
+// Update everything about one already-rendered item without touching the
+// open/collapsed state — the poll runs every 3s and must never collapse the
+// topic the user is typing in.
+function refreshItemView(it){
+  refreshBadge(it);
+  renderSpeakerMap(it);
+  renderRecordings(it);
+  var tx=document.getElementById('tx-'+it.id);
+  if(tx && document.activeElement!==tx && tx.value!==it.transcript) tx.value=it.transcript;
+  var sumEl=document.getElementById('sum-'+it.id);
+  if(sumEl) sumEl.innerHTML=summaryHtml(it);
+  // While this item is the one actively being recorded (e.g. re-recording it,
+  // or recording it again right after a previous clip was queued), leave its
+  // rec-status line showing "Recording…" — never let a poll's transcribe
+  // status for this item clobber that indicator out from under the user.
+  if(!(typeof activeRec!=='undefined' && activeRec && activeRec.it.id===it.id)){
+    var rs=document.getElementById('recstat-'+it.id);
+    if(rs){
+      if(it.transcribe_status==='queued') rs.textContent='Queued — transcription starts when the one ahead finishes.';
+      else if(it.transcribe_status==='processing') rs.innerHTML='<span class="spin" style="border-top-color:var(--navy)"></span> Transcribing &amp; identifying speakers&hellip;';
+      else if(it.transcribe_status==='error') rs.innerHTML='<span style="color:var(--rej-fg)">'+esc(it.transcribe_error||'Transcription failed.')+'</span>';
+      else rs.textContent='';
+    }
+  }
+}
+
+// Merge a freshly fetched item list into state. Rebuilds the DOM only when the
+// set of items actually changed; otherwise patches each card in place.
+function syncItems(fresh){
+  var sameSet = state.items.length===fresh.length && state.items.every(function(old, i){ return old.id===fresh[i].id; });
+  if(!sameSet){ state.items=fresh; renderItems(); return; }
+  fresh.forEach(function(f, i){
+    var it=state.items[i];
+    it.title=f.title; it.description=f.description;
+    it.transcribe_status=f.transcribe_status; it.transcribe_error=f.transcribe_error;
+    it.transcript_segments=f.transcript_segments; it.speaker_map=f.speaker_map;
+    it.speaker_stats=f.speaker_stats; it.recordings=f.recordings||[];
+    it.presenter_ids=f.presenter_ids;
+    // Never clobber text the user is actively editing.
+    var tx=document.getElementById('tx-'+it.id);
+    if(!tx || document.activeElement!==tx) it.transcript=f.transcript;
+    var nt=document.getElementById('nt-'+it.id);
+    if(!nt || document.activeElement!==nt) it.notes=f.notes;
+    if(!it._summarizing && !it._dirty){ it.summary=f.summary; it.action_items=f.action_items; }
+    refreshItemView(it);
+    renderPresenterChips(it);
+  });
 }
 
 function itemHtml(it, idx){
@@ -351,11 +592,13 @@ function itemHtml(it, idx){
         +'<span class="rec-status" id="recstat-'+it.id+'"></span>'
       +'</div>'
       +'<div class="speakers" id="spk-'+it.id+'"></div>'
+      +'<div class="recordings" id="rec-'+it.id+'"></div>'
       +'<textarea id="tx-'+it.id+'" placeholder="Record or upload audio to transcribe. Speakers are labeled once you record; you can also edit this text." style="margin-top:6px">'+esc(it.transcript)+'</textarea>'
       +'<div class="sublbl">Notes (typed)</div>'
       +'<textarea id="nt-'+it.id+'" placeholder="Optional manual notes">'+esc(it.notes)+'</textarea>'
       +'<div class="hint" style="margin-top:8px">The summary is generated automatically when you collapse this item or open another. Editing the transcript or notes clears it so it regenerates.</div>'
       +'<div class="btn-row">'
+        +'<button class="btn-sm" data-edit-item="'+it.id+'">Edit item</button>'
         +'<button class="btn btn-danger btn-sm" data-del-item="'+it.id+'">Remove item</button>'
         +'<span id="imsg-'+it.id+'"></span>'
       +'</div>'
@@ -367,11 +610,19 @@ function itemHtml(it, idx){
 // True when the item has content worth summarizing.
 function itemHasContent(it){ return !!((it.transcript && it.transcript.trim()) || (it.notes && it.notes.trim())); }
 
-// The header status badge inner HTML for an item's current summary state.
+// True while this item's audio is queued or being transcribed.
+function isTranscribing(it){
+  return it.transcribe_status==='queued' || it.transcribe_status==='processing';
+}
+
+// The header status badge for an item's current transcription + summary state.
 function itemBadgeInner(it){
-  if(it._summarizing) return '<span class="badge b-pending"><span class="spin" style="border-top-color:var(--pending-fg)"></span> Summary generating</span>';
+  if(it.transcribe_status==='queued') return '<span class="badge b-pending">Queued to transcribe</span>';
+  if(it.transcribe_status==='processing') return '<span class="badge b-pending"><span class="spin" style="border-top-color:var(--pending-fg)"></span> Transcribing&hellip;</span>';
+  if(it.transcribe_status==='error') return '<span class="badge b-rejected">Transcription failed</span>';
+  if(it._summarizing) return '<span class="badge b-pending"><span class="spin" style="border-top-color:var(--pending-fg)"></span> Summarizing&hellip;</span>';
   if(it._summaryError) return '<span class="badge b-rejected">Summary failed</span>';
-  if(it.summary && !it._dirty) return '<span class="badge b-approved">Summary generated</span>';
+  if(it.summary && !it._dirty) return '<span class="badge b-approved">Summary ready</span>';
   if(itemHasContent(it)) return '<span class="badge b-changes_requested">Needs summary</span>';
   return '';
 }
@@ -398,6 +649,7 @@ function wireItem(it){
   document.querySelector('[data-toggle-item="'+it.id+'"]').addEventListener('click', function(){ toggleItemOpen(it); });
   renderPresenterChips(it);
   renderSpeakerMap(it);
+  renderRecordings(it);
   var tx=document.getElementById('tx-'+it.id);
   var nt=document.getElementById('nt-'+it.id);
   tx.addEventListener('blur', function(){
@@ -410,6 +662,7 @@ function wireItem(it){
   });
   document.querySelector('[data-rec="'+it.id+'"]').addEventListener('click', function(){ toggleRecording(it, this); });
   document.querySelector('[data-audio="'+it.id+'"]').addEventListener('change', function(){ uploadAudio(it, this); });
+  document.querySelector('[data-edit-item="'+it.id+'"]').addEventListener('click', function(){ editItem(it); });
   document.querySelector('[data-del-item="'+it.id+'"]').addEventListener('click', function(){ removeItem(it); });
 }
 
@@ -446,7 +699,11 @@ function invalidateSummary(it){
   refreshBadge(it);
 }
 
+// Generate the summary when there is something to summarize AND no
+// transcription is pending for this item. A queued or in-flight transcription
+// always wins: summarizing now would describe a transcript about to change.
 function summarizeIfNeeded(it){
+  if(isTranscribing(it)) return Promise.resolve();
   if(!itemHasContent(it)) return Promise.resolve();
   if(it.summary && !it._dirty) return Promise.resolve();
   if(it._summarizing) return it._summarizing;
@@ -480,20 +737,28 @@ function distinctSpeakersJS(segments){
   (segments||[]).forEach(function(s){ if(s.speaker && seen.indexOf(s.speaker)<0) seen.push(s.speaker); });
   return seen;
 }
-// Mirror of server transcript.ts renderTranscript so remapping updates instantly.
+// Mirror of server transcript.ts resolveSpeakerName.
+function resolveSpeakerNameJS(speaker, map, order){
+  var mapped = map ? map[speaker] : '';
+  if(mapped && mapped.trim()) return mapped.trim();
+  var idx = order.indexOf(speaker);
+  return idx >= 0 ? ('Speaker '+(idx+1)) : 'Speaker';
+}
+// Mirror of server transcript.ts renderTranscript so remapping updates
+// instantly. Merges consecutive turns that resolve to the same display name.
 function renderTranscriptJS(segments, map){
   if(!segments || !segments.length) return '';
   var order=distinctSpeakersJS(segments);
   if(!order.length) return segments.map(function(s){return s.text;}).join(' ').trim();
-  var lines=[], cur=null, buf=[];
+  var lines=[], curName=null, buf=[];
   function flush(){
-    if(cur===null || !buf.length) return;
-    var name=(map[cur] && map[cur].trim()) || ('Speaker '+(order.indexOf(cur)+1));
-    lines.push(name+': '+buf.join(' ').trim()); buf=[];
+    if(curName===null || !buf.length) return;
+    lines.push(curName+': '+buf.join(' ').trim()); buf=[];
   }
   segments.forEach(function(s){
-    var spk=s.speaker || order[0];
-    if(spk!==cur){ flush(); cur=spk; }
+    var spk = s.speaker || order[0];
+    var name = resolveSpeakerNameJS(spk, map||{}, order);
+    if(name!==curName){ flush(); curName=name; }
     buf.push(s.text);
   });
   flush();
@@ -501,8 +766,8 @@ function renderTranscriptJS(segments, map){
 }
 function renderSpeakerMap(it){
   var el=document.getElementById('spk-'+it.id); if(!el) return;
-  var speakers=distinctSpeakersJS(it.transcript_segments);
-  if(speakers.length<1){ el.innerHTML=''; return; }
+  var stats=it.speaker_stats||[];
+  if(!stats.length){ el.innerHTML=''; return; }
   var attendees=state.attendeeIds.map(function(id){ return state.peopleById[id]; }).filter(Boolean);
   var opts=function(sel){
     var o='<option value="">— unlabeled —</option>';
@@ -512,12 +777,16 @@ function renderSpeakerMap(it){
     return o;
   };
   el.innerHTML='<div class="sublbl">Who is speaking?</div><div class="spk-rows">'
-    + speakers.map(function(spk, i){
-        var cur=(it.speaker_map||{})[spk]||'';
-        return '<div class="spk-row"><span class="spk-tag">Speaker '+(i+1)+'</span>'
-          +'<select data-spk="'+esc(spk)+'">'+opts(cur)+'</select></div>';
+    + stats.map(function(st){
+        var cur=(it.speaker_map||{})[st.speaker]||'';
+        var pct=Math.round(st.share*100);
+        return '<div class="spk-row"><span class="spk-tag">'+esc(st.label)+'</span>'
+          +'<span class="spk-share">'+pct+'%</span>'
+          +'<select data-spk="'+esc(st.speaker)+'">'+opts(cur)+'</select>'
+          +(st.sample?'<div class="spk-sample">&ldquo;'+esc(st.sample)+'&rdquo;</div>':'')
+          +'</div>';
       }).join('')
-    + '</div><div class="hint">Label each voice; the transcript and summary use these names. Remapping relabels the transcript.</div>';
+    + '</div><div class="hint">Voices are listed by how much they spoke. Several rows can be the same person — set them to the same name and their lines merge. Remapping relabels the transcript.</div>';
   el.querySelectorAll('select[data-spk]').forEach(function(sel){
     sel.addEventListener('change', function(){
       var spk=sel.getAttribute('data-spk');
@@ -529,6 +798,35 @@ function renderSpeakerMap(it){
       it.transcript=tx.value;
       saveItemField(it, { speakerMap: it.speaker_map });
       invalidateSummary(it);
+    });
+  });
+}
+
+// Every recording ever attached to this item. They are kept for the life of
+// the meeting, so the original audio is always downloadable, and any of them
+// can be sent through transcription again via "Transcribe again".
+function renderRecordings(it){
+  var el=document.getElementById('rec-'+it.id); if(!el) return;
+  var recs=it.recordings||[];
+  if(!recs.length){ el.innerHTML=''; return; }
+  el.innerHTML='<div class="sublbl">Recordings</div><ul class="rec-list">'
+    + recs.map(function(r){
+        var size=r.byte_size ? (Math.round(r.byte_size/1024/102.4)/10)+' MB' : '';
+        return '<li><span class="rec-name">'+esc(r.file_name||('recording '+r.id))+'</span>'
+          +(size?'<span class="rec-size">'+esc(size)+'</span>':'')
+          +'<a class="btn-sm" href="/api/recordings/'+r.id+'/download">Download</a>'
+          +'<button class="btn-sm" data-retry="'+it.id+'" data-rec-id="'+r.id+'">Transcribe again</button></li>';
+      }).join('')
+    + '</ul>';
+  el.querySelectorAll('[data-retry]').forEach(function(b){
+    b.addEventListener('click', function(){
+      api('/api/items/'+it.id+'/retranscribe', { method:'POST', body:{ recordingId: Number(b.getAttribute('data-rec-id')) } })
+        .then(function(res){
+          if(!res.ok){ msg('imsg-'+it.id,'err',res.error); return; }
+          it.transcribe_status='queued'; it.transcribe_error='';
+          refreshItemView(it);
+          startPolling();
+        }).catch(function(e){ msg('imsg-'+it.id,'err',e.message); });
     });
   });
 }
@@ -612,27 +910,21 @@ function stopRecording(){
   }
 }
 
-// Send a recorded/selected audio blob for transcription + diarization.
+// Hand a recorded/selected audio blob to the server and return immediately.
+// The serial queue does the work; the status poll reports progress, so the
+// user can move straight on to the next topic.
 function transcribeBlob(it, blob, mime){
   var rs=document.getElementById('recstat-'+it.id);
-  if(!blob || !blob.size){ rs.innerHTML='<span style="color:var(--rej-fg)">No audio captured.</span>'; return; }
-  rs.innerHTML='<span class="spin" style="border-top-color:var(--navy)"></span> Transcribing &amp; identifying speakers…';
+  if(!blob || !blob.size){ if(rs) rs.innerHTML='<span style="color:var(--rej-fg)">No audio captured.</span>'; return; }
+  if(rs) rs.innerHTML='<span class="spin" style="border-top-color:var(--navy)"></span> Uploading audio&hellip;';
   var ext=(mime||'').indexOf('mp4')>=0?'m4a':(mime||'').indexOf('ogg')>=0?'ogg':'webm';
   var fd=new FormData(); fd.append('file', blob, 'item-'+it.id+'.'+ext);
   apiForm('/api/items/'+it.id+'/transcribe', fd).then(function(res){
-    if(!res.ok){ rs.innerHTML='<span style="color:var(--rej-fg)">'+esc(res.error)+'</span>'; return; }
-    it.transcript=res.transcript;
-    it.speaker_map=res.speakerMap||{};
-    // Reflect the newly diarized segments so the speaker map + re-render work.
-    return api('/api/meetings/'+state.meeting.id).then(function(det){
-      if(det.ok){ var fresh=det.items.filter(function(x){return x.id===it.id;})[0]; if(fresh){ it.transcript_segments=fresh.transcript_segments; it.speaker_map=fresh.speaker_map; } }
-      document.getElementById('tx-'+it.id).value=it.transcript;
-      renderSpeakerMap(it);
-      invalidateSummary(it);
-      var n=(res.speakers||[]).length;
-      rs.textContent= n>1 ? ('Transcribed — '+n+' speakers detected. Label them below.') : 'Transcribed.';
-    });
-  }).catch(function(e){ rs.innerHTML='<span style="color:var(--rej-fg)">'+esc(e.message)+'</span>'; });
+    if(!res.ok){ if(rs) rs.innerHTML='<span style="color:var(--rej-fg)">'+esc(res.error)+'</span>'; return; }
+    it.transcribe_status='queued'; it.transcribe_error='';
+    refreshItemView(it);
+    startPolling();
+  }).catch(function(e){ if(rs) rs.innerHTML='<span style="color:var(--rej-fg)">'+esc(e.message)+'</span>'; });
 }
 
 // ── Audio file upload → same transcription path ─────────────────────────────
@@ -642,12 +934,102 @@ function uploadAudio(it, input){
   transcribeBlob(it, f, f.type);
 }
 
+// ── Status polling ──────────────────────────────────────────────────────────
+// Runs only while a meeting is open AND something is queued or transcribing.
+var pollTimer=null, pollGen=0;
+
+function anyTranscribing(){
+  return state.items.some(function(it){ return isTranscribing(it); });
+}
+
+// Bumping pollGen invalidates every in-flight poll response: openMeeting and
+// showList both call this on navigation, so a fetch started for the meeting
+// you just left can never re-arm the timer or clobber the meeting you're
+// looking at now with stale data.
+function stopPolling(){
+  pollGen++;
+  if(pollTimer){ clearTimeout(pollTimer); pollTimer=null; }
+}
+
+function startPolling(){
+  if(pollTimer) return;
+  pollTimer=setTimeout(pollOnce, 3000);
+}
+
+function pollOnce(){
+  pollTimer=null;
+  if(!state.meeting){ return; }
+  var gen=pollGen;
+  api('/api/meetings/'+state.meeting.id+'/status').then(function(res){
+    if(gen!==pollGen) return;
+    if(!res.ok){ if(anyTranscribing()) startPolling(); return; }
+    var settled=[];
+    res.items.forEach(function(s){
+      var it=state.items.filter(function(x){ return x.id===s.id; })[0];
+      if(!it) return;
+      var was=it.transcribe_status;
+      it.transcribe_status=s.transcribeStatus;
+      it.transcribe_error=s.transcribeError;
+      if((was==='queued'||was==='processing') && !isTranscribing(it)) settled.push(it);
+      else refreshItemView(it);
+    });
+    // Attendees can change behind our back: another user, or auto-linked people
+    // from action items. Keep the chips and the speaker dropdowns honest.
+    if(res.attendeeIds && res.attendeeIds.join(',')!==state.attendeeIds.join(',')){
+      state.attendeeIds=res.attendeeIds;
+      renderAttendeeChips();
+      state.items.forEach(function(x){ renderPresenterChips(x); renderSpeakerMap(x); });
+    }
+    if(!settled.length){ afterPollRound(); return; }
+    // Something finished — pull the full detail so we get segments, speaker map
+    // and the rendered transcript, then decide about summaries.
+    return api('/api/meetings/'+state.meeting.id).then(function(det){
+      if(gen!==pollGen) return;
+      if(det.ok){
+        state.meeting=det.meeting; syncItems(det.items);
+        settled.forEach(function(it){
+          var live=state.items.filter(function(x){ return x.id===it.id; })[0];
+          if(live) onTranscriptionSettled(live);
+        });
+      }
+      afterPollRound();
+    });
+  }).catch(function(){ if(gen===pollGen && anyTranscribing()) startPolling(); });
+}
+
+// Keep polling while work remains; once the queue drains, honour a pending
+// "Generate report" click by re-invoking it automatically.
+function afterPollRound(){
+  if(anyTranscribing()){ startPolling(); return; }
+  if(state.reportPending){ state.reportPending=false; generateReport(); }
+}
+
+// A transcription just finished. Its content is new, so any old summary is
+// stale. If the topic is CLOSED, summarize it now — this is the deferred
+// auto-summary the user asked for. If it is open, leave it: closing it will.
+function onTranscriptionSettled(it){
+  if(it.transcribe_status==='error'){ refreshItemView(it); return; }
+  it._dirty=true; it._summaryError=false;
+  refreshItemView(it);
+  if(state.openItemId!==it.id) summarizeIfNeeded(it);
+}
+
 // ── Report ──────────────────────────────────────────────────────────────────
 // Every item with content must be summarized first. Collapse the open item and
 // summarize any pending items, then write the report.
 function generateReport(){
   setBtn('btn-report', true, 'Preparing…');
   if(state.openItemId){ var open=state.items.filter(function(x){return x.id===state.openItemId;})[0]; if(open) collapseItem(open); }
+  var busy=state.items.filter(function(it){ return isTranscribing(it); });
+  if(busy.length){
+    // Wait for the queue: the poller re-invokes generateReport once the last
+    // transcription settles, so the user clicks once and the report follows.
+    msg('report-msg','info','Waiting for '+busy.length+' transcription'+(busy.length===1?'':'s')+' to finish&hellip;');
+    setBtn('btn-report', true, 'Waiting…');
+    state.reportPending=true;
+    startPolling();
+    return;
+  }
   var pending=state.items.filter(function(it){ return itemHasContent(it) && (!it.summary || it._dirty || it._summarizing); });
   if(pending.length) msg('report-msg','info','Summarizing '+pending.length+' item'+(pending.length===1?'':'s')+' before the report…');
   var chain=Promise.resolve();
@@ -668,6 +1050,7 @@ function generateReport(){
     document.getElementById('report-box').innerHTML='<div class="report">'+renderMarkdown(res.report)+'</div>';
     document.getElementById('btn-report').setAttribute('data-default','Regenerate report');
     document.getElementById('btn-report').textContent='Regenerate report';
+    var ra=document.getElementById('report-actions'); if(ra) ra.style.display='';
   }).catch(function(e){ setBtn('btn-report', false); msg('report-msg','err',e.message); });
 }
 

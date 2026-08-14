@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { parseItems, stripJsonFences, isSupportedAgendaType, parseSummary } from "./claude";
+import { parseItems, stripJsonFences, isSupportedAgendaType, parseSummary, parseSpeakerMap } from "./claude";
 
 test("stripJsonFences removes code fences", () => {
   assert.equal(stripJsonFences('```json\n[]\n```'), "[]");
@@ -61,4 +61,61 @@ test("parseSummary falls back to raw text when not JSON", () => {
   const r = parseSummary("plain summary text");
   assert.equal(r.summary, "plain summary text");
   assert.deepEqual(r.actionItems, []);
+});
+
+test("parseItems reads the presenter field", () => {
+  const raw = '[{"title":"Budget","description":"Q2 numbers","presenter":"Jane Doe"}]';
+  assert.deepEqual(parseItems(raw), [{ title: "Budget", description: "Q2 numbers", presenter: "Jane Doe" }]);
+});
+
+test("parseItems defaults a missing or blank presenter to an empty string", () => {
+  const raw = '[{"title":"Budget","description":""},{"title":"Missions","description":"","presenter":"   "}]';
+  assert.deepEqual(parseItems(raw), [
+    { title: "Budget", description: "", presenter: "" },
+    { title: "Missions", description: "", presenter: "" },
+  ]);
+});
+
+test("parseItems trims a padded presenter name", () => {
+  assert.equal(parseItems('[{"title":"T","description":"","presenter":"  Jane Doe  "}]')[0].presenter, "Jane Doe");
+});
+
+const ORDER = ["SPEAKER_00", "SPEAKER_01", "SPEAKER_02"];
+const NAMES = ["Alice Smith", "Bob Jones"];
+
+test("parseSpeakerMap translates positional labels back to raw labels", () => {
+  const raw = '{"Speaker 1":"Alice Smith","Speaker 2":"Bob Jones","Speaker 3":""}';
+  assert.deepEqual(parseSpeakerMap(raw, ORDER, NAMES), {
+    SPEAKER_00: "Alice Smith",
+    SPEAKER_01: "Bob Jones",
+  });
+});
+
+test("parseSpeakerMap merges several labels onto one person", () => {
+  const raw = '{"Speaker 1":"Alice Smith","Speaker 3":"Alice Smith"}';
+  assert.deepEqual(parseSpeakerMap(raw, ORDER, NAMES), {
+    SPEAKER_00: "Alice Smith",
+    SPEAKER_02: "Alice Smith",
+  });
+});
+
+test("parseSpeakerMap normalizes casing to the canonical attendee name", () => {
+  assert.deepEqual(parseSpeakerMap('{"Speaker 1":"alice smith"}', ORDER, NAMES), { SPEAKER_00: "Alice Smith" });
+});
+
+test("parseSpeakerMap drops invented names and out-of-range labels", () => {
+  const raw = '{"Speaker 1":"Carlos Vega","Speaker 9":"Alice Smith","nonsense":"Bob Jones"}';
+  assert.deepEqual(parseSpeakerMap(raw, ORDER, NAMES), {});
+});
+
+test("parseSpeakerMap tolerates fenced JSON and malformed output", () => {
+  const fenced = '```json\n{"Speaker 2":"Bob Jones"}\n```';
+  assert.deepEqual(parseSpeakerMap(fenced, ORDER, NAMES), { SPEAKER_01: "Bob Jones" });
+  assert.deepEqual(parseSpeakerMap("I could not tell.", ORDER, NAMES), {});
+  assert.deepEqual(parseSpeakerMap('["Speaker 1"]', ORDER, NAMES), {});
+  assert.deepEqual(parseSpeakerMap("", ORDER, NAMES), {});
+});
+
+test("parseSpeakerMap tolerates a name echoed with its title", () => {
+  assert.deepEqual(parseSpeakerMap('{"Speaker 1":"Alice Smith (Chair)"}', ORDER, NAMES), { SPEAKER_00: "Alice Smith" });
 });

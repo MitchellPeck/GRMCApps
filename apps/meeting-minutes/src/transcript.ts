@@ -18,9 +18,18 @@ export function friendlyLabel(speaker: string, order: string[]): string {
   return idx >= 0 ? `Speaker ${idx + 1}` : "Speaker";
 }
 
+// The display name for a raw diarization label: the mapped person's name when
+// one is set, otherwise the positional "Speaker N" fallback.
+export function resolveSpeakerName(speaker: string, map: SpeakerMap, order: string[]): string {
+  const mapped = map[speaker];
+  if (mapped && mapped.trim()) return mapped.trim();
+  return friendlyLabel(speaker, order);
+}
+
 // Render diarized segments into a readable, speaker-attributed transcript.
-// Consecutive segments from the same speaker are merged into one line. When no
-// segment carries a speaker label, falls back to plain joined text.
+// Consecutive segments that resolve to the SAME DISPLAY NAME are merged into
+// one line — several raw labels can map to one person after reconciliation.
+// When no segment carries a speaker label, falls back to plain joined text.
 export function renderTranscript(segments: DiarizedSegment[], map: SpeakerMap): string {
   if (!segments.length) return "";
   const order = distinctSpeakers(segments);
@@ -29,17 +38,17 @@ export function renderTranscript(segments: DiarizedSegment[], map: SpeakerMap): 
     return segments.map((s) => s.text).join(" ").trim();
   }
   const lines: string[] = [];
-  let curSpeaker: string | null = null;
+  let curName: string | null = null;
   let buf: string[] = [];
   const flush = () => {
-    if (curSpeaker === null || !buf.length) return;
-    const name = (map[curSpeaker] && map[curSpeaker].trim()) || friendlyLabel(curSpeaker, order);
-    lines.push(`${name}: ${buf.join(" ").trim()}`);
+    if (curName === null || !buf.length) return;
+    lines.push(`${curName}: ${buf.join(" ").trim()}`);
     buf = [];
   };
   for (const s of segments) {
     const spk = s.speaker || (order[0] ?? "SPEAKER_00");
-    if (spk !== curSpeaker) { flush(); curSpeaker = spk; }
+    const name = resolveSpeakerName(spk, map, order);
+    if (name !== curName) { flush(); curName = name; }
     buf.push(s.text);
   }
   flush();

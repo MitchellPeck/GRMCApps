@@ -1,5 +1,6 @@
 import { Pool } from "pg";
 import { getSetting } from "./settings";
+import { SpeakerMap } from "./transcript";
 
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 const MODEL = "claude-sonnet-4-6";
@@ -48,6 +49,7 @@ async function callClaude(
 export interface ExtractedItem {
   title: string;
   description: string;
+  presenter: string; // as written in the document; "" when none is named
 }
 
 // The set of upload types we can hand to Claude for agenda extraction.
@@ -63,9 +65,14 @@ const EXTRACT_SYSTEM = `You extract the agenda items from a meeting agenda docum
 Return ONLY a JSON array. Each element is an object with:
   "title": a short label for the agenda item (required)
   "description": any sub-points, context, or details for that item ("" if none)
-Preserve the order items appear in the document. Do not invent items. Ignore
-headers, footers, page numbers, and boilerplate. If the document has no
-discernible agenda items, return [].`;
+  "presenter": the name of the person presenting, leading, or reporting on this
+    item, written exactly as it appears in the document ("" if none is named)
+Put a presenter's name in "presenter" ONLY. Strip phrasing like "Presented by
+Jane Doe", "— Jane Doe", "(Jane Doe)", or "Report from Jane Doe" out of both
+"title" and "description"; do not leave the name duplicated there.
+Preserve the order items appear in the document. Do not invent items or
+presenters. Ignore headers, footers, page numbers, and boilerplate. If the
+document has no discernible agenda items, return [].`;
 
 // Ask Claude to turn an uploaded agenda file into an ordered list of items.
 export async function extractAgendaItems(
@@ -109,6 +116,7 @@ export function parseItems(raw: string): ExtractedItem[] {
     .map((el) => ({
       title: String(el?.title ?? "").trim(),
       description: String(el?.description ?? "").trim(),
+      presenter: String(el?.presenter ?? "").trim(),
     }))
     .filter((el) => el.title.length > 0);
 }
@@ -256,4 +264,84 @@ export async function generateReport(pool: Pool, input: ReportInput): Promise<st
 
 function indent(text: string): string {
   return text.split("\n").map((l) => "     " + l).join("\n");
+}
+
+export interface ReconcileInput {
+  meetingTitle: string;
+  itemTitle: string;
+  transcript: string;      // rendered with positional "Speaker N" labels
+  speakerOrder: string[];  // raw labels in first-appearance order
+  attendees: string[];     // "Name (Title)" strings for everyone present
+  presenters: string[];    // names of this item's presenters
+}
+
+const RECONCILE_SYSTEM = `You clean up automatic speaker diarization of a meeting recording.
+
+The transcript labels each turn "Speaker 1", "Speaker 2", and so on. Those
+labels are UNRELIABLE in two specific ways: one person is frequently split
+across several different labels, and a label sometimes changes in the middle of
+a single person's sentence.
+
+You are given the list of people present. Decide which person each label
+belongs to. SEVERAL LABELS MAY MAP TO THE SAME PERSON — that is the common case
+and the main thing you are here to fix. Merge labels whenever the content reads
+as one continuous speaker. Evidence to use: direct address ("Thanks, Alice"),
+self-introduction, who answers which question, a person's stated role, and who
+owns which topic.
+
+Respond with ONLY a JSON object, no prose around it, mapping every label to a
+person's name — the name only, WITHOUT any parenthetical title, copied exactly
+from the list of people present — or to "" when you genuinely cannot tell:
+{ "Speaker 1": "Alice Smith", "Speaker 2": "Alice Smith", "Speaker 3": "" }
+
+Never output a name that is not in the list of people present. Prefer "" over a
+guess. Include every label exactly once.`;
+
+// Translate Claude's positional answer back into raw diarization labels.
+// Labels outside speakerOrder and names outside allowedNames are dropped, so a
+// malformed or hallucinated response degrades to "no opinion" rather than
+// corrupting the speaker map.
+export function parseSpeakerMap(raw: string, speakerOrder: string[], allowedNames: string[]): SpeakerMap {
+  let data: any;
+  try { data = JSON.parse(stripJsonFences(raw)); } catch { return {}; }
+  if (!data || typeof data !== "object" || Array.isArray(data)) return {};
+  const allowed = new Map(allowedNames.map((n) => [n.trim().toLowerCase(), n.trim()]));
+  const out: SpeakerMap = {};
+  for (const [key, value] of Object.entries(data)) {
+    const m = /^\s*speaker\s*(\d+)\s*$/i.exec(key);
+    if (!m) continue;
+    const label = speakerOrder[Number(m[1]) - 1];
+    if (!label) continue;
+    const candidate = String(value ?? "").trim();
+    const name = allowed.get(candidate.toLowerCase())
+      ?? allowed.get(candidate.replace(/\s*\([^()]*\)\s*$/, "").trim().toLowerCase());
+    if (name) out[label] = name;
+  }
+  return out;
+}
+
+// Ask Claude which person each diarized voice belongs to, merging voices that
+// the diarizer split apart. Best-effort by contract: every failure path returns
+// {} so a transcription is never lost to a reconciliation problem.
+export async function reconcileSpeakers(pool: Pool, input: ReconcileInput): Promise<SpeakerMap> {
+  if (!input.speakerOrder.length || !input.transcript.trim() || !input.attendees.length) return {};
+  const names = input.attendees.map((a) => a.replace(/\s*\([^()]*\)\s*$/, "").trim()).filter(Boolean);
+  const parts = [
+    `Meeting: ${input.meetingTitle}`,
+    `Agenda item: ${input.itemTitle}`,
+    `People present: ${input.attendees.join(", ")}`,
+    input.presenters.length
+      ? `Expected to lead this item: ${input.presenters.join(", ")}`
+      : "Expected to lead this item: unspecified",
+    `Labels to assign: ${input.speakerOrder.map((_, i) => `Speaker ${i + 1}`).join(", ")}`,
+    "",
+    "Transcript:",
+    input.transcript,
+  ];
+  try {
+    const raw = await callClaude(pool, RECONCILE_SYSTEM, parts.join("\n"), 1024);
+    return parseSpeakerMap(raw, input.speakerOrder, names);
+  } catch {
+    return {};
+  }
 }

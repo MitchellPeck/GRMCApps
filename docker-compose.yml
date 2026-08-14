@@ -182,6 +182,9 @@ services:
       MEETINGMINUTES_DB_NAME: "${MEETINGMINUTES_DB_NAME}"
       # Self-hosted transcription (internal, keyless).
       WHISPER_REST_URL: "http://whisper:9000"
+      MINUTES_DATA_DIR: "/data"
+    volumes:
+      - minutesdata:/data
     depends_on:
       postgres:
         condition: service_healthy
@@ -207,9 +210,24 @@ services:
     image: hwdsl2/whisper-server:latest
     restart: unless-stopped
     environment:
-      WHISPER_MODEL: "small"
+      # English-only weights: faster AND more accurate than multilingual `small`
+      # for English audio. NOTE: first boot after changing this downloads a
+      # fresh ~465 MB model into the whisperdata volume.
+      WHISPER_MODEL: "${WHISPER_MODEL:-small.en}"
       WHISPER_LANGUAGE: "en"
+      # The host is an 8-core Apple Silicon Mac. The image defaults to 2
+      # threads, which was the single biggest cause of slow transcription.
+      # 6 leaves two cores for the rest of the stack.
+      WHISPER_THREADS: "${WHISPER_THREADS:-6}"
+      # Greedy decoding. Roughly 2-3x faster than the default beam of 5, with
+      # negligible accuracy loss on clean English speech.
+      WHISPER_BEAM: "${WHISPER_BEAM:-1}"
+      # The image's documented recommendation for CPU inference.
+      WHISPER_COMPUTE_TYPE: "${WHISPER_COMPUTE_TYPE:-int8}"
       WHISPER_DIARIZATION: "true"      # label who is speaking (SPEAKER_00, 01, …)
+      # Clustering threshold: lower = more speakers, higher = fewer. The 0.5
+      # default split four people in a room into eight voices.
+      WHISPER_DIARIZE_THRESHOLD: "${WHISPER_DIARIZE_THRESHOLD:-0.7}"
       # Empty = auth disabled. With the whisperdata volume mounted the server
       # otherwise auto-generates a Bearer token and rejects unauthenticated
       # calls ("missing authorization header"). Safe here: no published ports,
@@ -226,3 +244,4 @@ volumes:
   pgdata:
   letsencrypt:
   whisperdata:
+  minutesdata:

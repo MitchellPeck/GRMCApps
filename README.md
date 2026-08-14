@@ -87,6 +87,16 @@ between apps. Both are served to each app at `/assets/` (see *Shared UI* below).
   audio never leaves the host. Add only the Anthropic key (for
   extraction/summaries/report) in Settings; everything is stored in the
   `meetingminutes` database.
+  
+  Transcription speed is tuned through the `whisper` service in
+  `docker-compose.yml`, and every value can be overridden from `.env` without a
+  rebuild: `WHISPER_MODEL` (default `small.en`), `WHISPER_THREADS` (default
+  `6`, sized for an 8-core host), `WHISPER_BEAM` (default `1`, greedy),
+  `WHISPER_COMPUTE_TYPE` (default `int8`), and `WHISPER_DIARIZE_THRESHOLD`
+  (default `0.7` — raise it if one person is still split across several
+  speakers, lower it if two people are being merged). Changing `WHISPER_MODEL`
+  triggers a one-time model download into the `whisperdata` volume, so the
+  first transcription after that change is slow.
 
 ## Adding an app
 

@@ -2,6 +2,9 @@ import { Pool } from "pg";
 import { ExtractedItem, ActionItem } from "./claude";
 import { DiarizedSegment } from "./whisper";
 import { SpeakerMap, renderTranscript } from "./transcript";
+import { listPeople, matchPersonByName } from "./people";
+import { SpeakerStat, speakerStats } from "./speakers";
+import { removeRecordingFiles } from "./recordings";
 
 export interface MeetingRow {
   id: number;
@@ -19,6 +22,8 @@ export interface MeetingRow {
   updated_at: string;
 }
 
+export type TranscribeStatus = "idle" | "queued" | "processing" | "done" | "error";
+
 export interface AgendaItem {
   id: number;
   meeting_id: number;
@@ -32,6 +37,9 @@ export interface AgendaItem {
   speaker_map: SpeakerMap;
   summary: string;
   action_items: ActionItem[];
+  transcribe_status: TranscribeStatus;
+  transcribe_error: string;
+  speaker_stats: SpeakerStat[];
   presenter_ids: number[];
 }
 
@@ -49,6 +57,9 @@ function mapItemRow(row: any, presenterIds: number[]): AgendaItem {
     speaker_map: row.speaker_map && typeof row.speaker_map === "object" ? row.speaker_map : {},
     summary: row.summary,
     action_items: Array.isArray(row.action_items) ? row.action_items : [],
+    transcribe_status: (row.transcribe_status ?? "idle") as TranscribeStatus,
+    transcribe_error: row.transcribe_error ?? "",
+    speaker_stats: speakerStats(Array.isArray(row.transcript_segments) ? row.transcript_segments : []),
     presenter_ids: presenterIds,
   };
 }
@@ -119,6 +130,8 @@ export async function updateMeeting(
 }
 
 export async function deleteMeeting(pool: Pool, id: number): Promise<void> {
+  const items = await pool.query("SELECT id FROM agenda_items WHERE meeting_id = $1", [id]);
+  await removeRecordingFiles(pool, items.rows.map((r) => Number(r.id)));
   await pool.query("DELETE FROM meetings WHERE id = $1", [id]);
 }
 
@@ -161,16 +174,30 @@ export async function replaceAgendaItems(
   items: ExtractedItem[],
   agendaFileName: string
 ): Promise<void> {
+  // Resolve presenter names up front, outside the transaction. Unresolvable
+  // names are dropped. Attendance is untouched: an import never adds anyone to
+  // meeting_attendees.
+  const people = await listPeople(pool, true);
+  const presenterIds = items.map((it) => (it.presenter ? matchPersonByName(it.presenter, people) : null));
+
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
     await client.query("DELETE FROM agenda_items WHERE meeting_id = $1", [meetingId]);
     let pos = 0;
     for (const it of items) {
-      await client.query(
-        "INSERT INTO agenda_items (meeting_id, position, title, description) VALUES ($1, $2, $3, $4)",
-        [meetingId, pos++, it.title, it.description]
+      const inserted = await client.query(
+        "INSERT INTO agenda_items (meeting_id, position, title, description) VALUES ($1, $2, $3, $4) RETURNING id",
+        [meetingId, pos, it.title, it.description]
       );
+      const pid = presenterIds[pos];
+      if (pid !== null) {
+        await client.query(
+          "INSERT INTO agenda_item_presenters (item_id, person_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+          [Number(inserted.rows[0].id), pid]
+        );
+      }
+      pos++;
     }
     await client.query("UPDATE meetings SET agenda_file_name = $2, updated_at = now() WHERE id = $1", [
       meetingId,
@@ -310,7 +337,17 @@ export async function updateAgendaItem(
 }
 
 export async function deleteAgendaItem(pool: Pool, itemId: number): Promise<void> {
+  await removeRecordingFiles(pool, [itemId]);
   await pool.query("DELETE FROM agenda_items WHERE id = $1", [itemId]);
+}
+
+// A filesystem- and header-safe download filename for a meeting's report.
+// Output contains only [a-z0-9-] plus the .md suffix, so it can be embedded
+// in a Content-Disposition header without escaping.
+export function reportFileName(title: string, meetingDate: string): string {
+  const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  const parts = [slug(meetingDate), slug(title) || "meeting"].filter(Boolean);
+  return `${parts.join("-")}-minutes.md`;
 }
 
 export async function saveReport(pool: Pool, meetingId: number, report: string): Promise<void> {
@@ -318,4 +355,53 @@ export async function saveReport(pool: Pool, meetingId: number, report: string):
     "UPDATE meetings SET report = $2, report_generated_at = now(), status = 'completed', updated_at = now() WHERE id = $1",
     [meetingId, report]
   );
+}
+
+// ── Transcription job state ─────────────────────────────────────────────────
+
+// Move an item's transcription job to a new state. Entering `processing`
+// stamps the start time; entering a terminal state stamps the finish time.
+// Any state other than `error` clears the stored error message.
+export async function setTranscribeStatus(
+  pool: Pool,
+  itemId: number,
+  status: TranscribeStatus,
+  error = ""
+): Promise<void> {
+  await pool.query(
+    `UPDATE agenda_items
+        SET transcribe_status = $2,
+            transcribe_error  = CASE WHEN $2 = 'error' THEN $3 ELSE '' END,
+            transcribe_started_at  = CASE WHEN $2 = 'processing' THEN now() ELSE transcribe_started_at END,
+            transcribe_finished_at = CASE WHEN $2 IN ('done','error') THEN now() ELSE transcribe_finished_at END
+      WHERE id = $1`,
+    [itemId, status, error]
+  );
+}
+
+// Item ids whose transcription never finished — used on boot to re-enqueue
+// work that a container restart interrupted.
+export async function listUnfinishedTranscriptions(pool: Pool): Promise<number[]> {
+  const r = await pool.query(
+    "SELECT id FROM agenda_items WHERE transcribe_status IN ('queued','processing') ORDER BY id"
+  );
+  return r.rows.map((row) => Number(row.id));
+}
+
+// Lightweight per-item state for the frontend status poll.
+export async function listItemStatuses(
+  pool: Pool,
+  meetingId: number
+): Promise<Array<{ id: number; transcribeStatus: TranscribeStatus; transcribeError: string; hasSummary: boolean }>> {
+  const r = await pool.query(
+    `SELECT id, transcribe_status, transcribe_error, (summary <> '') AS has_summary
+       FROM agenda_items WHERE meeting_id = $1 ORDER BY position, id`,
+    [meetingId]
+  );
+  return r.rows.map((row) => ({
+    id: Number(row.id),
+    transcribeStatus: (row.transcribe_status ?? "idle") as TranscribeStatus,
+    transcribeError: row.transcribe_error ?? "",
+    hasSummary: !!row.has_summary,
+  }));
 }

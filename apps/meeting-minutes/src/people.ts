@@ -55,12 +55,16 @@ export async function addPerson(
   }
 }
 
+// Update every editable field of a person in one call. `active` is optional:
+// when omitted the stored value is preserved, so a plain profile edit never
+// silently reactivates someone.
 export async function updatePerson(
   pool: Pool,
   id: number,
   name: string,
   email: string,
-  title: string
+  title: string,
+  active?: boolean
 ): Promise<AddResult> {
   const n = name.trim();
   const e = email.trim().toLowerCase();
@@ -68,8 +72,11 @@ export async function updatePerson(
   if (e && !e.includes("@")) return { ok: false, error: "Enter a valid email or leave it blank." };
   try {
     const r = await pool.query(
-      "UPDATE people SET name = $2, email = $3, title = $4 WHERE id = $1 RETURNING id",
-      [id, n, e, title.trim()]
+      `UPDATE people
+          SET name = $2, email = $3, title = $4,
+              active = COALESCE($5, active)
+        WHERE id = $1 RETURNING id`,
+      [id, n, e, title.trim(), active === undefined ? null : active]
     );
     if (!r.rows[0]) return { ok: false, error: "Person not found." };
     return { ok: true, id };
@@ -105,4 +112,34 @@ export function peopleNamedIn(text: string, people: Person[]): number[] {
     if (re.test(text) && !ids.includes(p.id)) ids.push(p.id);
   }
   return ids;
+}
+
+function firstNameOf(fullName: string): string {
+  return fullName.trim().split(/\s+/)[0] ?? "";
+}
+
+function lastNameOf(fullName: string): string {
+  const parts = fullName.trim().split(/\s+/);
+  return parts.length > 1 ? parts[parts.length - 1] : "";
+}
+
+// Resolve a presenter name written in an agenda document to a library person.
+// Tries the full name, then a last name, then a first name, and accepts a
+// fallback only when exactly one person matches. Ambiguous or unknown names
+// return null rather than being guessed at.
+export function matchPersonByName(name: string, people: Person[]): number | null {
+  const raw = name.trim();
+  if (raw.length < 2) return null;
+
+  const byFull = peopleNamedIn(raw, people);
+  if (byFull.length === 1) return byFull[0];
+
+  const lower = raw.toLowerCase();
+  const byLast = people.filter((p) => lastNameOf(p.name).toLowerCase() === lower);
+  if (byLast.length === 1) return byLast[0].id;
+
+  const byFirst = people.filter((p) => firstNameOf(p.name).toLowerCase() === lower);
+  if (byFirst.length === 1) return byFirst[0].id;
+
+  return null;
 }

@@ -2908,7 +2908,7 @@ function pollOnce(){
       renderAttendeeChips();
       state.items.forEach(function(x){ renderPresenterChips(x); renderSpeakerMap(x); });
     }
-    if(!settled.length){ if(anyTranscribing()) startPolling(); return; }
+    if(!settled.length){ afterPollRound(); return; }
     // Something finished — pull the full detail so we get segments, speaker map
     // and the rendered transcript, then decide about summaries.
     return api('/api/meetings/'+state.meeting.id).then(function(det){
@@ -2917,9 +2917,16 @@ function pollOnce(){
         var live=state.items.filter(function(x){ return x.id===it.id; })[0];
         if(live) onTranscriptionSettled(live);
       });
-      if(anyTranscribing()) startPolling();
+      afterPollRound();
     });
   }).catch(function(){ if(anyTranscribing()) startPolling(); });
+}
+
+// Keep polling while work remains; once the queue drains, honour a pending
+// "Generate report" click by re-invoking it automatically.
+function afterPollRound(){
+  if(anyTranscribing()){ startPolling(); return; }
+  if(state.reportPending){ state.reportPending=false; generateReport(); }
 }
 
 // A transcription just finished. Its content is new, so any old summary is
@@ -2952,13 +2959,13 @@ function summarizeIfNeeded(it){
 
 - [ ] **Step 4: Start and stop polling with the meeting view**
 
-In `openMeeting`, add `stopPolling();` next to the existing `stopRecording();` call at the top, and add this line at the end of the `.then()` callback, right after `renderDetail();`:
+In `openMeeting`, add `stopPolling(); state.reportPending=false;` next to the existing `stopRecording();` call at the top, and add this line at the end of the `.then()` callback, right after `renderDetail();`:
 
 ```javascript
     if(anyTranscribing()) startPolling();
 ```
 
-In `showList`, add `stopPolling();` immediately after the existing `stopRecording();` call.
+In `showList`, add `stopPolling(); state.reportPending=false;` immediately after the existing `stopRecording();` call.
 
 - [ ] **Step 5: Make the report wait for transcriptions**
 
@@ -2969,8 +2976,11 @@ Replace the first half of `generateReport` — everything from `setBtn('btn-repo
   if(state.openItemId){ var open=state.items.filter(function(x){return x.id===state.openItemId;})[0]; if(open) collapseItem(open); }
   var busy=state.items.filter(function(it){ return isTranscribing(it); });
   if(busy.length){
-    setBtn('btn-report', false);
-    msg('report-msg','info','Waiting for '+busy.length+' transcription'+(busy.length===1?'':'s')+' to finish. Try again once they are done.');
+    // Wait for the queue: the poller re-invokes generateReport once the last
+    // transcription settles, so the user clicks once and the report follows.
+    msg('report-msg','info','Waiting for '+busy.length+' transcription'+(busy.length===1?'':'s')+' to finish&hellip;');
+    setBtn('btn-report', true, 'Waiting…');
+    state.reportPending=true;
     startPolling();
     return;
   }
@@ -2988,7 +2998,7 @@ This is the acceptance test for the user's main complaint. Rebuild, then:
 4. Record item 2 while item 1 is still transcribing. Confirm item 2 shows **Queued to transcribe** and only starts once item 1 finishes.
 5. When item 1's transcription lands, confirm its badge goes to **Summarizing…** on its own (it is closed), then **Summary ready**, and that its transcript textarea is filled in with named speakers.
 6. Open item 3, record, and leave it **open** when transcription finishes. Confirm no summary fires until you collapse it.
-7. Click "Generate report" while something is still transcribing. Confirm it refuses with the "Waiting for N transcriptions" message rather than producing a report from a half-done item.
+7. Click "Generate report" while something is still transcribing. Confirm it shows "Waiting for N transcriptions…", keeps the button disabled, and then proceeds automatically — summaries first, then the report — once the last transcription lands, without another click.
 8. Reload the page mid-transcription. Confirm the badge still shows the correct state and the result still arrives.
 9. Click "Transcribe again" on a stored recording. Confirm the badge returns to **Queued to transcribe**, the job runs, and the transcript is regenerated from the original audio.
 10. Restart the container mid-transcription (`docker compose restart meeting-minutes`). Confirm the app log reports `re-queued 1 interrupted transcription(s)` and the transcript still arrives without re-recording.
@@ -3115,6 +3125,144 @@ Expected: PASS — every test file, no `tsc` errors.
 cd /Users/mitchellpeck/WebstormProjects/GRMCApps
 git add apps/meeting-minutes/src/public/app.js apps/meeting-minutes/src/public/app.css
 git commit -m "fix(meeting-minutes): refresh speaker dropdowns when attendees change"
+```
+
+---
+
+### Task 19: Exportable / printable meeting report
+
+*(Added 2026-08-13 mid-implementation at the user's request. Runs after Task 18.)*
+
+**Files:**
+- Modify: `apps/meeting-minutes/src/meetings.ts` (add `reportFileName`)
+- Test: `apps/meeting-minutes/src/meetings.test.ts` (pure unit tests, no DB needed)
+- Modify: `apps/meeting-minutes/src/routes/meetings.ts` (download endpoint)
+- Modify: `apps/meeting-minutes/src/public/app.js` (Print + Download controls)
+- Modify: `apps/meeting-minutes/src/public/app.css` (print isolation)
+
+**Interfaces:**
+- Consumes: `getMeeting` and the stored Markdown in `meetings.report` (existing); the report section markup in `renderDetail` (`#report-box`, `#btn-report`).
+- Produces: `reportFileName(title: string, meetingDate: string): string` exported from `./meetings`; `GET /api/meetings/:id/report.md` returning the report as a `text/markdown` attachment; a "Print / PDF" button driving `window.print()` with an `@media print` stylesheet that isolates the rendered report.
+
+**Context:** The report is already clean Markdown in the database and rendered HTML in `#report-box`. Export = stream the Markdown with a download filename; print = let the browser's print dialog produce paper or PDF, with CSS hiding everything but the report. No new dependencies.
+
+- [ ] **Step 1: Write the failing tests**
+
+Append to `apps/meeting-minutes/src/meetings.test.ts` (top level, NOT inside a DB-gated test):
+
+```typescript
+test("reportFileName slugs the title and date into a safe filename", () => {
+  assert.equal(reportFileName("April Board Meeting", "2026-04-14"), "2026-04-14-april-board-meeting-minutes.md");
+  assert.equal(reportFileName("Budget & Finance!!", ""), "budget-finance-minutes.md");
+  assert.equal(reportFileName("Board", "Apr 14, 7pm"), "apr-14-7pm-board-minutes.md");
+});
+
+test("reportFileName falls back when the title has no usable characters", () => {
+  assert.equal(reportFileName("###", ""), "meeting-minutes.md");
+  assert.equal(reportFileName("", ""), "meeting-minutes.md");
+});
+```
+
+Add `reportFileName` to the existing import from `./meetings` at the top of the test file.
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `cd apps/meeting-minutes && npx tsc` (with the dummy env vars)
+Expected: FAIL — `'"./meetings"' has no exported member 'reportFileName'`.
+
+- [ ] **Step 3: Implement the helper**
+
+Append to `apps/meeting-minutes/src/meetings.ts`:
+
+```typescript
+// A filesystem- and header-safe download filename for a meeting's report.
+// Output contains only [a-z0-9-] plus the .md suffix, so it can be embedded
+// in a Content-Disposition header without escaping.
+export function reportFileName(title: string, meetingDate: string): string {
+  const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  const parts = [slug(meetingDate), slug(title) || "meeting"].filter(Boolean);
+  return `${parts.join("-")}-minutes.md`;
+}
+```
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run the meetings test file (DB-gated tests skip without TEST_DATABASE_URL; the two new tests run regardless).
+Expected: PASS.
+
+- [ ] **Step 5: Add the download route**
+
+In `apps/meeting-minutes/src/routes/meetings.ts`, add `reportFileName` to the import from `"../meetings"`, and add this route next to the report-generation route:
+
+```typescript
+  // Download the generated report as a Markdown file.
+  app.get("/api/meetings/:id/report.md", async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    const meeting = await getMeeting(pool, id);
+    if (!meeting) { reply.code(404); return { ok: false, error: "Meeting not found." }; }
+    if (!meeting.report) { reply.code(404); return { ok: false, error: "No report has been generated yet." }; }
+    reply.header("content-type", "text/markdown; charset=utf-8");
+    reply.header("content-disposition", `attachment; filename="${reportFileName(meeting.title, meeting.meeting_date)}"`);
+    return reply.send(meeting.report);
+  });
+```
+
+- [ ] **Step 6: Add the Print and Download controls**
+
+In `apps/meeting-minutes/src/public/app.js`, in `renderDetail`, replace the report button row:
+
+```javascript
+  h+='<hr class="hr"><div class="section-title">Report</div>'
+    +'<div id="report-msg"></div>'
+    +'<div class="btn-row"><button class="btn btn-gold" id="btn-report" data-default="'+(m.report?'Regenerate report':'Generate report')+'">'+(m.report?'Regenerate report':'Generate report')+'</button>'
+    +'<span id="report-actions"'+(m.report?'':' style="display:none"')+'>'
+    +'<a class="btn btn-secondary" id="btn-report-dl" href="/api/meetings/'+m.id+'/report.md" download>Download .md</a> '
+    +'<button class="btn btn-secondary" id="btn-report-print" data-default="Print / PDF">Print / PDF</button>'
+    +'</span></div>'
+    +'<div id="report-box" style="margin-top:14px">'+(m.report?'<div class="report">'+renderMarkdown(m.report)+'</div>':'')+'</div>';
+```
+
+In the same function's wiring block, add:
+
+```javascript
+  document.getElementById('btn-report-print').addEventListener('click', function(){ window.print(); });
+```
+
+In `generateReport`, after the existing success lines that update `report-box` and the button label, reveal the actions:
+
+```javascript
+    var ra=document.getElementById('report-actions'); if(ra) ra.style.display='';
+```
+
+- [ ] **Step 7: Print isolation CSS**
+
+Append to `apps/meeting-minutes/src/public/app.css`:
+
+```css
+/* ── Print: only the generated report reaches paper ─────────────────────── */
+@media print {
+  body:has(#report-box .report) * { visibility: hidden; }
+  body:has(#report-box .report) #report-box,
+  body:has(#report-box .report) #report-box * { visibility: visible; }
+  body:has(#report-box .report) #report-box {
+    position: absolute; left: 0; top: 0; width: 100%; margin: 0; padding: 0;
+  }
+}
+```
+
+The `:has()` guard means views without a rendered report print normally.
+
+- [ ] **Step 8: Verify**
+
+- Full suite green.
+- `curl -si <base>/api/meetings/<id>/report.md` on a meeting without a report → 404 JSON; after generating a report → `content-type: text/markdown`, `content-disposition` with the slugged filename, body is the Markdown.
+- In the browser: Download link saves the .md; Print / PDF opens the dialog showing only the report.
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add apps/meeting-minutes/src/meetings.ts apps/meeting-minutes/src/meetings.test.ts apps/meeting-minutes/src/routes/meetings.ts apps/meeting-minutes/src/public/app.js apps/meeting-minutes/src/public/app.css
+git commit -m "feat(meeting-minutes): make the meeting report printable and downloadable"
 ```
 
 ---

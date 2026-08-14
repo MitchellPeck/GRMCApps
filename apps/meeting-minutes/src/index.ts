@@ -8,6 +8,7 @@ import { meRoutes } from "./routes/me";
 import { settingsRoutes } from "./routes/settings";
 import { peopleRoutes } from "./routes/people";
 import { meetingsRoutes } from "./routes/meetings";
+import { recoverPendingJobs } from "./transcribeQueue";
 
 const app = Fastify({ logger: true, trustProxy: true, bodyLimit: 2 * 1024 * 1024 });
 
@@ -23,6 +24,8 @@ app.get("/healthz", async () => ({ ok: true }));
 
 async function start() {
   await ensureSchema();
+  const recovered = await recoverPendingJobs();
+  if (recovered) app.log.info(`re-queued ${recovered} interrupted transcription(s)`);
   await app.listen({ host: "0.0.0.0", port: config.port });
   app.log.info(`meeting-minutes listening on ${config.port}`);
 }

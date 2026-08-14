@@ -55,6 +55,10 @@ CREATE TABLE IF NOT EXISTS agenda_items (
   speaker_map        jsonb NOT NULL DEFAULT '{}',
   summary            text NOT NULL DEFAULT '',
   action_items       jsonb NOT NULL DEFAULT '[]',
+  transcribe_status  text NOT NULL DEFAULT 'idle',
+  transcribe_error   text NOT NULL DEFAULT '',
+  transcribe_started_at  timestamptz,
+  transcribe_finished_at timestamptz,
   created_at         timestamptz NOT NULL DEFAULT now()
 );
 
@@ -63,12 +67,32 @@ ALTER TABLE agenda_items ADD COLUMN IF NOT EXISTS transcript_segments jsonb NOT 
 ALTER TABLE agenda_items ADD COLUMN IF NOT EXISTS speaker_map jsonb NOT NULL DEFAULT '{}';
 ALTER TABLE agenda_items ADD COLUMN IF NOT EXISTS action_items jsonb NOT NULL DEFAULT '[]';
 
+-- Migrate existing installs to asynchronous transcription.
+ALTER TABLE agenda_items ADD COLUMN IF NOT EXISTS transcribe_status text NOT NULL DEFAULT 'idle';
+ALTER TABLE agenda_items ADD COLUMN IF NOT EXISTS transcribe_error text NOT NULL DEFAULT '';
+ALTER TABLE agenda_items ADD COLUMN IF NOT EXISTS transcribe_started_at timestamptz;
+ALTER TABLE agenda_items ADD COLUMN IF NOT EXISTS transcribe_finished_at timestamptz;
+
 -- One or more people presenting a given agenda item.
 CREATE TABLE IF NOT EXISTS agenda_item_presenters (
   item_id     bigint NOT NULL REFERENCES agenda_items(id) ON DELETE CASCADE,
   person_id   bigint NOT NULL REFERENCES people(id) ON DELETE CASCADE,
   PRIMARY KEY (item_id, person_id)
 );
+
+-- Every audio recording ever attached to an agenda item. Files live on the
+-- minutesdata volume; rows are never deleted except by cascade, so a recording
+-- stays downloadable and re-transcribable for the life of the meeting.
+CREATE TABLE IF NOT EXISTS item_recordings (
+  id            bigserial PRIMARY KEY,
+  item_id       bigint NOT NULL REFERENCES agenda_items(id) ON DELETE CASCADE,
+  file_name     text NOT NULL DEFAULT '',
+  mime_type     text NOT NULL DEFAULT '',
+  byte_size     bigint NOT NULL DEFAULT 0,
+  storage_path  text NOT NULL,
+  created_at    timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS item_recordings_item_idx ON item_recordings (item_id, id);
 
 CREATE INDEX IF NOT EXISTS agenda_items_meeting_idx ON agenda_items (meeting_id, position);
 `;
