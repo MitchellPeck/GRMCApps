@@ -405,7 +405,7 @@ function editMeeting(){
       }}).then(function(res){
         if(!res.ok){ done(res.error||'Could not save.'); return; }
         m.title=v.title.trim(); m.meeting_date=v.date.trim();
-        m.location=v.loc.trim(); m.description=v.desc; m.status=v.status;
+        m.location=v.loc.trim(); m.description=v.desc.trim(); m.status=v.status;
         document.getElementById('d-title-txt').textContent=m.title;
         document.getElementById('d-meta-txt').innerHTML=[m.meeting_date,m.location].filter(Boolean).map(esc).join(' &middot; ');
         done(null);
@@ -492,7 +492,7 @@ function editItem(it){
       { id:'desc', label:'Details (optional)', type:'textarea', value:it.description||'' }
     ],
     onSave: function(v, done){
-      api('/api/items/'+it.id, { method:'PATCH', body:{ title:v.title, description:v.desc } })
+      api('/api/items/'+it.id, { method:'PATCH', body:{ title:v.title, description:v.desc.trim() } })
         .then(function(res){
           if(!res.ok){ done(res.error||'Could not save.'); return; }
           it.title=v.title.trim(); it.description=v.desc.trim();
