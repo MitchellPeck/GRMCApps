@@ -104,3 +104,13 @@
   margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line, #e2e8f0);
 }
 .modal-danger .hint { margin-bottom: 8px; }
+
+.spk-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 4px 0; }
+.spk-row .spk-share {
+  font-size: 12px; color: var(--muted, #64748b); min-width: 38px; text-align: right;
+}
+.spk-row .spk-sample {
+  flex-basis: 100%; font-size: 12px; color: var(--muted, #64748b);
+  font-style: italic; padding-left: 4px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}

@@ -447,8 +447,12 @@ function toggleAttendee(pid){
   if(i>=0) state.attendeeIds.splice(i,1); else state.attendeeIds.push(pid);
   api('/api/meetings/'+state.meeting.id+'/attendees', { method:'PUT', body:{ personIds:state.attendeeIds } });
   renderAttendeeChips();
-  // Presenter options depend on attendees — refresh open item bodies.
-  state.items.forEach(function(it){ renderPresenterChips(it); });
+  // Both presenter chips and the speaker dropdowns are built from the attendee
+  // list, so both have to be rebuilt the moment it changes.
+  state.items.forEach(function(it){
+    renderPresenterChips(it);
+    renderSpeakerMap(it);
+  });
 }
 
 // ── Agenda upload / add ─────────────────────────────────────────────────────
@@ -757,8 +761,8 @@ function renderTranscriptJS(segments, map){
 }
 function renderSpeakerMap(it){
   var el=document.getElementById('spk-'+it.id); if(!el) return;
-  var speakers=distinctSpeakersJS(it.transcript_segments);
-  if(speakers.length<1){ el.innerHTML=''; return; }
+  var stats=it.speaker_stats||[];
+  if(!stats.length){ el.innerHTML=''; return; }
   var attendees=state.attendeeIds.map(function(id){ return state.peopleById[id]; }).filter(Boolean);
   var opts=function(sel){
     var o='<option value="">— unlabeled —</option>';
@@ -768,12 +772,16 @@ function renderSpeakerMap(it){
     return o;
   };
   el.innerHTML='<div class="sublbl">Who is speaking?</div><div class="spk-rows">'
-    + speakers.map(function(spk, i){
-        var cur=(it.speaker_map||{})[spk]||'';
-        return '<div class="spk-row"><span class="spk-tag">Speaker '+(i+1)+'</span>'
-          +'<select data-spk="'+esc(spk)+'">'+opts(cur)+'</select></div>';
+    + stats.map(function(st){
+        var cur=(it.speaker_map||{})[st.speaker]||'';
+        var pct=Math.round(st.share*100);
+        return '<div class="spk-row"><span class="spk-tag">'+esc(st.label)+'</span>'
+          +'<span class="spk-share">'+pct+'%</span>'
+          +'<select data-spk="'+esc(st.speaker)+'">'+opts(cur)+'</select>'
+          +(st.sample?'<div class="spk-sample">&ldquo;'+esc(st.sample)+'&rdquo;</div>':'')
+          +'</div>';
       }).join('')
-    + '</div><div class="hint">Label each voice; the transcript and summary use these names. Remapping relabels the transcript.</div>';
+    + '</div><div class="hint">Voices are listed by how much they spoke. Several rows can be the same person — set them to the same name and their lines merge. Remapping relabels the transcript.</div>';
   el.querySelectorAll('select[data-spk]').forEach(function(sel){
     sel.addEventListener('change', function(){
       var spk=sel.getAttribute('data-spk');
