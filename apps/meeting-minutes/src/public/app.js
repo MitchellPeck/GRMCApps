@@ -264,12 +264,23 @@ function loadPeople(){
 
 function editPerson(id, people){
   var p = people.filter(function(x){ return x.id===id; })[0]; if(!p) return;
-  var name=prompt('Name:', p.name); if(name===null) return;
-  var title=prompt('Role / title (optional):', p.title||''); if(title===null) return;
-  var email=prompt('Email (optional):', p.email||''); if(email===null) return;
-  api('/api/people/'+id, { method:'PUT', body:{ name:name, title:title, email:email } }).then(function(res){
-    if(!res.ok){ msg('person-msg','err',res.error); return; }
-    loadPeople();
+  openModal({
+    title: 'Edit person',
+    fields: [
+      { id:'name', label:'Name', type:'text', value:p.name, required:true },
+      { id:'title', label:'Role / title', type:'text', value:p.title||'', placeholder:'e.g. Treasurer' },
+      { id:'email', label:'Email', type:'text', value:p.email||'', placeholder:'name@grmc.org' },
+      { id:'active', label:'Active (appears in attendee lists)', type:'checkbox', value:!!p.active }
+    ],
+    onSave: function(v, done){
+      api('/api/people/'+id, { method:'PUT', body:{
+        name:v.name, title:v.title, email:v.email, active:v.active
+      }}).then(function(res){
+        if(!res.ok){ done(res.error||'Could not save.'); return; }
+        done(null);
+        loadPeople();
+      }).catch(function(e){ done(e.message); });
+    }
   });
 }
 
@@ -375,14 +386,43 @@ function renderDetail(){
 
 function editMeeting(){
   var m=state.meeting;
-  var title=prompt('Meeting title:', m.title); if(title===null||!title.trim()) return;
-  var date=prompt('Date:', m.meeting_date||''); if(date===null) return;
-  var loc=prompt('Location:', m.location||''); if(loc===null) return;
-  api('/api/meetings/'+m.id, { method:'PATCH', body:{ title:title, meetingDate:date, location:loc } }).then(function(res){
-    if(!res.ok) return;
-    m.title=title.trim(); m.meeting_date=date.trim(); m.location=loc.trim();
-    document.getElementById('d-title-txt').textContent=m.title;
-    document.getElementById('d-meta-txt').innerHTML=[m.meeting_date,m.location].filter(Boolean).map(esc).join(' &middot; ');
+  openModal({
+    title: 'Edit meeting',
+    fields: [
+      { id:'title', label:'Title', type:'text', value:m.title, required:true },
+      { id:'date', label:'Date', type:'text', value:m.meeting_date||'', placeholder:'e.g. 2026-04-14 or Apr 14, 7pm' },
+      { id:'loc', label:'Location', type:'text', value:m.location||'', placeholder:'e.g. Fellowship Hall / Zoom' },
+      { id:'desc', label:'Description', type:'textarea', value:m.description||'' },
+      { id:'status', label:'Status', type:'select', value:m.status||'draft', options:[
+        { value:'draft', label:'Draft' },
+        { value:'in_progress', label:'In progress' },
+        { value:'completed', label:'Completed' }
+      ]}
+    ],
+    onSave: function(v, done){
+      api('/api/meetings/'+m.id, { method:'PATCH', body:{
+        title:v.title, meetingDate:v.date, location:v.loc, description:v.desc, status:v.status
+      }}).then(function(res){
+        if(!res.ok){ done(res.error||'Could not save.'); return; }
+        m.title=v.title.trim(); m.meeting_date=v.date.trim();
+        m.location=v.loc.trim(); m.description=v.desc; m.status=v.status;
+        document.getElementById('d-title-txt').textContent=m.title;
+        document.getElementById('d-meta-txt').innerHTML=[m.meeting_date,m.location].filter(Boolean).map(esc).join(' &middot; ');
+        done(null);
+      }).catch(function(e){ done(e.message); });
+    },
+    danger: {
+      label: 'Delete meeting',
+      hint: 'Deleting this meeting also deletes its agenda items, transcripts, recordings, and report. This cannot be undone. Type the meeting title to confirm.',
+      confirmText: m.title,
+      onConfirm: function(done){
+        api('/api/meetings/'+m.id, { method:'DELETE' }).then(function(res){
+          if(res && res.ok===false){ done(res.error||'Could not delete.'); return; }
+          done(null);
+          showList();
+        }).catch(function(e){ done(e.message); });
+      }
+    }
   });
 }
 
@@ -424,13 +464,42 @@ function uploadAgenda(){
   }).catch(function(e){ setBtn('btn-upload-agenda', false); msg('agenda-msg','err',e.message); });
 }
 function addItemManually(){
-  var title=prompt('Agenda item title:'); if(!title||!title.trim()) return;
-  var desc=prompt('Details (optional):')||'';
-  api('/api/meetings/'+state.meeting.id+'/items', { method:'POST', body:{ title:title, description:desc } }).then(function(res){
-    if(!res.ok){ msg('agenda-msg','err',res.error); return; }
-    api('/api/meetings/'+state.meeting.id).then(function(det){
-      if(det.ok){ state.items=det.items; renderItems(); }
-    });
+  openModal({
+    title: 'Add agenda item',
+    saveLabel: 'Add item',
+    fields: [
+      { id:'title', label:'Title', type:'text', value:'', required:true },
+      { id:'desc', label:'Details (optional)', type:'textarea', value:'' }
+    ],
+    onSave: function(v, done){
+      api('/api/meetings/'+state.meeting.id+'/items', { method:'POST', body:{ title:v.title, description:v.desc } })
+        .then(function(res){
+          if(!res.ok){ done(res.error||'Could not add the item.'); return; }
+          done(null);
+          return api('/api/meetings/'+state.meeting.id).then(function(det){
+            if(det.ok){ state.items=det.items; renderItems(); }
+          });
+        }).catch(function(e){ done(e.message); });
+    }
+  });
+}
+
+function editItem(it){
+  openModal({
+    title: 'Edit agenda item',
+    fields: [
+      { id:'title', label:'Title', type:'text', value:it.title, required:true },
+      { id:'desc', label:'Details (optional)', type:'textarea', value:it.description||'' }
+    ],
+    onSave: function(v, done){
+      api('/api/items/'+it.id, { method:'PATCH', body:{ title:v.title, description:v.desc } })
+        .then(function(res){
+          if(!res.ok){ done(res.error||'Could not save.'); return; }
+          it.title=v.title.trim(); it.description=v.desc.trim();
+          done(null);
+          renderItems();
+        }).catch(function(e){ done(e.message); });
+    }
   });
 }
 
@@ -467,6 +536,7 @@ function itemHtml(it, idx){
       +'<textarea id="nt-'+it.id+'" placeholder="Optional manual notes">'+esc(it.notes)+'</textarea>'
       +'<div class="hint" style="margin-top:8px">The summary is generated automatically when you collapse this item or open another. Editing the transcript or notes clears it so it regenerates.</div>'
       +'<div class="btn-row">'
+        +'<button class="btn-sm" data-edit-item="'+it.id+'">Edit item</button>'
         +'<button class="btn btn-danger btn-sm" data-del-item="'+it.id+'">Remove item</button>'
         +'<span id="imsg-'+it.id+'"></span>'
       +'</div>'
@@ -521,6 +591,7 @@ function wireItem(it){
   });
   document.querySelector('[data-rec="'+it.id+'"]').addEventListener('click', function(){ toggleRecording(it, this); });
   document.querySelector('[data-audio="'+it.id+'"]').addEventListener('change', function(){ uploadAudio(it, this); });
+  document.querySelector('[data-edit-item="'+it.id+'"]').addEventListener('click', function(){ editItem(it); });
   document.querySelector('[data-del-item="'+it.id+'"]').addEventListener('click', function(){ removeItem(it); });
 }
 
