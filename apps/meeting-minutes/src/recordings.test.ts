@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { extensionFor, recordingPath } from "./recordings";
+import { extensionFor, recordingPath, meetingRecordingPath } from "./recordings";
 
 test("extensionFor prefers a recognised filename extension", () => {
   assert.equal(extensionFor("item-4.m4a", "audio/webm"), "m4a");
@@ -29,4 +29,8 @@ test("extensionFor cannot be used to escape the audio directory", () => {
 
 test("recordingPath nests by item id and names the file by recording id", () => {
   assert.equal(recordingPath("/data", 12, 34, "webm"), "/data/audio/12/34.webm");
+});
+
+test("meetingRecordingPath nests by meeting id", () => {
+  assert.equal(meetingRecordingPath("/data", 4, 11, "webm"), "/data/audio/meeting-4/11.webm");
 });

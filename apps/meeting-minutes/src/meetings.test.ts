@@ -10,6 +10,7 @@ import {
   setMeetingRecordingStatus, listUnfinishedMeetingProcessing, addTopicMarker,
   listTopicMarkers, setMeetingSpeakerMap,
 } from "./meetings";
+import { appendMeetingChunk, getMeetingRecording } from "./recordings";
 
 const url = process.env.TEST_DATABASE_URL;
 
@@ -322,6 +323,37 @@ test("meeting recording status, markers and transcript_source", { skip: !url }, 
   await updateAgendaItem(pool, itemId, { transcriptSource: "meeting" });
   assert.equal((await getAgendaItem(pool, itemId))!.transcript_source, "meeting");
 
+  await reset(pool);
+  await pool.end();
+});
+
+test("meeting chunks append in order and deleteMeeting removes the file", { skip: !url }, async () => {
+  const pool = new Pool({ connectionString: url });
+  await reset(pool);
+  const m = await createMeeting(pool, { title: "Board", meetingDate: "", location: "", description: "", email: "", name: "" });
+  assert.ok(m.ok);
+  const meetingId = (m as { ok: true; status: number; id: number }).id;
+
+  const { mkdtemp, writeFile: writeTmp, readFile: readTmp, access } = await import("node:fs/promises");
+  const { join: joinPath } = await import("node:path");
+  const { tmpdir } = await import("node:os");
+  const dir = await mkdtemp(joinPath(tmpdir(), "mm-mrec-"));
+  const audioPath = joinPath(dir, "1.webm");
+  await writeTmp(audioPath, Buffer.alloc(0));
+  const rec = await pool.query(
+    "INSERT INTO meeting_recordings (meeting_id, mime_type, storage_path) VALUES ($1, 'audio/webm', $2) RETURNING id",
+    [meetingId, audioPath]
+  );
+  const recordingId = Number(rec.rows[0].id);
+
+  assert.equal(await appendMeetingChunk(pool, recordingId, Buffer.from("abc")), 3);
+  assert.equal(await appendMeetingChunk(pool, recordingId, Buffer.from("def")), 6);
+  assert.equal((await readTmp(audioPath)).toString(), "abcdef");
+  assert.equal((await getMeetingRecording(pool, recordingId))!.byte_size, 6);
+  await assert.rejects(appendMeetingChunk(pool, 999999, Buffer.from("x")));
+
+  await deleteMeeting(pool, meetingId);
+  await assert.rejects(access(audioPath));
   await reset(pool);
   await pool.end();
 });

@@ -1,5 +1,5 @@
 import { Pool } from "pg";
-import { mkdir, writeFile, unlink, rmdir } from "node:fs/promises";
+import { mkdir, writeFile, unlink, rmdir, appendFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { config } from "./config";
 
@@ -114,4 +114,99 @@ export async function removeRecordingFiles(pool: Pool, itemIds: number[]): Promi
   for (const id of new Set(itemIds)) {
     try { await rmdir(join(config.dataDir, "audio", String(id))); } catch { /* not empty or missing */ }
   }
+}
+
+export interface MeetingRecording {
+  id: number;
+  meeting_id: number;
+  mime_type: string;
+  byte_size: number;
+  storage_path: string;
+  started_at: string;
+  finished_at: string | null;
+}
+
+export function meetingRecordingPath(root: string, meetingId: number, recordingId: number, ext: string): string {
+  return join(root, "audio", `meeting-${meetingId}`, `${recordingId}.${ext}`);
+}
+
+function rowToMeetingRecording(row: any): MeetingRecording {
+  return {
+    id: Number(row.id),
+    meeting_id: Number(row.meeting_id),
+    mime_type: row.mime_type,
+    byte_size: Number(row.byte_size),
+    storage_path: row.storage_path,
+    started_at: row.started_at,
+    finished_at: row.finished_at ?? null,
+  };
+}
+
+// Create the recording row and its (empty) file up front; chunks append to it.
+export async function createMeetingRecording(
+  pool: Pool,
+  meetingId: number,
+  mimeType: string
+): Promise<MeetingRecording> {
+  const inserted = await pool.query(
+    "INSERT INTO meeting_recordings (meeting_id, mime_type) VALUES ($1, $2) RETURNING id",
+    [meetingId, mimeType || ""]
+  );
+  const id = Number(inserted.rows[0].id);
+  const path = meetingRecordingPath(config.dataDir, meetingId, id, extensionFor("", mimeType));
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, Buffer.alloc(0));
+  const updated = await pool.query(
+    "UPDATE meeting_recordings SET storage_path = $2 WHERE id = $1 RETURNING *",
+    [id, path]
+  );
+  return rowToMeetingRecording(updated.rows[0]);
+}
+
+export async function appendMeetingChunk(pool: Pool, recordingId: number, buffer: Buffer): Promise<number> {
+  const r = await pool.query("SELECT storage_path FROM meeting_recordings WHERE id = $1", [recordingId]);
+  const row = r.rows[0];
+  if (!row || !row.storage_path) throw new Error("Recording not found.");
+  await appendFile(row.storage_path, buffer);
+  const upd = await pool.query(
+    "UPDATE meeting_recordings SET byte_size = byte_size + $2 WHERE id = $1 RETURNING byte_size",
+    [recordingId, buffer.byteLength]
+  );
+  return Number(upd.rows[0].byte_size);
+}
+
+export async function finishMeetingRecording(pool: Pool, recordingId: number): Promise<void> {
+  await pool.query("UPDATE meeting_recordings SET finished_at = now() WHERE id = $1", [recordingId]);
+}
+
+export async function getMeetingRecording(pool: Pool, recordingId: number): Promise<MeetingRecording | null> {
+  const r = await pool.query("SELECT * FROM meeting_recordings WHERE id = $1", [recordingId]);
+  return r.rows[0] ? rowToMeetingRecording(r.rows[0]) : null;
+}
+
+export async function latestMeetingRecording(pool: Pool, meetingId: number): Promise<MeetingRecording | null> {
+  const r = await pool.query(
+    "SELECT * FROM meeting_recordings WHERE meeting_id = $1 ORDER BY id DESC LIMIT 1",
+    [meetingId]
+  );
+  return r.rows[0] ? rowToMeetingRecording(r.rows[0]) : null;
+}
+
+export async function listMeetingRecordings(pool: Pool, meetingId: number): Promise<MeetingRecording[]> {
+  const r = await pool.query(
+    "SELECT * FROM meeting_recordings WHERE meeting_id = $1 ORDER BY id",
+    [meetingId]
+  );
+  return r.rows.map(rowToMeetingRecording);
+}
+
+// Best-effort file cleanup, meeting-level analogue of removeRecordingFiles.
+export async function removeMeetingRecordingFiles(pool: Pool, meetingId: number): Promise<void> {
+  const r = await pool.query("SELECT storage_path FROM meeting_recordings WHERE meeting_id = $1", [meetingId]);
+  for (const row of r.rows) {
+    if (row.storage_path) {
+      try { await unlink(row.storage_path); } catch { /* already gone */ }
+    }
+  }
+  try { await rmdir(join(config.dataDir, "audio", `meeting-${meetingId}`)); } catch { /* not empty or missing */ }
 }
