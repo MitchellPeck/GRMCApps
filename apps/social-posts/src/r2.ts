@@ -35,7 +35,11 @@ export async function getR2Creds(pool: Pool): Promise<R2Creds> {
   const secretAccessKey = await getSetting(pool, "r2_secret_access_key");
   const bucket = await getSetting(pool, "r2_bucket");
   const publicBaseUrl = await getSetting(pool, "r2_public_base_url");
-  if (!accessKeyId || !secretAccessKey || !bucket || !publicBaseUrl) throw new Error("Image hosting (R2) not configured — add R2 settings.");
+  // accountId is part of the S3 endpoint host, so a blank one doesn't fail the
+  // upload cleanly — it turns into an unresolvable hostname.
+  if (!accountId || !accessKeyId || !secretAccessKey || !bucket || !publicBaseUrl) {
+    throw new Error("Image hosting (R2) not configured — add the account ID, keys, bucket and public URL in Settings.");
+  }
   return { accountId, accessKeyId, secretAccessKey, bucket, publicBaseUrl };
 }
 

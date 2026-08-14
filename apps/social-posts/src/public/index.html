@@ -199,9 +199,10 @@
     <div class="ct">Send to Metricool</div>
     <div class="field"><label>Post text</label><textarea id="mc-text" style="min-height:120px"></textarea></div>
     <div class="field"><label>Networks</label>
-      <label class="check"><input type="checkbox" id="mc-fb" checked> Facebook</label>
-      <label class="check"><input type="checkbox" id="mc-ig" checked> Instagram</label>
-      <label class="check"><input type="checkbox" id="mc-x" checked> X</label>
+      <label class="check"><input type="checkbox" id="mc-fb" checked onchange="updatePublishHint()"> Facebook</label>
+      <label class="check"><input type="checkbox" id="mc-ig" checked onchange="updatePublishHint()"> Instagram</label>
+      <label class="check"><input type="checkbox" id="mc-x" checked onchange="updatePublishHint()"> X</label>
+      <div class="hint" id="mc-publish-hint"></div>
     </div>
     <div class="row2">
       <div class="field"><label>Date</label><input type="date" id="mc-date"><div class="hint" id="mc-date-hint"></div></div>

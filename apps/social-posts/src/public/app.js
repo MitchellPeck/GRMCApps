@@ -497,6 +497,21 @@ function switchImageSource(){
   if(mode!=='approved') document.getElementById('mc-approved').value='';
 }
 
+// Metricool's autoPublish is one flag for the whole post, and Instagram has to
+// publish itself — so ticking Instagram also commits whatever it's grouped with.
+// Say that up front instead of letting it be a surprise after the fact.
+function updatePublishHint(){
+  var hint=document.getElementById('mc-publish-hint'); if(!hint) return;
+  var ig=document.getElementById('mc-ig').checked;
+  var others=[];
+  if(document.getElementById('mc-fb').checked) others.push('Facebook');
+  if(document.getElementById('mc-x').checked) others.push('X');
+  if(!ig){ hint.textContent='Lands as a draft — approve it in Metricool to publish.'; return; }
+  hint.textContent = others.length
+    ? 'Instagram publishes automatically, so '+others.join(' and ')+' will too — nothing waits for approval.'
+    : 'Publishes automatically at the scheduled time.';
+}
+
 // opts.date is the day this post belongs to (this week's Wednesday for a
 // Wednesday draft, the series post's own date for a series draft).
 function openMetricool(text, opts){
@@ -509,6 +524,7 @@ function openMetricool(text, opts){
   document.getElementById('mc-msg').innerHTML = '';
   switchImageSource();
   updateDateHint();
+  updatePublishHint();
   document.getElementById('mc-modal').style.display = 'flex';
   // Populate approved-image select
   var sel = document.getElementById('mc-approved');
@@ -564,7 +580,12 @@ function submitMetricool(){
     setBtn('mc-send-btn', false);
     var el = document.getElementById('mc-msg');
     if(!res.ok){ el.innerHTML = '<div class="alert alert-err">'+esc(res.error)+'</div>'; return; }
-    var extra = (res.note? ' '+esc(res.note):'') + ((res.warnings&&res.warnings.length)? ' '+esc(res.warnings.join(' ')):'');
+    // Whether a human still has to press publish depends on the networks picked,
+    // so say which of the two happened rather than a generic "sent".
+    var fate = res.autoPublish
+      ? ' It will publish automatically.'
+      : ' Approve it in the Metricool planner to publish.';
+    var extra = fate + (res.note? ' '+esc(res.note):'') + ((res.warnings&&res.warnings.length)? ' '+esc(res.warnings.join(' ')):'');
     el.innerHTML = '<div class="alert alert-ok">Sent to Metricool — scheduled '+esc(res.scheduledFor)+'.'+extra+'</div>';
   }).catch(function(e){ setBtn('mc-send-btn', false); document.getElementById('mc-msg').innerHTML = '<div class="alert alert-err">'+esc(e.message)+'</div>'; });
 }

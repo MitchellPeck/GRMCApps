@@ -15,7 +15,7 @@ The social-posts app drafts posts with Claude; Metricool is where GRMC schedules
 | Decision | Choice |
 |---|---|
 | Core workflow | "Send to Metricool" button on drafted posts (run results, Drafts, series) |
-| Lands in Metricool as | **Scheduled draft, human publishes** (`autoPublish:false` + publication date/time) |
+| Lands in Metricool as | **Draft a human approves** (`autoPublish:false` + `draft:true`) — *except* when Instagram is one of the networks, which forces `autoPublish:true` + `draft:false` for the whole post (revised 2026-08-08: Instagram cannot be published by hand from Metricool, and `autoPublish` is a single per-post flag, so anything grouped with Instagram publishes automatically too) |
 | Networks | **Facebook + Instagram** default (toggleable) |
 | Date/time | Auto-suggested from day-label / series date + a default posting time (Settings), editable |
 | Image source | **Approved image picked from Approvals** (primary), or an optional public image URL |
@@ -28,7 +28,7 @@ The social-posts app drafts posts with Claude; Metricool is where GRMC schedules
 
 ### 3.1 Metricool API
 - **Schedule:** `POST https://app.metricool.com/api/v2/scheduler/posts?userId={userId}&blogId={blogId}`, header `X-Mc-Auth: {token}`.
-- **Body:** `{ publicationDate:{dateTime:"<ISO>",timezone:"America/New_York"}, text, providers:[{network:"facebook"},{network:"instagram"}], autoPublish:false, ...media }`. Providers are objects; Facebook needs `facebookData.type="POST"`.
+- **Body:** `{ publicationDate:{dateTime:"<ISO>",timezone:"America/New_York"}, text, providers:[{network:"facebook"},{network:"instagram"}], autoPublish, draft, ...media }`. Providers are objects; Facebook needs `facebookData.type="POST"`; X is still `twitter`. `autoPublish` and `draft` are inverses of each other — sending `autoPublish:false` without `draft:true` leaves the post in the planner in a state nothing ever publishes.
 - **Media:** normalize a **public** image URL via Metricool's media endpoint → `mediaId`, include it in the post. Exact normalize path + per-network media fields pinned during implementation against Metricool's live API/CLI.
 - **Brands:** one token covers all brands; a brands-list endpoint lets the user pick `blogId`.
 

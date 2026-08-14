@@ -63,8 +63,11 @@ export async function metricoolRoutes(app: FastifyInstance): Promise<void> {
         mediaUrl = await normalizeMedia(creds, b.imageUrl.trim());
       }
 
+      // An Instagram post publishes itself at the scheduled time, so a missing
+      // image isn't something a human gets a chance to fix — Instagram rejects
+      // it outright. Say so plainly rather than implying there's time to patch it.
       const note = networks.includes("instagram") && !mediaUrl
-        ? "Instagram needs an image — add it in Metricool before publishing." : "";
+        ? "Instagram won't publish without an image — add one in Metricool before the scheduled time." : "";
 
       const payload = buildSchedulerPayload({ text: b.text || "", networks, dateTime: b.dateTime, timezone: b.timezone, mediaUrl });
       const postId = await schedulePost(creds, payload);
@@ -74,7 +77,7 @@ export async function metricoolRoutes(app: FastifyInstance): Promise<void> {
         networks: networks.join(","), imageRef: imageRefOf(b), r2Url: mediaUrl,
         scheduledFor: b.dateTime, timezone: b.timezone, metricoolPostId: postId, status: "sent", error: "", createdBy: email,
       });
-      return { ok: true, metricoolPostId: postId, scheduledFor: b.dateTime, warnings, note };
+      return { ok: true, metricoolPostId: postId, scheduledFor: b.dateTime, warnings, note, autoPublish: payload.autoPublish };
     } catch (e) {
       await logSend(pool, {
         sourceType: b.sourceType || "", sourceRef: b.sourceRef || "", text: b.text || "",
