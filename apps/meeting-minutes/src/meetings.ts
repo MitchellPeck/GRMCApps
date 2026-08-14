@@ -6,6 +6,8 @@ import { listPeople, matchPersonByName } from "./people";
 import { SpeakerStat, speakerStats } from "./speakers";
 import { removeRecordingFiles } from "./recordings";
 
+export type MeetingRecordingStatus = "idle" | "recording" | "queued" | "processing" | "done" | "error";
+
 export interface MeetingRow {
   id: number;
   title: string;
@@ -16,6 +18,9 @@ export interface MeetingRow {
   agenda_file_name: string;
   report: string;
   report_generated_at: string | null;
+  recording_status: MeetingRecordingStatus;
+  recording_error: string;
+  speaker_map: SpeakerMap;
   created_by_email: string;
   created_by_name: string;
   created_at: string;
@@ -40,6 +45,7 @@ export interface AgendaItem {
   transcribe_status: TranscribeStatus;
   transcribe_error: string;
   speaker_stats: SpeakerStat[];
+  transcript_source: string;
   presenter_ids: number[];
 }
 
@@ -60,6 +66,7 @@ function mapItemRow(row: any, presenterIds: number[]): AgendaItem {
     transcribe_status: (row.transcribe_status ?? "idle") as TranscribeStatus,
     transcribe_error: row.transcribe_error ?? "",
     speaker_stats: speakerStats(Array.isArray(row.transcript_segments) ? row.transcript_segments : []),
+    transcript_source: row.transcript_source ?? "",
     presenter_ids: presenterIds,
   };
 }
@@ -101,7 +108,14 @@ export async function listMeetings(pool: Pool): Promise<Array<MeetingRow & { ite
 export async function getMeeting(pool: Pool, id: number): Promise<MeetingRow | null> {
   const r = await pool.query("SELECT * FROM meetings WHERE id = $1", [id]);
   const row = r.rows[0];
-  return row ? { ...row, id: Number(row.id) } : null;
+  if (!row) return null;
+  return {
+    ...row,
+    id: Number(row.id),
+    recording_status: (row.recording_status ?? "idle") as MeetingRecordingStatus,
+    recording_error: row.recording_error ?? "",
+    speaker_map: row.speaker_map && typeof row.speaker_map === "object" ? row.speaker_map : {},
+  };
 }
 
 export async function updateMeeting(
@@ -278,6 +292,7 @@ export async function updateAgendaItem(
     summary?: string;
     actionItems?: ActionItem[];
     presenterIds?: number[];
+    transcriptSource?: string;
   }
 ): Promise<Result<{}>> {
   const existing = await getAgendaItem(pool, itemId);
@@ -292,6 +307,7 @@ export async function updateAgendaItem(
     if (fields.title !== undefined && fields.title.trim()) add("title", fields.title.trim());
     if (fields.description !== undefined) add("description", fields.description);
     if (fields.status !== undefined) add("status", fields.status);
+    if (fields.transcriptSource !== undefined) add("transcript_source", fields.transcriptSource);
     if (fields.notes !== undefined) add("notes", fields.notes);
     if (fields.summary !== undefined) add("summary", fields.summary);
     if (fields.actionItems !== undefined) add("action_items", JSON.stringify(fields.actionItems));
@@ -404,4 +420,62 @@ export async function listItemStatuses(
     transcribeError: row.transcribe_error ?? "",
     hasSummary: !!row.has_summary,
   }));
+}
+
+// ── Whole-meeting recording state ───────────────────────────────────────────
+
+// Any status other than `error` clears the stored error message.
+export async function setMeetingRecordingStatus(
+  pool: Pool,
+  meetingId: number,
+  status: MeetingRecordingStatus,
+  error = ""
+): Promise<void> {
+  await pool.query(
+    `UPDATE meetings
+        SET recording_status = $2,
+            recording_error  = CASE WHEN $2 = 'error' THEN $3 ELSE '' END,
+            updated_at = now()
+      WHERE id = $1`,
+    [meetingId, status, error]
+  );
+}
+
+// Meetings whose whole-recording processing never finished — used on boot to
+// re-enqueue work a restart interrupted.
+export async function listUnfinishedMeetingProcessing(pool: Pool): Promise<number[]> {
+  const r = await pool.query(
+    "SELECT id FROM meetings WHERE recording_status IN ('queued','processing') ORDER BY id"
+  );
+  return r.rows.map((row) => Number(row.id));
+}
+
+export async function addTopicMarker(
+  pool: Pool,
+  recordingId: number,
+  itemId: number,
+  atSeconds: number
+): Promise<void> {
+  await pool.query(
+    "INSERT INTO topic_markers (recording_id, item_id, at_seconds) VALUES ($1, $2, $3)",
+    [recordingId, itemId, atSeconds]
+  );
+}
+
+export async function listTopicMarkers(
+  pool: Pool,
+  recordingId: number
+): Promise<Array<{ itemId: number; atSeconds: number }>> {
+  const r = await pool.query(
+    "SELECT item_id, at_seconds FROM topic_markers WHERE recording_id = $1 ORDER BY at_seconds, id",
+    [recordingId]
+  );
+  return r.rows.map((row) => ({ itemId: Number(row.item_id), atSeconds: Number(row.at_seconds) }));
+}
+
+export async function setMeetingSpeakerMap(pool: Pool, meetingId: number, map: SpeakerMap): Promise<void> {
+  await pool.query("UPDATE meetings SET speaker_map = $2, updated_at = now() WHERE id = $1", [
+    meetingId,
+    JSON.stringify(map),
+  ]);
 }

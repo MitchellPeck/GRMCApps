@@ -7,6 +7,8 @@ import {
   setAttendees, getAttendeeIds, replaceAgendaItems, addAgendaItem,
   listAgendaItems, getAgendaItem, updateAgendaItem, deleteAgendaItem, saveReport,
   setTranscribeStatus, listUnfinishedTranscriptions, listItemStatuses, reportFileName,
+  setMeetingRecordingStatus, listUnfinishedMeetingProcessing, addTopicMarker,
+  listTopicMarkers, setMeetingSpeakerMap,
 } from "./meetings";
 
 const url = process.env.TEST_DATABASE_URL;
@@ -272,4 +274,54 @@ test("reportFileName slugs the title and date into a safe filename", () => {
 test("reportFileName falls back when the title has no usable characters", () => {
   assert.equal(reportFileName("###", ""), "meeting-minutes.md");
   assert.equal(reportFileName("", ""), "meeting-minutes.md");
+});
+
+test("meeting recording status, markers and transcript_source", { skip: !url }, async () => {
+  const pool = new Pool({ connectionString: url });
+  await reset(pool);
+  const m = await createMeeting(pool, { title: "Board", meetingDate: "", location: "", description: "", email: "", name: "" });
+  assert.ok(m.ok);
+  const meetingId = (m as { ok: true; status: number; id: number }).id;
+  const added = await addAgendaItem(pool, meetingId, "Budget", "");
+  assert.ok(added.ok);
+  const itemId = (added as { ok: true; status: number; id: number }).id;
+
+  let meeting = (await getMeeting(pool, meetingId))!;
+  assert.equal(meeting.recording_status, "idle");
+  assert.equal(meeting.recording_error, "");
+  assert.deepEqual(meeting.speaker_map, {});
+
+  await setMeetingRecordingStatus(pool, meetingId, "queued");
+  assert.deepEqual(await listUnfinishedMeetingProcessing(pool), [meetingId]);
+  await setMeetingRecordingStatus(pool, meetingId, "error", "whisper down");
+  meeting = (await getMeeting(pool, meetingId))!;
+  assert.equal(meeting.recording_status, "error");
+  assert.equal(meeting.recording_error, "whisper down");
+  assert.deepEqual(await listUnfinishedMeetingProcessing(pool), []);
+  await setMeetingRecordingStatus(pool, meetingId, "done");
+  assert.equal((await getMeeting(pool, meetingId))!.recording_error, "");
+
+  await setMeetingSpeakerMap(pool, meetingId, { SPEAKER_00: "Alice" });
+  assert.deepEqual((await getMeeting(pool, meetingId))!.speaker_map, { SPEAKER_00: "Alice" });
+
+  // Markers need a recording row; insert one directly.
+  const rec = await pool.query(
+    "INSERT INTO meeting_recordings (meeting_id, mime_type, storage_path) VALUES ($1, 'audio/webm', '') RETURNING id",
+    [meetingId]
+  );
+  const recordingId = Number(rec.rows[0].id);
+  await addTopicMarker(pool, recordingId, itemId, 12.5);
+  await addTopicMarker(pool, recordingId, itemId, 0);
+  assert.deepEqual(await listTopicMarkers(pool, recordingId), [
+    { itemId, atSeconds: 0 },
+    { itemId, atSeconds: 12.5 },
+  ]);
+
+  // transcript_source round-trips through updateAgendaItem.
+  assert.equal((await getAgendaItem(pool, itemId))!.transcript_source, "");
+  await updateAgendaItem(pool, itemId, { transcriptSource: "meeting" });
+  assert.equal((await getAgendaItem(pool, itemId))!.transcript_source, "meeting");
+
+  await reset(pool);
+  await pool.end();
 });

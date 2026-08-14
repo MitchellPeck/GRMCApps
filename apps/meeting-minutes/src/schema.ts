@@ -27,6 +27,9 @@ CREATE TABLE IF NOT EXISTS meetings (
   agenda_file_name    text NOT NULL DEFAULT '',
   report              text NOT NULL DEFAULT '',
   report_generated_at timestamptz,
+  recording_status    text NOT NULL DEFAULT 'idle',
+  recording_error     text NOT NULL DEFAULT '',
+  speaker_map         jsonb NOT NULL DEFAULT '{}',
   created_by_email    text NOT NULL DEFAULT '',
   created_by_name     text NOT NULL DEFAULT '',
   created_at          timestamptz NOT NULL DEFAULT now(),
@@ -59,6 +62,7 @@ CREATE TABLE IF NOT EXISTS agenda_items (
   transcribe_error   text NOT NULL DEFAULT '',
   transcribe_started_at  timestamptz,
   transcribe_finished_at timestamptz,
+  transcript_source  text NOT NULL DEFAULT '',
   created_at         timestamptz NOT NULL DEFAULT now()
 );
 
@@ -72,6 +76,12 @@ ALTER TABLE agenda_items ADD COLUMN IF NOT EXISTS transcribe_status text NOT NUL
 ALTER TABLE agenda_items ADD COLUMN IF NOT EXISTS transcribe_error text NOT NULL DEFAULT '';
 ALTER TABLE agenda_items ADD COLUMN IF NOT EXISTS transcribe_started_at timestamptz;
 ALTER TABLE agenda_items ADD COLUMN IF NOT EXISTS transcribe_finished_at timestamptz;
+
+-- Migrate existing installs to whole-meeting recording.
+ALTER TABLE meetings ADD COLUMN IF NOT EXISTS recording_status text NOT NULL DEFAULT 'idle';
+ALTER TABLE meetings ADD COLUMN IF NOT EXISTS recording_error text NOT NULL DEFAULT '';
+ALTER TABLE meetings ADD COLUMN IF NOT EXISTS speaker_map jsonb NOT NULL DEFAULT '{}';
+ALTER TABLE agenda_items ADD COLUMN IF NOT EXISTS transcript_source text NOT NULL DEFAULT '';
 
 -- One or more people presenting a given agenda item.
 CREATE TABLE IF NOT EXISTS agenda_item_presenters (
@@ -93,6 +103,30 @@ CREATE TABLE IF NOT EXISTS item_recordings (
   created_at    timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS item_recordings_item_idx ON item_recordings (item_id, id);
+
+-- One audio file per whole-meeting recording session. Chunks are appended as
+-- they arrive; files live on the minutesdata volume and are removed only when
+-- the meeting is deleted.
+CREATE TABLE IF NOT EXISTS meeting_recordings (
+  id            bigserial PRIMARY KEY,
+  meeting_id    bigint NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+  mime_type     text NOT NULL DEFAULT '',
+  byte_size     bigint NOT NULL DEFAULT 0,
+  storage_path  text NOT NULL DEFAULT '',
+  started_at    timestamptz NOT NULL DEFAULT now(),
+  finished_at   timestamptz
+);
+CREATE INDEX IF NOT EXISTS meeting_recordings_meeting_idx ON meeting_recordings (meeting_id, id);
+
+-- Topic switches observed while recording: "at second N the meeting moved to
+-- item X". Processing turns these into per-item audio windows.
+CREATE TABLE IF NOT EXISTS topic_markers (
+  id            bigserial PRIMARY KEY,
+  recording_id  bigint NOT NULL REFERENCES meeting_recordings(id) ON DELETE CASCADE,
+  item_id       bigint NOT NULL REFERENCES agenda_items(id) ON DELETE CASCADE,
+  at_seconds    double precision NOT NULL
+);
+CREATE INDEX IF NOT EXISTS topic_markers_recording_idx ON topic_markers (recording_id, at_seconds);
 
 CREATE INDEX IF NOT EXISTS agenda_items_meeting_idx ON agenda_items (meeting_id, position);
 `;
