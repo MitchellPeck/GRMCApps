@@ -6,7 +6,7 @@ import {
   createMeeting, listMeetings, getMeeting, updateMeeting, deleteMeeting,
   setAttendees, getAttendeeIds, replaceAgendaItems, addAgendaItem,
   listAgendaItems, getAgendaItem, updateAgendaItem, deleteAgendaItem, saveReport,
-  setTranscribeStatus, listUnfinishedTranscriptions, listItemStatuses,
+  setTranscribeStatus, listUnfinishedTranscriptions, listItemStatuses, reportFileName,
 } from "./meetings";
 
 const url = process.env.TEST_DATABASE_URL;
@@ -233,4 +233,15 @@ test("transcription status transitions and speaker stats", { skip: !url }, async
 
   await reset(pool);
   await pool.end();
+});
+
+test("reportFileName slugs the title and date into a safe filename", () => {
+  assert.equal(reportFileName("April Board Meeting", "2026-04-14"), "2026-04-14-april-board-meeting-minutes.md");
+  assert.equal(reportFileName("Budget & Finance!!", ""), "budget-finance-minutes.md");
+  assert.equal(reportFileName("Board", "Apr 14, 7pm"), "apr-14-7pm-board-minutes.md");
+});
+
+test("reportFileName falls back when the title has no usable characters", () => {
+  assert.equal(reportFileName("###", ""), "meeting-minutes.md");
+  assert.equal(reportFileName("", ""), "meeting-minutes.md");
 });

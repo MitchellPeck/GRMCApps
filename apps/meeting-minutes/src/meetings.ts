@@ -337,6 +337,15 @@ export async function deleteAgendaItem(pool: Pool, itemId: number): Promise<void
   await pool.query("DELETE FROM agenda_items WHERE id = $1", [itemId]);
 }
 
+// A filesystem- and header-safe download filename for a meeting's report.
+// Output contains only [a-z0-9-] plus the .md suffix, so it can be embedded
+// in a Content-Disposition header without escaping.
+export function reportFileName(title: string, meetingDate: string): string {
+  const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  const parts = [slug(meetingDate), slug(title) || "meeting"].filter(Boolean);
+  return `${parts.join("-")}-minutes.md`;
+}
+
 export async function saveReport(pool: Pool, meetingId: number, report: string): Promise<void> {
   await pool.query(
     "UPDATE meetings SET report = $2, report_generated_at = now(), status = 'completed', updated_at = now() WHERE id = $1",

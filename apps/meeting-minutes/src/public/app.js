@@ -373,7 +373,11 @@ function renderDetail(){
   // Report
   h+='<hr class="hr"><div class="section-title">Report</div>'
     +'<div id="report-msg"></div>'
-    +'<div class="btn-row"><button class="btn btn-gold" id="btn-report" data-default="'+(m.report?'Regenerate report':'Generate report')+'">'+(m.report?'Regenerate report':'Generate report')+'</button></div>'
+    +'<div class="btn-row"><button class="btn btn-gold" id="btn-report" data-default="'+(m.report?'Regenerate report':'Generate report')+'">'+(m.report?'Regenerate report':'Generate report')+'</button>'
+    +'<span id="report-actions"'+(m.report?'':' style="display:none"')+'>'
+    +'<a class="btn btn-secondary" id="btn-report-dl" href="/api/meetings/'+m.id+'/report.md" download>Download .md</a> '
+    +'<button class="btn btn-secondary" id="btn-report-print" data-default="Print / PDF">Print / PDF</button>'
+    +'</span></div>'
     +'<div id="report-box" style="margin-top:14px">'+(m.report?'<div class="report">'+renderMarkdown(m.report)+'</div>':'')+'</div>';
 
   document.getElementById('detail-body').innerHTML=h;
@@ -385,6 +389,7 @@ function renderDetail(){
   document.getElementById('btn-upload-agenda').addEventListener('click', uploadAgenda);
   document.getElementById('btn-add-item').addEventListener('click', addItemManually);
   document.getElementById('btn-report').addEventListener('click', generateReport);
+  document.getElementById('btn-report-print').addEventListener('click', function(){ window.print(); });
 }
 
 function editMeeting(){
@@ -1043,6 +1048,7 @@ function generateReport(){
     document.getElementById('report-box').innerHTML='<div class="report">'+renderMarkdown(res.report)+'</div>';
     document.getElementById('btn-report').setAttribute('data-default','Regenerate report');
     document.getElementById('btn-report').textContent='Regenerate report';
+    var ra=document.getElementById('report-actions'); if(ra) ra.style.display='';
   }).catch(function(e){ setBtn('btn-report', false); msg('report-msg','err',e.message); });
 }
 

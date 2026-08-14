@@ -11,7 +11,7 @@ import {
   createMeeting, listMeetings, getMeeting, updateMeeting, deleteMeeting,
   setAttendees, getAttendeeIds, replaceAgendaItems, addAgendaItem,
   listAgendaItems, getAgendaItem, updateAgendaItem, deleteAgendaItem, saveReport,
-  setTranscribeStatus, listItemStatuses,
+  setTranscribeStatus, listItemStatuses, reportFileName,
 } from "../meetings";
 import { enqueueTranscription, enqueueStoredRecording } from "../transcribeQueue";
 import { saveRecording, getRecording, listRecordings } from "../recordings";
@@ -313,5 +313,16 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
       reply.code(400);
       return { ok: false, error: (e as Error).message };
     }
+  });
+
+  // Download the generated report as a Markdown file.
+  app.get("/api/meetings/:id/report.md", async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    const meeting = await getMeeting(pool, id);
+    if (!meeting) { reply.code(404); return { ok: false, error: "Meeting not found." }; }
+    if (!meeting.report) { reply.code(404); return { ok: false, error: "No report has been generated yet." }; }
+    reply.header("content-type", "text/markdown; charset=utf-8");
+    reply.header("content-disposition", `attachment; filename="${reportFileName(meeting.title, meeting.meeting_date)}"`);
+    return reply.send(meeting.report);
   });
 }

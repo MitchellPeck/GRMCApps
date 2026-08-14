@@ -114,3 +114,13 @@
   font-style: italic; padding-left: 4px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+
+/* ── Print: only the generated report reaches paper ─────────────────────── */
+@media print {
+  body:has(#report-box .report) * { visibility: hidden; }
+  body:has(#report-box .report) #report-box,
+  body:has(#report-box .report) #report-box * { visibility: visible; }
+  body:has(#report-box .report) #report-box {
+    position: absolute; left: 0; top: 0; width: 100%; margin: 0; padding: 0;
+  }
+}
