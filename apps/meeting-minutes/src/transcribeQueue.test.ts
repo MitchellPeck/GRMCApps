@@ -256,6 +256,16 @@ test("runMeetingJob fills each topic's presenter onto its dominant unnamed voice
   assert.deepEqual(saved.find((s) => s.itemId === 2)!.map, { SPEAKER_01: "Bob Jones" });
 });
 
+test("a throwing log dep never flips a finished meeting job to error", async () => {
+  const { deps, events } = meetingSpyDeps({
+    transcribe: async () => ({ text: "", segments: [seg("x", "SPEAKER_00", 0, 5)] }),
+    log: () => { throw new Error("EPIPE"); },
+  });
+  await runMeetingJob(deps, mjob(6));
+  assert.ok(events.includes("status:6:done"));
+  assert.ok(!events.some((e) => e.startsWith("status:6:error")));
+});
+
 test("the generic queue runs meeting and item tasks strictly serially and survives failures", async () => {
   const order: string[] = [];
   const q = createQueue(() => {});

@@ -198,7 +198,9 @@ export async function runMeetingJob(d: MeetingDeps, job: MeetingJob): Promise<vo
   const audioSeconds = segments.length ? segments[segments.length - 1].end : 0;
   const elapsed = (Date.now() - started) / 1000;
   const factor = audioSeconds > 0 ? (elapsed / audioSeconds).toFixed(2) : "n/a";
-  d.log(`processed meeting ${job.meetingId}: ${byItem.size} topic(s), ${audioSeconds.toFixed(1)}s audio in ${elapsed.toFixed(1)}s (realtime factor ${factor})`);
+  try {
+    d.log(`processed meeting ${job.meetingId}: ${byItem.size} topic(s), ${audioSeconds.toFixed(1)}s audio in ${elapsed.toFixed(1)}s (realtime factor ${factor})`);
+  } catch { /* logging must never break the pipeline — a throw here must not flip a finished job to error */ }
 }
 
 function meetingTask(deps: MeetingDeps, job: MeetingJob): QueueTask {
@@ -434,7 +436,7 @@ function enqueueMeetingTask(job: MeetingJob): void {
 // by the retry / reprocess action).
 export async function enqueueMeetingProcessing(meetingId: number, recordingId: number): Promise<boolean> {
   const rec = await getMeetingRecording(pool, recordingId);
-  if (!rec || !rec.storage_path) return false;
+  if (!rec || rec.meeting_id !== meetingId || !rec.storage_path) return false;
   await setMeetingRecordingStatus(pool, meetingId, "queued");
   enqueueMeetingTask({ meetingId, recordingId: rec.id, path: rec.storage_path, mimeType: rec.mime_type });
   return true;
