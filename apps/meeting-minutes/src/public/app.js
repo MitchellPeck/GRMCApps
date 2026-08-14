@@ -340,7 +340,7 @@ function openMeeting(id){
     state.meetingRecordings = det.meetingRecordings || [];
     state.meetingSpeakerStats = det.meetingSpeakerStats || [];
     renderDetail();
-    if(anyTranscribing()) startPolling();
+    if(anyPendingWork()) startPolling();
   });
 }
 
@@ -994,7 +994,31 @@ function renderMeetingRecUi(){
           if(typeof startPolling==='function') startPolling();
         })['catch'](function(e){ msg('mrec-msg','err',e.message); });
       });
-    } else ex.innerHTML='';
+    } else {
+      var rs=m.recording_status;
+      if(rs==='queued'){ ex.innerHTML='<div class="hint">Queued for processing&hellip;</div>'; }
+      else if(rs==='processing'){ ex.innerHTML='<div class="hint"><span class="spin" style="border-top-color:var(--navy)"></span> Processing the meeting recording&hellip;</div>'; }
+      else if(rs==='error'){
+        ex.innerHTML='<div class="alert alert-err">'+esc(m.recording_error||'Processing failed.')+'</div>'
+          +(state.meetingRecordings && state.meetingRecordings.length
+            ? '<button class="btn-sm" id="btn-mrec-retry">Retry processing</button>' : '');
+        var rb=document.getElementById('btn-mrec-retry');
+        if(rb) rb.addEventListener('click', function(){
+          var last=state.meetingRecordings[state.meetingRecordings.length-1];
+          api('/api/meeting-recordings/'+last.id+'/reprocess', { method:'POST' }).then(function(res){
+            if(!res.ok){ msg('mrec-msg','err',res.error||'Could not queue processing.'); return; }
+            state.meeting.recording_status='queued';
+            renderMeetingRecUi();
+            startPolling();
+          })['catch'](function(e){ msg('mrec-msg','err',e.message); });
+        });
+      }
+      else if(rs==='done' && state.meetingRecordings && state.meetingRecordings.length){
+        var lastRec=state.meetingRecordings[state.meetingRecordings.length-1];
+        ex.innerHTML='<div class="hint">Processed. <a href="/api/meeting-recordings/'+lastRec.id+'/download">Download the recording</a></div>';
+      }
+      else ex.innerHTML='';
+    }
   }
 }
 
@@ -1109,6 +1133,13 @@ function anyTranscribing(){
   return state.items.some(function(it){ return isTranscribing(it); });
 }
 
+// True while the whole-meeting recording is queued or being processed.
+function meetingProcessing(){
+  var m=state.meeting;
+  return !!m && (m.recording_status==='queued' || m.recording_status==='processing');
+}
+function anyPendingWork(){ return anyTranscribing() || meetingProcessing(); }
+
 // Bumping pollGen invalidates every in-flight poll response: openMeeting and
 // showList both call this on navigation, so a fetch started for the meeting
 // you just left can never re-arm the timer or clobber the meeting you're
@@ -1129,7 +1160,14 @@ function pollOnce(){
   var gen=pollGen;
   api('/api/meetings/'+state.meeting.id+'/status').then(function(res){
     if(gen!==pollGen) return;
-    if(!res.ok){ if(anyTranscribing()) startPolling(); return; }
+    if(!res.ok){ if(anyPendingWork()) startPolling(); return; }
+    var wasMeetingBusy = meetingProcessing();
+    if(res.meeting && state.meeting){
+      state.meeting.recording_status = res.meeting.recordingStatus || state.meeting.recording_status;
+      state.meeting.recording_error  = res.meeting.recordingError || '';
+    }
+    var meetingSettled = wasMeetingBusy && !meetingProcessing();
+    if(res.meeting && state.meeting) renderMeetingRecUi();
     var settled=[];
     res.items.forEach(function(s){
       var it=state.items.filter(function(x){ return x.id===s.id; })[0];
@@ -1147,13 +1185,18 @@ function pollOnce(){
       renderAttendeeChips();
       state.items.forEach(function(x){ renderPresenterChips(x); renderSpeakerMap(x); });
     }
-    if(!settled.length){ afterPollRound(); return; }
+    if(!settled.length && !meetingSettled){ afterPollRound(); return; }
     // Something finished — pull the full detail so we get segments, speaker map
     // and the rendered transcript, then decide about summaries.
     return api('/api/meetings/'+state.meeting.id).then(function(det){
       if(gen!==pollGen) return;
       if(det.ok){
-        state.meeting=det.meeting; syncItems(det.items);
+        state.meeting=det.meeting;
+        state.meetingRecordings = det.meetingRecordings || [];
+        state.meetingSpeakerStats = det.meetingSpeakerStats || [];
+        syncItems(det.items);
+        renderMeetingRecUi();
+        if(typeof renderMeetingSpeakerPanel==='function') renderMeetingSpeakerPanel();
         settled.forEach(function(it){
           var live=state.items.filter(function(x){ return x.id===it.id; })[0];
           if(live) onTranscriptionSettled(live);
@@ -1161,13 +1204,13 @@ function pollOnce(){
       }
       afterPollRound();
     });
-  }).catch(function(){ if(gen===pollGen && anyTranscribing()) startPolling(); });
+  }).catch(function(){ if(gen===pollGen && anyPendingWork()) startPolling(); });
 }
 
 // Keep polling while work remains; once the queue drains, honour a pending
 // "Generate report" click by re-invoking it automatically.
 function afterPollRound(){
-  if(anyTranscribing()){ startPolling(); return; }
+  if(anyPendingWork()){ startPolling(); return; }
   if(state.reportPending){ state.reportPending=false; generateReport(); }
 }
 
@@ -1188,10 +1231,10 @@ function generateReport(){
   setBtn('btn-report', true, 'Preparing…');
   if(state.openItemId){ var open=state.items.filter(function(x){return x.id===state.openItemId;})[0]; if(open) collapseItem(open); }
   var busy=state.items.filter(function(it){ return isTranscribing(it); });
-  if(busy.length){
+  if(busy.length || meetingProcessing()){
     // Wait for the queue: the poller re-invokes generateReport once the last
     // transcription settles, so the user clicks once and the report follows.
-    msg('report-msg','info','Waiting for '+busy.length+' transcription'+(busy.length===1?'':'s')+' to finish&hellip;');
+    msg('report-msg','info','Waiting for processing to finish&hellip;');
     setBtn('btn-report', true, 'Waiting…');
     state.reportPending=true;
     startPolling();
