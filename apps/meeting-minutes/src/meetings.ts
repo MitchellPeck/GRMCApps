@@ -4,6 +4,7 @@ import { DiarizedSegment } from "./whisper";
 import { SpeakerMap, renderTranscript } from "./transcript";
 import { listPeople, matchPersonByName } from "./people";
 import { SpeakerStat, speakerStats } from "./speakers";
+import { removeRecordingFiles } from "./recordings";
 
 export interface MeetingRow {
   id: number;
@@ -129,6 +130,8 @@ export async function updateMeeting(
 }
 
 export async function deleteMeeting(pool: Pool, id: number): Promise<void> {
+  const items = await pool.query("SELECT id FROM agenda_items WHERE meeting_id = $1", [id]);
+  await removeRecordingFiles(pool, items.rows.map((r) => Number(r.id)));
   await pool.query("DELETE FROM meetings WHERE id = $1", [id]);
 }
 
@@ -334,6 +337,7 @@ export async function updateAgendaItem(
 }
 
 export async function deleteAgendaItem(pool: Pool, itemId: number): Promise<void> {
+  await removeRecordingFiles(pool, [itemId]);
   await pool.query("DELETE FROM agenda_items WHERE id = $1", [itemId]);
 }
 

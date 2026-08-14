@@ -235,6 +235,34 @@ test("transcription status transitions and speaker stats", { skip: !url }, async
   await pool.end();
 });
 
+test("deleteMeeting removes the recordings' audio files", { skip: !url }, async () => {
+  const pool = new Pool({ connectionString: url });
+  await reset(pool);
+  const m = await createMeeting(pool, { title: "Board", meetingDate: "", location: "", description: "", email: "", name: "" });
+  assert.ok(m.ok);
+  const meetingId = (m as { ok: true; status: number; id: number }).id;
+  const added = await addAgendaItem(pool, meetingId, "Budget", "");
+  assert.ok(added.ok);
+  const itemId = (added as { ok: true; status: number; id: number }).id;
+
+  const { mkdtemp, writeFile: writeTmp, access } = await import("node:fs/promises");
+  const { join: joinPath } = await import("node:path");
+  const { tmpdir } = await import("node:os");
+  const dir = await mkdtemp(joinPath(tmpdir(), "mm-rec-"));
+  const audioPath = joinPath(dir, "1.webm");
+  await writeTmp(audioPath, Buffer.from("fake-audio"));
+  await pool.query(
+    "INSERT INTO item_recordings (item_id, file_name, mime_type, byte_size, storage_path) VALUES ($1,'a.webm','audio/webm',10,$2)",
+    [itemId, audioPath]
+  );
+
+  await deleteMeeting(pool, meetingId);
+  await assert.rejects(access(audioPath)); // file gone
+  assert.equal((await listMeetings(pool)).length, 0);
+  await reset(pool);
+  await pool.end();
+});
+
 test("reportFileName slugs the title and date into a safe filename", () => {
   assert.equal(reportFileName("April Board Meeting", "2026-04-14"), "2026-04-14-april-board-meeting-minutes.md");
   assert.equal(reportFileName("Budget & Finance!!", ""), "budget-finance-minutes.md");

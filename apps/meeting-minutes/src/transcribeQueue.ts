@@ -135,20 +135,44 @@ async function realReconcile(job: TranscribeJob, segments: DiarizedSegment[]): P
 }
 
 // Give the busiest voice to this item's presenter, but only when that presenter
-// is actually marked present at the meeting.
+// is actually marked present at the meeting. `dbPool` defaults to the real
+// singleton but is overridable, matching `recoverPendingJobs` below — tests
+// inject a pool pointed at TEST_DATABASE_URL rather than the module's pool,
+// which is always wired to the production `postgres` host.
 async function withPresenterAssignment(
   itemId: number,
   segments: DiarizedSegment[],
-  map: SpeakerMap
+  map: SpeakerMap,
+  dbPool: Pool = pool
 ): Promise<SpeakerMap> {
-  const item = await getAgendaItem(pool, itemId);
+  const item = await getAgendaItem(dbPool, itemId);
   if (!item || !item.presenter_ids.length) return map;
-  const attendeeIds = new Set(await getAttendeeIds(pool, item.meeting_id));
+  const attendeeIds = new Set(await getAttendeeIds(dbPool, item.meeting_id));
   const presentPresenter = item.presenter_ids.find((id) => attendeeIds.has(id));
   if (presentPresenter === undefined) return map;
-  const people = await listPeople(pool, true);
+  const people = await listPeople(dbPool, true);
   const name = people.find((p) => p.id === presentPresenter)?.name ?? "";
   return assignPresenterToDominant(segments, map, name);
+}
+
+// Persist a finished transcription. New transcript content invalidates any
+// previous summary; the client regenerates it under the summary gate once the
+// item is closed. `dbPool` defaults to the real singleton (see
+// `withPresenterAssignment` above); tests pass their own pool explicitly.
+export async function saveTranscriptionResult(
+  itemId: number,
+  segments: DiarizedSegment[],
+  map: SpeakerMap,
+  dbPool: Pool = pool
+): Promise<void> {
+  const withPresenter = await withPresenterAssignment(itemId, segments, map, dbPool);
+  await updateAgendaItem(dbPool, itemId, {
+    transcriptSegments: segments,
+    speakerMap: withPresenter,
+    summary: "",
+    actionItems: [],
+    status: "pending",
+  });
 }
 
 export const transcribeQueue: Queue = createQueue({
@@ -158,10 +182,7 @@ export const transcribeQueue: Queue = createQueue({
   },
   reconcile: realReconcile,
   setStatus: (itemId, status, error) => setTranscribeStatus(pool, itemId, status, error ?? ""),
-  saveResult: async (job, segments, map) => {
-    const withPresenter = await withPresenterAssignment(job.itemId, segments, map);
-    await updateAgendaItem(pool, job.itemId, { transcriptSegments: segments, speakerMap: withPresenter });
-  },
+  saveResult: (job, segments, map) => saveTranscriptionResult(job.itemId, segments, map),
   log: (message) => { console.log(`[transcribe] ${message}`); },
 });
 

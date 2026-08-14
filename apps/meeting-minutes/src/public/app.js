@@ -962,7 +962,7 @@ function pollOnce(){
   var gen=pollGen;
   api('/api/meetings/'+state.meeting.id+'/status').then(function(res){
     if(gen!==pollGen) return;
-    if(!res.ok) return;
+    if(!res.ok){ if(anyTranscribing()) startPolling(); return; }
     var settled=[];
     res.items.forEach(function(s){
       var it=state.items.filter(function(x){ return x.id===s.id; })[0];
@@ -985,11 +985,13 @@ function pollOnce(){
     // and the rendered transcript, then decide about summaries.
     return api('/api/meetings/'+state.meeting.id).then(function(det){
       if(gen!==pollGen) return;
-      if(det.ok){ state.meeting=det.meeting; syncItems(det.items); }
-      settled.forEach(function(it){
-        var live=state.items.filter(function(x){ return x.id===it.id; })[0];
-        if(live) onTranscriptionSettled(live);
-      });
+      if(det.ok){
+        state.meeting=det.meeting; syncItems(det.items);
+        settled.forEach(function(it){
+          var live=state.items.filter(function(x){ return x.id===it.id; })[0];
+          if(live) onTranscriptionSettled(live);
+        });
+      }
       afterPollRound();
     });
   }).catch(function(){ if(gen===pollGen && anyTranscribing()) startPolling(); });

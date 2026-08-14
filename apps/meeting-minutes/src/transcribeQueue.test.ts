@@ -1,8 +1,11 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { createQueue, TranscribeJob, QueueDeps } from "./transcribeQueue";
+import { Pool } from "pg";
+import { createQueue, saveTranscriptionResult, TranscribeJob, QueueDeps } from "./transcribeQueue";
 import { DiarizedSegment, TranscriptionResult } from "./whisper";
 import { SpeakerMap } from "./transcript";
+
+const url = process.env.TEST_DATABASE_URL;
 
 const job = (itemId: number): TranscribeJob =>
   ({ itemId, recordingId: itemId * 10, path: `/data/audio/${itemId}/1.webm`, fileName: "a.webm", mimeType: "audio/webm" });
@@ -135,4 +138,30 @@ test("a throwing log dep never corrupts status or stops the queue", async () => 
   assert.ok(events.includes("status:1:error:whisper unreachable"));
   assert.ok(events.includes("status:2:done"));
   assert.ok(!events.some((e) => e.startsWith("status:2:error")));
+});
+
+test("saveTranscriptionResult clears a stale summary with the new transcript", { skip: !url }, async () => {
+  const pool = new Pool({ connectionString: url });
+  await pool.query("DELETE FROM meetings");
+  const meeting = await pool.query(
+    "INSERT INTO meetings (title) VALUES ('Board') RETURNING id"
+  );
+  const meetingId = Number(meeting.rows[0].id);
+  const item = await pool.query(
+    "INSERT INTO agenda_items (meeting_id, position, title, summary, action_items, status) VALUES ($1, 0, 'Budget', 'old summary', '[{\"task\":\"x\",\"owner\":\"y\"}]', 'done') RETURNING id",
+    [meetingId]
+  );
+  const itemId = Number(item.rows[0].id);
+
+  await saveTranscriptionResult(itemId, [
+    { text: "New content.", speaker: "SPEAKER_00", start: 0, end: 2 },
+  ], {}, pool);
+
+  const after = await pool.query("SELECT transcript, summary, action_items, status FROM agenda_items WHERE id = $1", [itemId]);
+  assert.equal(after.rows[0].transcript, "Speaker 1: New content.");
+  assert.equal(after.rows[0].summary, "");
+  assert.deepEqual(after.rows[0].action_items, []);
+  assert.equal(after.rows[0].status, "pending");
+  await pool.query("DELETE FROM meetings");
+  await pool.end();
 });

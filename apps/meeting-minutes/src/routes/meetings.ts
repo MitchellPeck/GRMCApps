@@ -233,7 +233,10 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
     const rec = await getRecording(pool, id);
     if (!rec || !rec.storage_path) { reply.code(404); return { ok: false, error: "Recording not found." }; }
     if (!existsSync(rec.storage_path)) { reply.code(404); return { ok: false, error: "Recording file is missing." }; }
-    const safeName = (rec.file_name || `recording-${rec.id}`).replace(/["\\\r\n]/g, "");
+    // Header-safe: strip quote/backslash/CR/LF and any non-ASCII (Node rejects
+    // chars > 0xFF in header values), falling back to a generated name.
+    const cleaned = (rec.file_name || "").replace(/["\\\r\n]/g, "").replace(/[^\x20-\x7E]/g, "").trim();
+    const safeName = cleaned || `recording-${rec.id}`;
     reply.header("content-type", rec.mime_type || "application/octet-stream");
     reply.header("content-disposition", `attachment; filename="${safeName}"`);
     return reply.send(createReadStream(rec.storage_path));

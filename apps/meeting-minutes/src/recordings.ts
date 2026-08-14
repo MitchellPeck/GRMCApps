@@ -1,5 +1,5 @@
 import { Pool } from "pg";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, writeFile, unlink, rmdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { config } from "./config";
 
@@ -95,4 +95,23 @@ export async function latestRecording(pool: Pool, itemId: number): Promise<Recor
     [itemId]
   );
   return r.rows[0] ? rowToRecording(r.rows[0]) : null;
+}
+
+// Remove the audio files belonging to these items. Best-effort: a missing or
+// undeletable file never blocks the owning delete. Called just before the DB
+// rows cascade away — the only moment recordings are ever removed.
+export async function removeRecordingFiles(pool: Pool, itemIds: number[]): Promise<void> {
+  if (!itemIds.length) return;
+  const r = await pool.query(
+    "SELECT storage_path FROM item_recordings WHERE item_id = ANY($1)",
+    [itemIds]
+  );
+  for (const row of r.rows) {
+    if (row.storage_path) {
+      try { await unlink(row.storage_path); } catch { /* already gone */ }
+    }
+  }
+  for (const id of new Set(itemIds)) {
+    try { await rmdir(join(config.dataDir, "audio", String(id))); } catch { /* not empty or missing */ }
+  }
 }
