@@ -963,11 +963,20 @@ function renderMeetingRecUi(){
   var ex=document.getElementById('mrec-extra');
   if(!b) return;
   if(meetingRec){
+    if(!state.meeting || meetingRec.meetingId!==state.meeting.id){
+      b.disabled=true;
+      b.textContent='Recording another meeting…';
+      if(st) st.textContent='';
+      if(ex) ex.innerHTML='';
+      return;
+    }
+    b.disabled=false;
     b.innerHTML='<span class="rec-dot"></span> Stop &amp; process ('+fmtClock(meetingElapsedSeconds())+')';
     if(st) st.innerHTML='<span class="rec-dot"></span> Recording the whole meeting&hellip;';
     if(ex) ex.innerHTML='';
     return;
   }
+  b.disabled=false;
   b.textContent=b.getAttribute('data-default')||'● Record meeting';
   if(st) st.textContent='';
   if(ex){
@@ -1017,7 +1026,10 @@ function postTopicMarker(itemId){
 }
 
 function toggleMeetingRecording(){
-  if(meetingRec){ stopMeetingRecording(); return; }
+  if(meetingRec){
+    if(state.meeting && meetingRec.meetingId===state.meeting.id) stopMeetingRecording();
+    return;
+  }
   if(activeRec){ msg('mrec-msg','err','Stop the topic recording first — there is one microphone.'); return; }
   if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder){
     msg('mrec-msg','err','This browser cannot record audio.'); return;
