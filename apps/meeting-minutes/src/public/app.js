@@ -174,6 +174,7 @@ document.querySelectorAll('.tab').forEach(function(t){
 });
 function showList(){
   stopRecording();
+  stopPolling(); state.reportPending=false;
   // Summarize the item left open, so nothing is lost on the way out.
   if(state.openItemId && state.items){
     var open=state.items.filter(function(x){return x.id===state.openItemId;})[0];
@@ -325,6 +326,7 @@ function personName(id){ var p=state.peopleById[id]; return p ? p.name : '#'+id;
 
 function openMeeting(id){
   stopRecording();
+  stopPolling(); state.reportPending=false;
   showDetail();
   document.getElementById('detail-body').innerHTML='<div class="empty">Loading&hellip;</div>';
   Promise.all([ api('/api/people?all=1'), api('/api/meetings/'+id) ]).then(function(r){
@@ -336,6 +338,7 @@ function openMeeting(id){
     state.attendeeIds = det.attendeeIds;
     state.items = det.items;
     renderDetail();
+    if(anyTranscribing()) startPolling();
   });
 }
 
@@ -523,12 +526,18 @@ function refreshItemView(it){
   if(tx && document.activeElement!==tx && tx.value!==it.transcript) tx.value=it.transcript;
   var sumEl=document.getElementById('sum-'+it.id);
   if(sumEl) sumEl.innerHTML=summaryHtml(it);
-  var rs=document.getElementById('recstat-'+it.id);
-  if(rs){
-    if(it.transcribe_status==='queued') rs.textContent='Queued — transcription starts when the one ahead finishes.';
-    else if(it.transcribe_status==='processing') rs.innerHTML='<span class="spin" style="border-top-color:var(--navy)"></span> Transcribing &amp; identifying speakers&hellip;';
-    else if(it.transcribe_status==='error') rs.innerHTML='<span style="color:var(--rej-fg)">'+esc(it.transcribe_error||'Transcription failed.')+'</span>';
-    else rs.textContent='';
+  // While this item is the one actively being recorded (e.g. re-recording it,
+  // or recording it again right after a previous clip was queued), leave its
+  // rec-status line showing "Recording…" — never let a poll's transcribe
+  // status for this item clobber that indicator out from under the user.
+  if(!(typeof activeRec!=='undefined' && activeRec && activeRec.it.id===it.id)){
+    var rs=document.getElementById('recstat-'+it.id);
+    if(rs){
+      if(it.transcribe_status==='queued') rs.textContent='Queued — transcription starts when the one ahead finishes.';
+      else if(it.transcribe_status==='processing') rs.innerHTML='<span class="spin" style="border-top-color:var(--navy)"></span> Transcribing &amp; identifying speakers&hellip;';
+      else if(it.transcribe_status==='error') rs.innerHTML='<span style="color:var(--rej-fg)">'+esc(it.transcribe_error||'Transcription failed.')+'</span>';
+      else rs.textContent='';
+    }
   }
 }
 
@@ -681,7 +690,11 @@ function invalidateSummary(it){
   refreshBadge(it);
 }
 
+// Generate the summary when there is something to summarize AND no
+// transcription is pending for this item. A queued or in-flight transcription
+// always wins: summarizing now would describe a transcript about to change.
 function summarizeIfNeeded(it){
+  if(isTranscribing(it)) return Promise.resolve();
   if(!itemHasContent(it)) return Promise.resolve();
   if(it.summary && !it._dirty) return Promise.resolve();
   if(it._summarizing) return it._summarizing;
@@ -777,8 +790,8 @@ function renderSpeakerMap(it){
 }
 
 // Every recording ever attached to this item. They are kept for the life of
-// the meeting, so the original audio is always downloadable. Task 17 adds the
-// "Transcribe again" action here, once the poller exists to watch the job.
+// the meeting, so the original audio is always downloadable, and any of them
+// can be sent through transcription again via "Transcribe again".
 function renderRecordings(it){
   var el=document.getElementById('rec-'+it.id); if(!el) return;
   var recs=it.recordings||[];
@@ -788,9 +801,21 @@ function renderRecordings(it){
         var size=r.byte_size ? (Math.round(r.byte_size/1024/102.4)/10)+' MB' : '';
         return '<li><span class="rec-name">'+esc(r.file_name||('recording '+r.id))+'</span>'
           +(size?'<span class="rec-size">'+esc(size)+'</span>':'')
-          +'<a class="btn-sm" href="/api/recordings/'+r.id+'/download">Download</a></li>';
+          +'<a class="btn-sm" href="/api/recordings/'+r.id+'/download">Download</a>'
+          +'<button class="btn-sm" data-retry="'+it.id+'" data-rec-id="'+r.id+'">Transcribe again</button></li>';
       }).join('')
     + '</ul>';
+  el.querySelectorAll('[data-retry]').forEach(function(b){
+    b.addEventListener('click', function(){
+      api('/api/items/'+it.id+'/retranscribe', { method:'POST', body:{ recordingId: Number(b.getAttribute('data-rec-id')) } })
+        .then(function(res){
+          if(!res.ok){ msg('imsg-'+it.id,'err',res.error); return; }
+          it.transcribe_status='queued'; it.transcribe_error='';
+          refreshItemView(it);
+          startPolling();
+        }).catch(function(e){ msg('imsg-'+it.id,'err',e.message); });
+    });
+  });
 }
 
 function renderPresenterChips(it){
@@ -872,27 +897,21 @@ function stopRecording(){
   }
 }
 
-// Send a recorded/selected audio blob for transcription + diarization.
+// Hand a recorded/selected audio blob to the server and return immediately.
+// The serial queue does the work; the status poll reports progress, so the
+// user can move straight on to the next topic.
 function transcribeBlob(it, blob, mime){
   var rs=document.getElementById('recstat-'+it.id);
-  if(!blob || !blob.size){ rs.innerHTML='<span style="color:var(--rej-fg)">No audio captured.</span>'; return; }
-  rs.innerHTML='<span class="spin" style="border-top-color:var(--navy)"></span> Transcribing &amp; identifying speakers…';
+  if(!blob || !blob.size){ if(rs) rs.innerHTML='<span style="color:var(--rej-fg)">No audio captured.</span>'; return; }
+  if(rs) rs.innerHTML='<span class="spin" style="border-top-color:var(--navy)"></span> Uploading audio&hellip;';
   var ext=(mime||'').indexOf('mp4')>=0?'m4a':(mime||'').indexOf('ogg')>=0?'ogg':'webm';
   var fd=new FormData(); fd.append('file', blob, 'item-'+it.id+'.'+ext);
   apiForm('/api/items/'+it.id+'/transcribe', fd).then(function(res){
-    if(!res.ok){ rs.innerHTML='<span style="color:var(--rej-fg)">'+esc(res.error)+'</span>'; return; }
-    it.transcript=res.transcript;
-    it.speaker_map=res.speakerMap||{};
-    // Reflect the newly diarized segments so the speaker map + re-render work.
-    return api('/api/meetings/'+state.meeting.id).then(function(det){
-      if(det.ok){ var fresh=det.items.filter(function(x){return x.id===it.id;})[0]; if(fresh){ it.transcript_segments=fresh.transcript_segments; it.speaker_map=fresh.speaker_map; } }
-      document.getElementById('tx-'+it.id).value=it.transcript;
-      renderSpeakerMap(it);
-      invalidateSummary(it);
-      var n=(res.speakers||[]).length;
-      rs.textContent= n>1 ? ('Transcribed — '+n+' speakers detected. Label them below.') : 'Transcribed.';
-    });
-  }).catch(function(e){ rs.innerHTML='<span style="color:var(--rej-fg)">'+esc(e.message)+'</span>'; });
+    if(!res.ok){ if(rs) rs.innerHTML='<span style="color:var(--rej-fg)">'+esc(res.error)+'</span>'; return; }
+    it.transcribe_status='queued'; it.transcribe_error='';
+    refreshItemView(it);
+    startPolling();
+  }).catch(function(e){ if(rs) rs.innerHTML='<span style="color:var(--rej-fg)">'+esc(e.message)+'</span>'; });
 }
 
 // ── Audio file upload → same transcription path ─────────────────────────────
@@ -902,12 +921,92 @@ function uploadAudio(it, input){
   transcribeBlob(it, f, f.type);
 }
 
+// ── Status polling ──────────────────────────────────────────────────────────
+// Runs only while a meeting is open AND something is queued or transcribing.
+var pollTimer=null;
+
+function anyTranscribing(){
+  return state.items.some(function(it){ return isTranscribing(it); });
+}
+
+function stopPolling(){
+  if(pollTimer){ clearTimeout(pollTimer); pollTimer=null; }
+}
+
+function startPolling(){
+  if(pollTimer) return;
+  pollTimer=setTimeout(pollOnce, 3000);
+}
+
+function pollOnce(){
+  pollTimer=null;
+  if(!state.meeting){ return; }
+  api('/api/meetings/'+state.meeting.id+'/status').then(function(res){
+    if(!res.ok) return;
+    var settled=[];
+    res.items.forEach(function(s){
+      var it=state.items.filter(function(x){ return x.id===s.id; })[0];
+      if(!it) return;
+      var was=it.transcribe_status;
+      it.transcribe_status=s.transcribeStatus;
+      it.transcribe_error=s.transcribeError;
+      if((was==='queued'||was==='processing') && !isTranscribing(it)) settled.push(it);
+      else refreshItemView(it);
+    });
+    // Attendees can change behind our back: another user, or auto-linked people
+    // from action items. Keep the chips and the speaker dropdowns honest.
+    if(res.attendeeIds && res.attendeeIds.join(',')!==state.attendeeIds.join(',')){
+      state.attendeeIds=res.attendeeIds;
+      renderAttendeeChips();
+      state.items.forEach(function(x){ renderPresenterChips(x); renderSpeakerMap(x); });
+    }
+    if(!settled.length){ afterPollRound(); return; }
+    // Something finished — pull the full detail so we get segments, speaker map
+    // and the rendered transcript, then decide about summaries.
+    return api('/api/meetings/'+state.meeting.id).then(function(det){
+      if(det.ok){ state.meeting=det.meeting; syncItems(det.items); }
+      settled.forEach(function(it){
+        var live=state.items.filter(function(x){ return x.id===it.id; })[0];
+        if(live) onTranscriptionSettled(live);
+      });
+      afterPollRound();
+    });
+  }).catch(function(){ if(anyTranscribing()) startPolling(); });
+}
+
+// Keep polling while work remains; once the queue drains, honour a pending
+// "Generate report" click by re-invoking it automatically.
+function afterPollRound(){
+  if(anyTranscribing()){ startPolling(); return; }
+  if(state.reportPending){ state.reportPending=false; generateReport(); }
+}
+
+// A transcription just finished. Its content is new, so any old summary is
+// stale. If the topic is CLOSED, summarize it now — this is the deferred
+// auto-summary the user asked for. If it is open, leave it: closing it will.
+function onTranscriptionSettled(it){
+  if(it.transcribe_status==='error'){ refreshItemView(it); return; }
+  it._dirty=true; it._summaryError=false;
+  refreshItemView(it);
+  if(state.openItemId!==it.id) summarizeIfNeeded(it);
+}
+
 // ── Report ──────────────────────────────────────────────────────────────────
 // Every item with content must be summarized first. Collapse the open item and
 // summarize any pending items, then write the report.
 function generateReport(){
   setBtn('btn-report', true, 'Preparing…');
   if(state.openItemId){ var open=state.items.filter(function(x){return x.id===state.openItemId;})[0]; if(open) collapseItem(open); }
+  var busy=state.items.filter(function(it){ return isTranscribing(it); });
+  if(busy.length){
+    // Wait for the queue: the poller re-invokes generateReport once the last
+    // transcription settles, so the user clicks once and the report follows.
+    msg('report-msg','info','Waiting for '+busy.length+' transcription'+(busy.length===1?'':'s')+' to finish&hellip;');
+    setBtn('btn-report', true, 'Waiting…');
+    state.reportPending=true;
+    startPolling();
+    return;
+  }
   var pending=state.items.filter(function(it){ return itemHasContent(it) && (!it.summary || it._dirty || it._summarizing); });
   if(pending.length) msg('report-msg','info','Summarizing '+pending.length+' item'+(pending.length===1?'':'s')+' before the report…');
   var chain=Promise.resolve();
