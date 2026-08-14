@@ -337,6 +337,8 @@ function openMeeting(id){
     state.meeting = det.meeting;
     state.attendeeIds = det.attendeeIds;
     state.items = det.items;
+    state.meetingRecordings = det.meetingRecordings || [];
+    state.meetingSpeakerStats = det.meetingSpeakerStats || [];
     renderDetail();
     if(anyTranscribing()) startPolling();
   });
@@ -355,6 +357,14 @@ function renderDetail(){
   h+='<div class="card"><div class="ct">Who is present?</div>'
     +'<div class="hint" style="margin-bottom:8px">Select attendees from the people library (add more under the People tab). Attendees become selectable as presenters below.</div>'
     +'<div class="chips" id="attendee-chips"></div></div>';
+
+  // Meeting recording
+  h+='<div class="card"><div class="ct">Meeting recording</div>'
+    +'<div id="mrec-msg"></div>'
+    +'<div class="btn-row"><button class="btn btn-primary" id="btn-meeting-rec" data-default="● Record meeting">● Record meeting</button>'
+    +'<span class="rec-status" id="mrec-status"></span></div>'
+    +'<div class="hint">One recording for the whole meeting. Open each topic as you discuss it — that click files the audio under the right topic. Processing starts when you stop.</div>'
+    +'<div id="mrec-extra"></div></div>';
 
   // Agenda upload
   h+='<div class="card"><div class="ct">Agenda</div>'
@@ -384,10 +394,12 @@ function renderDetail(){
 
   renderAttendeeChips();
   renderItems();
+  renderMeetingRecUi();
 
   document.getElementById('btn-edit-meeting').addEventListener('click', editMeeting);
   document.getElementById('btn-upload-agenda').addEventListener('click', uploadAgenda);
   document.getElementById('btn-add-item').addEventListener('click', addItemManually);
+  document.getElementById('btn-meeting-rec').addEventListener('click', toggleMeetingRecording);
   document.getElementById('btn-report').addEventListener('click', generateReport);
   document.getElementById('btn-report-print').addEventListener('click', function(){ window.print(); });
 }
@@ -679,6 +691,7 @@ function toggleItemOpen(it){
   }
   body.classList.remove('collapsed');
   state.openItemId=it.id;
+  postTopicMarker(it.id);
 }
 function collapseItem(it){
   var body=document.getElementById('ibody-'+it.id);
@@ -877,6 +890,7 @@ function toggleRecording(it, btn){
   if(activeRec && activeRec.it.id===it.id){ stopRecording(); return; }
   if(activeRec){ stopRecording(); }
   var rs=document.getElementById('recstat-'+it.id);
+  if(meetingRec){ rs.innerHTML='<span style="color:var(--rej-fg)">The meeting recording is running — it will capture this topic automatically.</span>'; return; }
   if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder){
     rs.innerHTML='<span style="color:var(--rej-fg)">This browser cannot record audio. Upload a recording instead.</span>';
     return;
@@ -932,6 +946,134 @@ function uploadAudio(it, input){
   if(!input.files.length) return;
   var f=input.files[0]; input.value='';
   transcribeBlob(it, f, f.type);
+}
+
+// ── Whole-meeting recording ─────────────────────────────────────────────────
+// One MediaRecorder for the entire meeting. ~20s chunks upload as they are
+// produced (strictly ordered by a promise chain), so a crash loses seconds,
+// not the meeting. Topic clicks lay down markers; processing segments by them.
+var meetingRec=null; // {meetingId, recordingId, mr, stream, t0, chain, failedChunk, timer}
+
+function meetingElapsedSeconds(){ return meetingRec ? (performance.now()-meetingRec.t0)/1000 : 0; }
+function fmtClock(s){ var m=Math.floor(s/60), r=Math.floor(s%60); return m+':'+(r<10?'0':'')+r; }
+
+function renderMeetingRecUi(){
+  var b=document.getElementById('btn-meeting-rec');
+  var st=document.getElementById('mrec-status');
+  var ex=document.getElementById('mrec-extra');
+  if(!b) return;
+  if(meetingRec){
+    b.innerHTML='<span class="rec-dot"></span> Stop &amp; process ('+fmtClock(meetingElapsedSeconds())+')';
+    if(st) st.innerHTML='<span class="rec-dot"></span> Recording the whole meeting&hellip;';
+    if(ex) ex.innerHTML='';
+    return;
+  }
+  b.textContent=b.getAttribute('data-default')||'● Record meeting';
+  if(st) st.textContent='';
+  if(ex){
+    var m=state.meeting||{};
+    if(m.recording_status==='recording' && state.meetingRecordings && state.meetingRecordings.length){
+      ex.innerHTML='<div class="hint">A meeting recording was interrupted before it was processed.</div>'
+        +'<button class="btn-sm" id="btn-mrec-resume">Process interrupted recording</button>';
+      document.getElementById('btn-mrec-resume').addEventListener('click', function(){
+        var last=state.meetingRecordings[state.meetingRecordings.length-1];
+        api('/api/meeting-recordings/'+last.id+'/finish', { method:'POST' }).then(function(res){
+          if(!res.ok){ msg('mrec-msg','err',res.error||'Could not queue processing.'); return; }
+          state.meeting.recording_status='queued';
+          renderMeetingRecUi();
+          if(typeof startPolling==='function') startPolling();
+        })['catch'](function(e){ msg('mrec-msg','err',e.message); });
+      });
+    } else ex.innerHTML='';
+  }
+}
+
+function uploadMeetingChunk(blob){
+  if(!meetingRec) return;
+  var rec=meetingRec;
+  function send(b){
+    var fd=new FormData(); fd.append('file', b, 'chunk.webm');
+    return apiForm('/api/meeting-recordings/'+rec.recordingId+'/chunk', fd).then(function(res){
+      if(!res.ok) throw new Error(res.error||'Chunk upload failed');
+    });
+  }
+  rec.chain = rec.chain.then(function(){
+    var payload = rec.failedChunk ? new Blob([rec.failedChunk, blob], { type: blob.type||'audio/webm' }) : blob;
+    rec.failedChunk = null;
+    return send(payload)['catch'](function(){
+      return new Promise(function(r){ setTimeout(r, 2000); }).then(function(){ return send(payload); });
+    })['catch'](function(){
+      // Carry the audio forward: prepending to the next upload preserves order.
+      rec.failedChunk = payload;
+    });
+  });
+}
+
+function postTopicMarker(itemId){
+  if(!meetingRec || !state.meeting || meetingRec.meetingId!==state.meeting.id) return;
+  api('/api/meeting-recordings/'+meetingRec.recordingId+'/marker', {
+    method:'POST', body:{ itemId: itemId, atSeconds: meetingElapsedSeconds() }
+  })['catch'](function(){});
+}
+
+function toggleMeetingRecording(){
+  if(meetingRec){ stopMeetingRecording(); return; }
+  if(activeRec){ msg('mrec-msg','err','Stop the topic recording first — there is one microphone.'); return; }
+  if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder){
+    msg('mrec-msg','err','This browser cannot record audio.'); return;
+  }
+  msg('mrec-msg','','');
+  navigator.mediaDevices.getUserMedia({ audio:{ channelCount:1, echoCancellation:true, noiseSuppression:true } })
+    .then(function(stream){
+      var mime=pickMime();
+      api('/api/meetings/'+state.meeting.id+'/recording/start', { method:'POST', body:{ mimeType: mime||'audio/webm' } })
+        .then(function(res){
+          if(!res.ok){
+            try { stream.getTracks().forEach(function(t){ t.stop(); }); } catch(e){}
+            msg('mrec-msg','err',res.error||'Could not start the recording.');
+            return;
+          }
+          var mr=new MediaRecorder(stream, mime?{ mimeType:mime }:undefined);
+          meetingRec={ meetingId:state.meeting.id, recordingId:res.recordingId, mr:mr, stream:stream,
+                       t0:performance.now(), chain:Promise.resolve(), failedChunk:null, timer:null };
+          mr.ondataavailable=function(e){ if(e.data && e.data.size) uploadMeetingChunk(e.data); };
+          mr.onstop=function(){ finalizeMeetingRecording(); };
+          mr.start(20000);
+          state.meeting.recording_status='recording';
+          meetingRec.timer=setInterval(renderMeetingRecUi, 1000);
+          window.onbeforeunload=function(){ return 'A meeting recording is running.'; };
+          if(state.openItemId) postTopicMarker(state.openItemId);
+          renderMeetingRecUi();
+        });
+    })['catch'](function(e){ msg('mrec-msg','err','Mic access denied: '+(e.message||e.name)); });
+}
+
+function stopMeetingRecording(){
+  if(!meetingRec) return;
+  var st=document.getElementById('mrec-status');
+  if(st) st.innerHTML='<span class="spin" style="border-top-color:var(--navy)"></span> Finishing upload&hellip;';
+  try { if(meetingRec.mr.state!=='inactive') meetingRec.mr.stop(); } catch(e){ finalizeMeetingRecording(); }
+}
+
+function finalizeMeetingRecording(){
+  var rec=meetingRec; if(!rec) return;
+  meetingRec=null;
+  window.onbeforeunload=null;
+  if(rec.timer) clearInterval(rec.timer);
+  try { rec.stream.getTracks().forEach(function(t){ t.stop(); }); } catch(e){}
+  rec.chain.then(function(){
+    if(rec.failedChunk){
+      var fd=new FormData(); fd.append('file', rec.failedChunk, 'chunk.webm');
+      return apiForm('/api/meeting-recordings/'+rec.recordingId+'/chunk', fd)['catch'](function(){});
+    }
+  }).then(function(){
+    return api('/api/meeting-recordings/'+rec.recordingId+'/finish', { method:'POST' });
+  }).then(function(res){
+    if(!res || !res.ok){ msg('mrec-msg','err',(res&&res.error)||'Could not queue processing.'); renderMeetingRecUi(); return; }
+    state.meeting.recording_status='queued';
+    renderMeetingRecUi();
+    if(typeof startPolling==='function') startPolling();
+  })['catch'](function(e){ msg('mrec-msg','err',e.message); renderMeetingRecUi(); });
 }
 
 // ── Status polling ──────────────────────────────────────────────────────────
