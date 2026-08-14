@@ -953,6 +953,7 @@ function uploadAudio(it, input){
 // produced (strictly ordered by a promise chain), so a crash loses seconds,
 // not the meeting. Topic clicks lay down markers; processing segments by them.
 var meetingRec=null; // {meetingId, recordingId, mr, stream, t0, chain, failedChunk, timer}
+var meetingRecStarting=false; // true only during the getUserMedia→POST /recording/start window
 
 function meetingElapsedSeconds(){ return meetingRec ? (performance.now()-meetingRec.t0)/1000 : 0; }
 function fmtClock(s){ var m=Math.floor(s/60), r=Math.floor(s%60); return m+':'+(r<10?'0':'')+r; }
@@ -1030,9 +1031,17 @@ function toggleMeetingRecording(){
     if(state.meeting && meetingRec.meetingId===state.meeting.id) stopMeetingRecording();
     return;
   }
+  if(meetingRecStarting) return;
   if(activeRec){ msg('mrec-msg','err','Stop the topic recording first — there is one microphone.'); return; }
   if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder){
     msg('mrec-msg','err','This browser cannot record audio.'); return;
+  }
+  meetingRecStarting=true;
+  var sb=document.getElementById('btn-meeting-rec'); if(sb) sb.disabled=true;
+  function startFailed(message){
+    meetingRecStarting=false;
+    var bb=document.getElementById('btn-meeting-rec'); if(bb) bb.disabled=false;
+    if(message) msg('mrec-msg','err',message);
   }
   msg('mrec-msg','','');
   navigator.mediaDevices.getUserMedia({ audio:{ channelCount:1, echoCancellation:true, noiseSuppression:true } })
@@ -1042,12 +1051,13 @@ function toggleMeetingRecording(){
         .then(function(res){
           if(!res.ok){
             try { stream.getTracks().forEach(function(t){ t.stop(); }); } catch(e){}
-            msg('mrec-msg','err',res.error||'Could not start the recording.');
+            startFailed(res.error||'Could not start the recording.');
             return;
           }
           var mr=new MediaRecorder(stream, mime?{ mimeType:mime }:undefined);
           meetingRec={ meetingId:state.meeting.id, recordingId:res.recordingId, mr:mr, stream:stream,
                        t0:performance.now(), chain:Promise.resolve(), failedChunk:null, timer:null };
+          meetingRecStarting=false;
           mr.ondataavailable=function(e){ if(e.data && e.data.size) uploadMeetingChunk(e.data); };
           mr.onstop=function(){ finalizeMeetingRecording(); };
           mr.start(20000);
@@ -1056,8 +1066,11 @@ function toggleMeetingRecording(){
           window.onbeforeunload=function(){ return 'A meeting recording is running.'; };
           if(state.openItemId) postTopicMarker(state.openItemId);
           renderMeetingRecUi();
+        })['catch'](function(e){
+          try { stream.getTracks().forEach(function(t){ t.stop(); }); } catch(_){}
+          startFailed(e.message);
         });
-    })['catch'](function(e){ msg('mrec-msg','err','Mic access denied: '+(e.message||e.name)); });
+    })['catch'](function(e){ startFailed('Mic access denied: '+(e.message||e.name)); });
 }
 
 function stopMeetingRecording(){
