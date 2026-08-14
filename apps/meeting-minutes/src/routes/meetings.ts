@@ -286,9 +286,15 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
       reply.code(400);
       return { ok: false, error: "itemId and atSeconds must be numbers." };
     }
-    if (!Number.isFinite(rid) || !(await getMeetingRecording(pool, rid))) {
+    const rec = Number.isFinite(rid) ? await getMeetingRecording(pool, rid) : null;
+    if (!rec) {
       reply.code(404);
       return { ok: false, error: "Recording not found." };
+    }
+    const item = await getAgendaItem(pool, itemId);
+    if (!item || item.meeting_id !== rec.meeting_id) {
+      reply.code(400);
+      return { ok: false, error: "That agenda item does not belong to this recording's meeting." };
     }
     await addTopicMarker(pool, rid, itemId, atSeconds);
     return { ok: true };

@@ -721,7 +721,7 @@ function invalidateSummary(it){
 // transcription is pending for this item. A queued or in-flight transcription
 // always wins: summarizing now would describe a transcript about to change.
 function summarizeIfNeeded(it){
-  if(isTranscribing(it)) return Promise.resolve();
+  if(isTranscribing(it) || meetingProcessing()) return Promise.resolve();
   if(!itemHasContent(it)) return Promise.resolve();
   if(it.summary && !it._dirty) return Promise.resolve();
   if(it._summarizing) return it._summarizing;
@@ -826,6 +826,7 @@ function renderSpeakerMap(it){
 
 // Meeting-wide speaker naming: one set of voices for the whole recording.
 // Saving rewrites every meeting-sourced topic's transcript server-side.
+var savingMspk=false; // true only while a PUT .../speaker-map is in flight (blocks double-submit)
 function renderMeetingSpeakerPanel(){
   var el=document.getElementById('meeting-speakers'); if(!el) return;
   var stats=state.meetingSpeakerStats||[];
@@ -852,18 +853,24 @@ function renderMeetingSpeakerPanel(){
       }).join('')
     +'</div>'
     +'<div class="hint">One set of voices for the whole meeting &mdash; assign a name once and every topic updates. Saving re-labels all topic transcripts.</div>'
-    +'<div class="btn-row"><button class="btn btn-primary" id="btn-save-mspk" data-default="Save speakers">Save speakers</button></div>'
+    +'<div class="btn-row"><button class="btn btn-primary" id="btn-save-mspk" data-default="Save speakers"'+((savingMspk||meetingProcessing())?' disabled':'')+'>Save speakers</button></div>'
     +'</div>';
   document.getElementById('btn-save-mspk').addEventListener('click', function(){
+    if(savingMspk || meetingProcessing()) return;
     var newMap={};
     el.querySelectorAll('select[data-mspk]').forEach(function(sel){
       if(sel.value) newMap[sel.getAttribute('data-mspk')]=sel.value;
     });
+    savingMspk=true;
+    var mid=state.meeting.id;
     setBtn('btn-save-mspk', true, 'Saving...');
-    api('/api/meetings/'+state.meeting.id+'/speaker-map', { method:'PUT', body:{ speakerMap:newMap } })
+    api('/api/meetings/'+mid+'/speaker-map', { method:'PUT', body:{ speakerMap:newMap } })
       .then(function(res){
-        if(!res.ok){ setBtn('btn-save-mspk', false); msg('mspk-msg','err',res.error||'Could not save.'); return; }
-        return api('/api/meetings/'+state.meeting.id).then(function(det){
+        if(!res.ok){ savingMspk=false; setBtn('btn-save-mspk', false); msg('mspk-msg','err',res.error||'Could not save.'); return; }
+        savingMspk=false;
+        if(!state.meeting || state.meeting.id!==mid) return;
+        return api('/api/meetings/'+mid).then(function(det){
+          if(!state.meeting || state.meeting.id!==mid) return;
           if(det.ok){
             state.meeting=det.meeting;
             state.meetingRecordings=det.meetingRecordings||[];
@@ -874,7 +881,7 @@ function renderMeetingSpeakerPanel(){
           renderMeetingSpeakerPanel();
           msg('mspk-msg','ok','Speakers saved — transcripts updated.');
         });
-      })['catch'](function(e){ setBtn('btn-save-mspk', false); msg('mspk-msg','err',e.message); });
+      })['catch'](function(e){ savingMspk=false; setBtn('btn-save-mspk', false); msg('mspk-msg','err',e.message); });
   });
 }
 
@@ -1040,7 +1047,7 @@ function renderMeetingRecUi(){
     if(ex) ex.innerHTML='';
     return;
   }
-  b.disabled=false;
+  b.disabled = meetingProcessing();
   b.textContent=b.getAttribute('data-default')||'● Record meeting';
   if(st) st.textContent='';
   if(ex){
@@ -1119,6 +1126,7 @@ function toggleMeetingRecording(){
     return;
   }
   if(meetingRecStarting) return;
+  if(meetingProcessing()){ msg('mrec-msg','err','The previous recording is still processing — wait for it to finish.'); return; }
   if(activeRec){ msg('mrec-msg','err','Stop the topic recording first — there is one microphone.'); return; }
   if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder){
     msg('mrec-msg','err','This browser cannot record audio.'); return;
