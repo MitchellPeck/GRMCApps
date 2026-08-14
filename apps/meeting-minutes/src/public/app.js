@@ -366,6 +366,10 @@ function renderDetail(){
     +'<div class="hint">One recording for the whole meeting. Open each topic as you discuss it — that click files the audio under the right topic. Processing starts when you stop.</div>'
     +'<div id="mrec-extra"></div></div>';
 
+  // Meeting-wide speaker naming (populated once transcripts with meeting-wide
+  // speaker labels exist; empty until then)
+  h+='<div id="meeting-speakers"></div>';
+
   // Agenda upload
   h+='<div class="card"><div class="ct">Agenda</div>'
     +'<div id="agenda-msg"></div>'
@@ -395,6 +399,7 @@ function renderDetail(){
   renderAttendeeChips();
   renderItems();
   renderMeetingRecUi();
+  renderMeetingSpeakerPanel();
 
   document.getElementById('btn-edit-meeting').addEventListener('click', editMeeting);
   document.getElementById('btn-upload-agenda').addEventListener('click', uploadAgenda);
@@ -573,7 +578,7 @@ function syncItems(fresh){
     it.transcribe_status=f.transcribe_status; it.transcribe_error=f.transcribe_error;
     it.transcript_segments=f.transcript_segments; it.speaker_map=f.speaker_map;
     it.speaker_stats=f.speaker_stats; it.recordings=f.recordings||[];
-    it.presenter_ids=f.presenter_ids;
+    it.presenter_ids=f.presenter_ids; it.transcript_source=f.transcript_source;
     // Never clobber text the user is actively editing.
     var tx=document.getElementById('tx-'+it.id);
     if(!tx || document.activeElement!==tx) it.transcript=f.transcript;
@@ -779,6 +784,10 @@ function renderTranscriptJS(segments, map){
 }
 function renderSpeakerMap(it){
   var el=document.getElementById('spk-'+it.id); if(!el) return;
+  if(it.transcript_source==='meeting'){
+    el.innerHTML='<div class="hint">Speakers for this topic are labeled meeting-wide &mdash; use &ldquo;Who spoke in this meeting?&rdquo; above.</div>';
+    return;
+  }
   var stats=it.speaker_stats||[];
   if(!stats.length){ el.innerHTML=''; return; }
   var attendees=state.attendeeIds.map(function(id){ return state.peopleById[id]; }).filter(Boolean);
@@ -812,6 +821,60 @@ function renderSpeakerMap(it){
       saveItemField(it, { speakerMap: it.speaker_map });
       invalidateSummary(it);
     });
+  });
+}
+
+// Meeting-wide speaker naming: one set of voices for the whole recording.
+// Saving rewrites every meeting-sourced topic's transcript server-side.
+function renderMeetingSpeakerPanel(){
+  var el=document.getElementById('meeting-speakers'); if(!el) return;
+  var stats=state.meetingSpeakerStats||[];
+  if(!stats.length){ el.innerHTML=''; return; }
+  var map=(state.meeting && state.meeting.speaker_map)||{};
+  var attendees=state.attendeeIds.map(function(id){ return state.peopleById[id]; }).filter(Boolean);
+  var opts=function(sel){
+    var o='<option value="">— unlabeled —</option>';
+    attendees.forEach(function(p){ o+='<option value="'+esc(p.name)+'"'+(sel===p.name?' selected':'')+'>'+esc(p.name)+'</option>'; });
+    if(sel && attendees.every(function(p){return p.name!==sel;})) o+='<option value="'+esc(sel)+'" selected>'+esc(sel)+'</option>';
+    return o;
+  };
+  el.innerHTML='<div class="card"><div class="ct">Who spoke in this meeting?</div>'
+    +'<div id="mspk-msg"></div>'
+    +'<div class="spk-rows">'
+    + stats.map(function(st){
+        var cur=map[st.speaker]||'';
+        var pct=Math.round(st.share*100);
+        return '<div class="spk-row"><span class="spk-tag">'+esc(st.label)+'</span>'
+          +'<span class="spk-share">'+pct+'%</span>'
+          +'<select data-mspk="'+esc(st.speaker)+'">'+opts(cur)+'</select>'
+          +(st.sample?'<div class="spk-sample">&ldquo;'+esc(st.sample)+'&rdquo;</div>':'')
+          +'</div>';
+      }).join('')
+    +'</div>'
+    +'<div class="hint">One set of voices for the whole meeting &mdash; assign a name once and every topic updates. Saving re-labels all topic transcripts.</div>'
+    +'<div class="btn-row"><button class="btn btn-primary" id="btn-save-mspk" data-default="Save speakers">Save speakers</button></div>'
+    +'</div>';
+  document.getElementById('btn-save-mspk').addEventListener('click', function(){
+    var newMap={};
+    el.querySelectorAll('select[data-mspk]').forEach(function(sel){
+      if(sel.value) newMap[sel.getAttribute('data-mspk')]=sel.value;
+    });
+    setBtn('btn-save-mspk', true, 'Saving...');
+    api('/api/meetings/'+state.meeting.id+'/speaker-map', { method:'PUT', body:{ speakerMap:newMap } })
+      .then(function(res){
+        if(!res.ok){ setBtn('btn-save-mspk', false); msg('mspk-msg','err',res.error||'Could not save.'); return; }
+        return api('/api/meetings/'+state.meeting.id).then(function(det){
+          if(det.ok){
+            state.meeting=det.meeting;
+            state.meetingRecordings=det.meetingRecordings||[];
+            state.meetingSpeakerStats=det.meetingSpeakerStats||[];
+            state.attendeeIds=det.attendeeIds;
+            syncItems(det.items);
+          }
+          renderMeetingSpeakerPanel();
+          msg('mspk-msg','ok','Speakers saved — transcripts updated.');
+        });
+      })['catch'](function(e){ setBtn('btn-save-mspk', false); msg('mspk-msg','err',e.message); });
   });
 }
 
