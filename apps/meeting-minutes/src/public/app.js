@@ -923,13 +923,18 @@ function uploadAudio(it, input){
 
 // ── Status polling ──────────────────────────────────────────────────────────
 // Runs only while a meeting is open AND something is queued or transcribing.
-var pollTimer=null;
+var pollTimer=null, pollGen=0;
 
 function anyTranscribing(){
   return state.items.some(function(it){ return isTranscribing(it); });
 }
 
+// Bumping pollGen invalidates every in-flight poll response: openMeeting and
+// showList both call this on navigation, so a fetch started for the meeting
+// you just left can never re-arm the timer or clobber the meeting you're
+// looking at now with stale data.
 function stopPolling(){
+  pollGen++;
   if(pollTimer){ clearTimeout(pollTimer); pollTimer=null; }
 }
 
@@ -941,7 +946,9 @@ function startPolling(){
 function pollOnce(){
   pollTimer=null;
   if(!state.meeting){ return; }
+  var gen=pollGen;
   api('/api/meetings/'+state.meeting.id+'/status').then(function(res){
+    if(gen!==pollGen) return;
     if(!res.ok) return;
     var settled=[];
     res.items.forEach(function(s){
@@ -964,6 +971,7 @@ function pollOnce(){
     // Something finished — pull the full detail so we get segments, speaker map
     // and the rendered transcript, then decide about summaries.
     return api('/api/meetings/'+state.meeting.id).then(function(det){
+      if(gen!==pollGen) return;
       if(det.ok){ state.meeting=det.meeting; syncItems(det.items); }
       settled.forEach(function(it){
         var live=state.items.filter(function(x){ return x.id===it.id; })[0];
@@ -971,7 +979,7 @@ function pollOnce(){
       });
       afterPollRound();
     });
-  }).catch(function(){ if(anyTranscribing()) startPolling(); });
+  }).catch(function(){ if(gen===pollGen && anyTranscribing()) startPolling(); });
 }
 
 // Keep polling while work remains; once the queue drains, honour a pending
