@@ -73,6 +73,10 @@ export_files() { # <repo> <staging>
     [ -f "$repo/$f" ] || missing+=("$f")
   done
   [ ${#missing[@]} -eq 0 ] || { err "missing on this host (is this the always-on Mac's repo?): ${missing[*]}"; return 1; }
+  if grep -q '<TUNNEL_UUID>' "$repo/cloudflared/config.yml"; then
+    err "cloudflared/config.yml still has the <TUNNEL_UUID> placeholder — this is not the always-on Mac's checkout (or its tunnel was never configured)"
+    return 1
+  fi
   for f in "${MIGRATE_FILES[@]}"; do
     dest="$staging/$(_staging_path "$f")"
     mkdir -p "$(dirname "$dest")"
@@ -108,6 +112,13 @@ manifest_get() { # <MANIFEST> <key>   (empty if missing)
   sed -n "s/^$2=//p" "$1" | head -1
 }
 
+# Value of KEY=... from a dotenv-style file, minus surrounding quotes. Empty if
+# the key or the file is missing.
+env_get() { # <file> <key>
+  [ -f "$1" ] || return 0
+  sed -n "s/^$2=//p" "$1" | head -1 | sed -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/"
+}
+
 volume_exists() { # <volume>
   docker volume inspect "$1" >/dev/null 2>&1
 }
@@ -138,16 +149,15 @@ import_preflight() { # <repo> <project> [force]
   return 1
 }
 
-# Tar a named volume to <out.tgz> via a throwaway container. Owners are stored
-# numerically so a Postgres data dir (uid 999) restores byte-for-byte.
+# Tar a named volume to <out.tgz> via a throwaway container, streamed over
+# stdout so no host directory has to be shared with Docker Desktop. Owners are
+# stored numerically so a Postgres data dir (uid 999) restores byte-for-byte.
 volume_backup() { # <volume> <out.tgz>
-  local vol="$1" out="$2" outdir outname
+  local vol="$1" out="$2"
   volume_exists "$vol" || { err "volume $vol does not exist"; return 1; }
   mkdir -p "$(dirname "$out")"
-  outdir="$(cd "$(dirname "$out")" && pwd)"
-  outname="$(basename "$out")"
-  docker run --rm -v "$vol:/v:ro" -v "$outdir:/out" "$MIGRATE_HELPER_IMAGE" \
-    tar --numeric-owner -czf "/out/$outname" -C /v .
+  docker run --rm -v "$vol:/v:ro" "$MIGRATE_HELPER_IMAGE" \
+    tar --numeric-owner -cz -C /v . >"$out"
 }
 
 # Untar <in.tgz> into <project>_<name>, creating the volume with the labels
@@ -155,19 +165,17 @@ volume_backup() { # <volume> <out.tgz>
 # of the right name still works, but Compose warns it "was not created by
 # Docker Compose").
 volume_restore() { # <project> <name> <in.tgz>
-  local project="$1" name="$2" in="$3" vol indir inname
+  local project="$1" name="$2" in="$3" vol
   vol="${project}_${name}"
   [ -f "$in" ] || { err "no such tarball: $in"; return 1; }
-  indir="$(cd "$(dirname "$in")" && pwd)"
-  inname="$(basename "$in")"
   if ! volume_exists "$vol"; then
     docker volume create \
       --label "com.docker.compose.project=$project" \
       --label "com.docker.compose.volume=$name" \
       "$vol" >/dev/null
   fi
-  docker run --rm -v "$vol:/v" -v "$indir:/in:ro" "$MIGRATE_HELPER_IMAGE" \
-    tar --numeric-owner -xzf "/in/$inname" -C /v
+  docker run --rm -i -v "$vol:/v" "$MIGRATE_HELPER_IMAGE" \
+    tar --numeric-owner -xz -C /v <"$in"
 }
 
 # Poll <url> until it answers with any HTTP status below 500 (a 302 to Google

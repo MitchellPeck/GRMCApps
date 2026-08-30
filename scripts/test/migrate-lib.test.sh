@@ -70,6 +70,18 @@ make_repo "$TMP/repo-missing"; rm "$TMP/repo-missing/secrets/cloudflared-creds.j
 mkdir -p "$TMP/staging2"
 assert_fails "fails when a required file is missing" export_files "$TMP/repo-missing" "$TMP/staging2"
 
+make_repo "$TMP/repo-placeholder"; printf 'tunnel: <TUNNEL_UUID>\n' >"$TMP/repo-placeholder/cloudflared/config.yml"
+mkdir -p "$TMP/staging3"
+assert_fails "fails when the tunnel config still has the git placeholder" export_files "$TMP/repo-placeholder" "$TMP/staging3"
+
+echo "env_get"
+printf 'A=plain\nB="quoted"\nC=%s\n' "'single'" >"$TMP/dotenv"
+assert_eq "plain value" "plain" "$(env_get "$TMP/dotenv" A)"
+assert_eq "strips double quotes" "quoted" "$(env_get "$TMP/dotenv" B)"
+assert_eq "strips single quotes" "single" "$(env_get "$TMP/dotenv" C)"
+assert_eq "empty for a missing key" "" "$(env_get "$TMP/dotenv" Z)"
+assert_eq "empty for a missing file" "" "$(env_get "$TMP/nofile" A)"
+
 echo "import_files"
 mkdir -p "$TMP/newrepo/cloudflared"
 printf 'tunnel: <TUNNEL_UUID>\n' >"$TMP/newrepo/cloudflared/config.yml"   # fresh clone placeholder
@@ -128,6 +140,9 @@ if docker info >/dev/null 2>&1; then
   assert_eq "restored volume carries compose labels" "$TEST_PROJECT dst" \
     "$(docker volume inspect "${TEST_PROJECT}_dst" --format '{{index .Labels "com.docker.compose.project"}} {{index .Labels "com.docker.compose.volume"}}')"
   assert_fails "volume_restore refuses a missing tarball" volume_restore "$TEST_PROJECT" dst2 "$TMP/missing.tgz"
+  docker volume create "${TEST_PROJECT}_pre" >/dev/null
+  assert_ok "volume_restore into a volume that already exists" volume_restore "$TEST_PROJECT" pre "$TMP/src.tgz"
+  assert_eq "content lands in the existing volume" "hello" "$(docker run --rm -v "${TEST_PROJECT}_pre:/v" alpine:3 cat /v/a/b.txt)"
 else
   echo "SKIP: docker not reachable — volume tests not run"
   FAIL=$((FAIL + 1))
