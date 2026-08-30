@@ -28,6 +28,10 @@ ports, no VPN), with real, publicly-trusted HTTPS and no per-device setup.
    `*.grmc.app` certificate from Let's Encrypt via the Cloudflare DNS-01
    challenge (no inbound internet access required).
 
+> Moving an existing installation to another Mac? See DEPLOY.md → *Moving the
+> stack to a new Mac* — it carries the data, secrets and tunnel over instead of
+> starting fresh.
+
 Every host below then loads with trusted HTTPS from anywhere through the
 Cloudflare Tunnel, with no per-device certificate install.
 

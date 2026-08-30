@@ -35,6 +35,10 @@ and restarts those apps. You do nothing on the other machine.
    `docker compose push` creates them automatically as **private** packages.
 
 ### On the other Mac (the always-on host)
+
+> Replacing an existing always-on Mac? Skip this and use *Moving the stack to
+> a new Mac* below — it carries the data, secrets and tunnel over.
+
 1. Have this repo cloned and a filled-in `.env` (same as your Mac's).
 2. Create Watchtower's GHCR credentials file (Docker Desktop keeps your
    `docker login` token in the macOS keychain, which the Watchtower container
@@ -140,6 +144,98 @@ agent — and Docker — to be running after a reboot. Logs land in
 > updates fast (every 2 min); auto-deploy applies structural compose changes.
 > All long-running services also carry `restart: unless-stopped`, so a crash or
 > a Docker/host restart brings them back on its own.
+
+---
+
+## Moving the stack to a new Mac
+
+Everything that makes the always-on Mac *the* host is either gitignored
+(`.env`, `secrets/`), an uncommitted local edit (`cloudflared/config.yml`
+carries the real tunnel UUID), or a Docker volume (`pgdata` — every app's
+database; `minutesdata` — meeting recordings; `letsencrypt` and `whisperdata` —
+regenerable, but cheap to carry). Nothing in Cloudflare, Google or GHCR is tied
+to the machine: the tunnel follows its credentials file, the DNS routes point
+at the tunnel, and the OAuth client only knows the hostnames. So a move is
+"snapshot those pieces, restore them on the new Mac, wipe the old one". Two
+scripts do it. Expect a few minutes of downtime while the bundle moves.
+
+### 0. Prepare the new Mac
+
+- Install Docker Desktop, open it once, and turn on *Settings → General → Start
+  Docker Desktop when you sign in*.
+- Clone the repo into a folder named **`GRMCApps`** — Traefik expects the Compose
+  project name `grmcapps`, which Compose derives from the folder name:
+  ```bash
+  git clone https://github.com/MitchellPeck/GRMCApps.git GRMCApps
+  ```
+- Make it a real always-on host: automatic login for this user (Docker Desktop
+  and the auto-deploy agent run in the user session), no sleep, and a DHCP
+  reservation / static IP as before.
+- Nothing else: no `cloudflared` CLI, no Cloudflare or Google changes.
+
+### 1. On the old Mac — export
+
+```bash
+./scripts/migrate-export.sh              # writes ~/grmc-migration-<stamp>.tar
+# ./scripts/migrate-export.sh --out /Volumes/USB/grmc.tar   # elsewhere
+```
+
+It removes the auto-deploy agent, takes a `pg_dumpall` (kept as a fallback),
+**stops the stack** — downtime starts here — tars the four volumes, and bundles
+them with `.env`, `secrets/` and the tunnel config. Nothing is deleted: to roll
+back, `docker compose -f docker-compose.yml -f docker-compose.remote.yml start`
+and `./scripts/install-autodeploy.sh`.
+
+The bundle contains secrets and all app data. Move it privately (scp, AirDrop, a
+USB drive) and delete it when you are done.
+
+### 2. On the new Mac — import
+
+```bash
+cd GRMCApps
+./scripts/migrate-import.sh ~/grmc-migration-<stamp>.tar
+```
+
+It refuses to run over an existing install (`--force` overrides, for a redo).
+Then it restores the files and volumes, logs the `docker` CLI into GHCR with the
+PAT already in `secrets/ghcr-auth.json` (a fresh host can't pull the private
+images otherwise), `compose up`s with both files, installs the auto-deploy
+agent, and waits for `https://hub.grmc.app` to answer through the tunnel.
+
+Verify from a phone **off** Wi-Fi: open the hub, sign in with Google, open
+whoami and Meeting Minutes and check the data is there. That exercises the
+tunnel, TLS, OIDC and the restored volumes in one go.
+
+If Postgres refuses to start from the copied volume (it shouldn't — same
+architecture, same major version, clean shutdown), fall back to the SQL dump in
+the bundle: start a fresh database and load it. "already exists" errors for the
+roles, databases and hub tables are expected — the init scripts created those.
+
+```bash
+C="docker compose -f docker-compose.yml -f docker-compose.remote.yml"
+$C down && docker volume rm grmcapps_pgdata
+$C up -d --wait postgres
+tar -xOf ~/grmc-migration-<stamp>.tar '*/pg_dumpall.sql.gz' | gunzip | $C exec -T postgres psql -U postgres
+$C up -d
+```
+
+### 3. On the old Mac — purge
+
+Only once step 2 is verified:
+
+```bash
+./scripts/migrate-export.sh --purge
+```
+
+It asks for confirmation, then removes the containers, images and volumes,
+`.env`, `secrets/` and the agent, and resets `cloudflared/config.yml`. After
+that the folder can go, and Docker Desktop too if nothing else uses it.
+
+### What does not change
+
+The Cloudflare tunnel and DNS, the Google OAuth client, the GHCR packages, and
+the build-and-push flow from your Mac. Watchtower resumes on the new host with
+the same credentials file.
 
 ---
 
