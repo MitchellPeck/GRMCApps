@@ -4,6 +4,9 @@ import { SpeakerMap } from "./transcript";
 
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 const MODEL = "claude-sonnet-4-6";
+// Generous for a report over a long meeting, short enough that a wedged
+// request cannot hold the shared transcription queue for the rest of the day.
+const CLAUDE_TIMEOUT_MS = 4 * 60 * 1000;
 
 // A single Anthropic content block (text, image, or document). `content` may be
 // a plain string (shorthand for one text block) or an array of blocks.
@@ -25,20 +28,31 @@ async function callClaude(
   const key = await getSetting(pool, "anthropic_api_key");
   if (!key) throw new Error("No Anthropic API key. Add one in Settings.");
 
-  const res = await fetch(ANTHROPIC_URL, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-api-key": key,
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
-      model: MODEL,
-      max_tokens: maxTokens,
-      system: systemPrompt,
-      messages: [{ role: "user", content }],
-    }),
-  });
+  // Every Claude call runs on the shared serial transcription queue, so one
+  // request that never returns would stall every later job. Bound it.
+  let res: Response;
+  try {
+    res = await fetch(ANTHROPIC_URL, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": key,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: MODEL,
+        max_tokens: maxTokens,
+        system: systemPrompt,
+        messages: [{ role: "user", content }],
+      }),
+      signal: AbortSignal.timeout(CLAUDE_TIMEOUT_MS),
+    });
+  } catch (e) {
+    if ((e as Error).name === "TimeoutError") {
+      throw new Error(`Claude did not respond within ${CLAUDE_TIMEOUT_MS / 1000}s.`);
+    }
+    throw new Error(`Could not reach Claude: ${(e as Error).message}`);
+  }
 
   const data: any = await res.json();
   if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));

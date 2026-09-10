@@ -11,6 +11,16 @@ export const config = {
   // keyless). Recorded audio is POSTed to the OpenAI-compatible REST endpoint;
   // audio never leaves the host.
   whisperRestUrl: process.env.WHISPER_REST_URL || "http://whisper:9000",
+  // Longest a single transcription may take. Whisper sends nothing until the
+  // whole job is done, so the connection is legitimately silent that entire
+  // time and this socket timeout is, in effect, the job deadline. It exists
+  // only so a wedged whisper cannot block the serial queue forever — set it
+  // well above the slowest meeting you expect (a whole-meeting recording of an
+  // hour needs hours here at CPU speeds). 0 disables it.
+  whisperTimeoutMs: Number(process.env.WHISPER_TIMEOUT_MS || 4 * 60 * 60 * 1000),
+  // Send a throwaway clip at boot so the first real recording does not pay
+  // for loading the model. Set WHISPER_WARMUP=0 to skip it.
+  whisperWarmUp: process.env.WHISPER_WARMUP !== "0",
   // Persistent storage for meeting audio, mounted from the `minutesdata`
   // volume. Recordings are kept for the life of the meeting so a transcription
   // can always be retried or the original audio downloaded.

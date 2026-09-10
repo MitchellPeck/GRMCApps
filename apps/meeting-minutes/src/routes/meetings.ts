@@ -109,10 +109,23 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
     return r;
   });
 
-  app.delete("/api/meetings/:id", async (req) => {
+  // Deleting is idempotent — an id that is already gone is a success — but a
+  // malformed id or a failed delete must say so. Returning {ok:true} while the
+  // meeting is still there is the worst possible outcome here.
+  app.delete("/api/meetings/:id", async (req, reply) => {
     const id = Number((req.params as { id: string }).id);
-    await deleteMeeting(pool, id);
-    return { ok: true };
+    if (!Number.isSafeInteger(id) || id <= 0) {
+      reply.code(400);
+      return { ok: false, error: "Invalid meeting id." };
+    }
+    try {
+      await deleteMeeting(pool, id);
+      return { ok: true };
+    } catch (e) {
+      req.log.error(e, `failed to delete meeting ${id}`);
+      reply.code(500);
+      return { ok: false, error: `Could not delete the meeting: ${(e as Error).message}` };
+    }
   });
 
   // Set the attendee list (person ids present at the meeting).
@@ -194,10 +207,20 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
     return r;
   });
 
-  app.delete("/api/items/:itemId", async (req) => {
+  app.delete("/api/items/:itemId", async (req, reply) => {
     const itemId = Number((req.params as { itemId: string }).itemId);
-    await deleteAgendaItem(pool, itemId);
-    return { ok: true };
+    if (!Number.isSafeInteger(itemId) || itemId <= 0) {
+      reply.code(400);
+      return { ok: false, error: "Invalid item id." };
+    }
+    try {
+      await deleteAgendaItem(pool, itemId);
+      return { ok: true };
+    } catch (e) {
+      req.log.error(e, `failed to delete agenda item ${itemId}`);
+      reply.code(500);
+      return { ok: false, error: `Could not remove the item: ${(e as Error).message}` };
+    }
   });
 
   // Accept a recording for an item and queue it for transcription. The audio is

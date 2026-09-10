@@ -110,14 +110,18 @@ textarea{resize:vertical;min-height:72px;line-height:1.55}
 /* ---- Buttons ---- */
 .btn-row{display:flex;gap:8px;align-items:center;margin-top:16px;flex-wrap:wrap}
 .btn{display:inline-flex;align-items:center;gap:6px;padding:9px 18px;font-size:13px;font-weight:600;cursor:pointer;border-radius:var(--r);border:none;font-family:var(--font-ui)}
-.btn-primary{background:var(--navy);color:var(--paper)}.btn-primary:hover{background:var(--navy-2)}.btn-primary:disabled{opacity:.5;cursor:not-allowed}
-.btn-secondary{background:var(--field-bg);color:var(--ink);border:1px solid var(--rule)}.btn-secondary:hover{background:var(--paper)}
-.btn-gold{background:var(--gold);color:var(--navy)}.btn-gold:hover{filter:brightness(1.05)}
-.btn-danger{background:var(--field-bg);color:var(--rej-fg);border:1px solid var(--danger-border)}.btn-danger:hover{background:var(--rej-bg)}
+/* Every variant, not just primary: a disabled button that still looks live and
+   still lights up on hover reads as a broken button when clicking does nothing.
+   Hover states are therefore scoped to :not(:disabled) throughout. */
+.btn:disabled,.btn-sm:disabled{opacity:.5;cursor:not-allowed;filter:none}
+.btn-primary{background:var(--navy);color:var(--paper)}.btn-primary:not(:disabled):hover{background:var(--navy-2)}
+.btn-secondary{background:var(--field-bg);color:var(--ink);border:1px solid var(--rule)}.btn-secondary:not(:disabled):hover{background:var(--paper)}
+.btn-gold{background:var(--gold);color:var(--navy)}.btn-gold:not(:disabled):hover{filter:brightness(1.05)}
+.btn-danger{background:var(--field-bg);color:var(--rej-fg);border:1px solid var(--danger-border)}.btn-danger:not(:disabled):hover{background:var(--rej-bg)}
 .btn-sm{padding:5px 11px;font-size:12px;font-weight:600;cursor:pointer;border-radius:var(--r);border:1px solid var(--rule);background:var(--field-bg);color:var(--ink);font-family:var(--font-ui)}
-.btn-sm:hover{background:var(--paper)}
+.btn-sm:not(:disabled):hover{background:var(--paper)}
 .btn-sm-gold{background:var(--gold);color:var(--navy);border-color:var(--gold)}
-.btn-sm-gold:hover{filter:brightness(1.05)}
+.btn-sm-gold:not(:disabled):hover{filter:brightness(1.05)}
 .btn-sm-gold.copied{background:var(--ok-bg);color:var(--ok-fg);border-color:var(--ok-bg)}
 .check{display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:400;color:var(--ink);text-transform:none;letter-spacing:0;margin:0 14px 0 0;cursor:pointer}
 .check input{width:auto;margin:0}

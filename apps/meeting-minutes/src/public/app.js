@@ -1,15 +1,29 @@
 // ── HTTP helpers ────────────────────────────────────────────────────────────
+// Always resolves to an object with a boolean `ok`. Without this, a 500 (or a
+// proxy's HTML error page) came back as a payload with no `ok` field at all,
+// and any caller testing `res.ok === false` read the failure as success — which
+// is how a delete that never happened could still close its dialog and report
+// nothing. A failed request is now indistinguishable from `{ok:false}`.
 async function api(path, { method = 'GET', body } = {}) {
   const res = await fetch(path, {
     method,
     headers: body ? { 'Content-Type': 'application/json' } : undefined,
     body: body ? JSON.stringify(body) : undefined,
   });
-  return res.json();
+  return normalizeApiResult(res);
 }
+async function normalizeApiResult(res){
+  var data = null;
+  try { data = await res.json(); } catch(e){ data = null; }
+  if(data && typeof data.ok === 'boolean') return data;
+  if(res.ok) return data && typeof data === 'object' ? data : { ok: true };
+  var detail = (data && (data.error || data.message)) || (res.statusText || '');
+  return { ok: false, error: 'Request failed (' + res.status + (detail ? ': ' + detail : '') + ').' };
+}
+
 async function apiForm(path, formData) {
   const res = await fetch(path, { method: 'POST', body: formData });
-  return res.json();
+  return normalizeApiResult(res);
 }
 function esc(s){ return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function v(id){ var el=document.getElementById(id); return el ? el.value.trim() : ''; }
@@ -29,6 +43,8 @@ function fmtDate(s){ if(!s) return ''; try { return new Date(s).toLocaleString()
 // receives the collected values plus a done(errorOrNull) callback so it can
 // keep the modal open and show a server error.
 var modalEsc = null;
+// The word that unlocks any destructive modal action. Compared case-insensitively.
+var DANGER_WORD = 'DELETE';
 
 function closeModal(){
   var root=document.getElementById('modal-root');
@@ -66,7 +82,8 @@ function openModal(opts){
     +fields.map(modalFieldHtml).join('');
   if(opts.danger){
     h+='<div class="modal-danger"><div class="hint">'+esc(opts.danger.hint)+'</div>'
-      +'<div class="field"><input type="text" id="mf-danger-confirm" placeholder="'+esc(opts.danger.confirmText)+'"></div>'
+      +'<div class="field"><label for="mf-danger-confirm">Type <strong>'+DANGER_WORD+'</strong> to confirm</label>'
+      +'<input type="text" id="mf-danger-confirm" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="'+DANGER_WORD+'"></div>'
       +'<button class="btn btn-danger" id="modal-danger-btn" data-default="'+esc(opts.danger.label)+'" disabled>'+esc(opts.danger.label)+'</button></div>';
   }
   h+='<div class="modal-actions">'
@@ -89,11 +106,7 @@ function openModal(opts){
       setBtn('modal-save', false); setBtn('modal-danger-btn', false);
       // A failed action must never leave the danger gate open: re-apply the
       // typed-confirmation check after the reset.
-      if(opts.danger){
-        var dc=document.getElementById('mf-danger-confirm');
-        var db=document.getElementById('modal-danger-btn');
-        if(db) db.disabled = !dc || dc.value.trim() !== opts.danger.confirmText;
-      }
+      dangerGate();
       msg('modal-msg','err',err);
       return;
     }
@@ -107,6 +120,26 @@ function openModal(opts){
     opts.onSave(vals, done);
   }
 
+  // The danger gate. This deliberately does NOT ask the user to retype the
+  // record's name: titles come out of AI agenda extraction carrying em dashes,
+  // curly quotes and double spaces, and a character-exact match made those
+  // records impossible to delete at all. One fixed, plain-ASCII word is
+  // typeable no matter what the record is called. `dangerGate` is re-run from
+  // `done()` too, so a failed action can never leave the gate open.
+  var confirmEl=null, dangerBtn=null;
+  function dangerReady(){
+    return !!(opts.danger && confirmEl && confirmEl.value.trim().toUpperCase()===DANGER_WORD);
+  }
+  function dangerGate(){
+    if(dangerBtn) dangerBtn.disabled = !dangerReady();
+  }
+  function runDanger(){
+    if(!dangerReady()) return;
+    msg('modal-msg','','');
+    setBtn('modal-danger-btn', true, 'Deleting...');
+    opts.danger.onConfirm(done);
+  }
+
   document.getElementById('modal-save').addEventListener('click', save);
   document.getElementById('modal-cancel').addEventListener('click', closeModal);
   document.getElementById('modal-backdrop').addEventListener('click', function(e){
@@ -114,21 +147,20 @@ function openModal(opts){
   });
   modalEsc=function(e){
     if(e.key==='Escape'){ closeModal(); return; }
-    if(e.key==='Enter' && e.target && e.target.tagName!=='TEXTAREA'){ save(); }
+    if(e.key!=='Enter' || !e.target || e.target.tagName==='TEXTAREA') return;
+    // Enter inside the confirmation box means "do the dangerous thing", never
+    // "save". Routing it to save() silently saved the meeting and closed the
+    // dialog, which read as "delete does not work".
+    if(e.target===confirmEl){ e.preventDefault(); runDanger(); return; }
+    save();
   };
   document.addEventListener('keydown', modalEsc);
 
   if(opts.danger){
-    var confirmEl=document.getElementById('mf-danger-confirm');
-    var dangerBtn=document.getElementById('modal-danger-btn');
-    confirmEl.addEventListener('input', function(){
-      dangerBtn.disabled = confirmEl.value.trim() !== opts.danger.confirmText;
-    });
-    dangerBtn.addEventListener('click', function(){
-      if(dangerBtn.disabled) return;
-      setBtn('modal-danger-btn', true, 'Deleting...');
-      opts.danger.onConfirm(done);
-    });
+    confirmEl=document.getElementById('mf-danger-confirm');
+    dangerBtn=document.getElementById('modal-danger-btn');
+    confirmEl.addEventListener('input', dangerGate);
+    dangerBtn.addEventListener('click', runDanger);
   }
 
   var first=fields[0];
@@ -438,11 +470,11 @@ function editMeeting(){
     },
     danger: {
       label: 'Delete meeting',
-      hint: 'Deleting this meeting also deletes its agenda items, transcripts, recordings, and report. This cannot be undone. Type the meeting title to confirm.',
-      confirmText: m.title,
+      // openModal escapes this, so pass the raw title.
+      hint: 'Deleting “'+m.title+'” also deletes its agenda items, transcripts, recordings, and report. This cannot be undone.',
       onConfirm: function(done){
         api('/api/meetings/'+m.id, { method:'DELETE' }).then(function(res){
-          if(res && res.ok===false){ done(res.error||'Could not delete.'); return; }
+          if(!res || !res.ok){ done((res && res.error) || 'Could not delete.'); return; }
           done(null);
           showList();
         }).catch(function(e){ done(e.message); });
@@ -539,6 +571,9 @@ function renderItems(){
   if(!state.items.length){ wrap.innerHTML='<div class="empty">No agenda items yet. Upload an agenda or add items manually.</div>'; return; }
   wrap.innerHTML=state.items.map(function(it, idx){ return itemHtml(it, idx); }).join('');
   state.items.forEach(function(it){ wireItem(it); });
+  // The rebuilt rows default to showing the per-topic recorder; re-apply the
+  // whole-meeting lock so a rebuild mid-recording cannot bring them back.
+  syncItemRecControls();
 }
 
 // Update everything about one already-rendered item without touching the
@@ -603,10 +638,16 @@ function itemHtml(it, idx){
       +'<div class="sublbl">Presented by</div>'
       +'<div class="chips" id="pres-'+it.id+'"></div>'
       +'<div class="sublbl">Transcript (AI, with speaker labels)</div>'
-      +'<div class="rec-row">'
+      +'<div class="rec-row" id="recrow-'+it.id+'">'
         +'<button class="btn-sm" data-rec="'+it.id+'">● Record</button>'
         +'<label class="btn-sm" style="cursor:pointer">Upload audio<input type="file" accept="audio/*,video/webm" data-audio="'+it.id+'" style="display:none"></label>'
         +'<span class="rec-status" id="recstat-'+it.id+'"></span>'
+      +'</div>'
+      // Shown in place of the per-topic controls while the whole meeting is
+      // being recorded — that recorder already captures this topic.
+      +'<div class="hint rec-locked" id="reclock-'+it.id+'" hidden>'
+        +'<span class="rec-dot"></span> The meeting recording is capturing this topic. '
+        +'Open a topic as it comes up and the audio is filed under it automatically.'
       +'</div>'
       +'<div class="speakers" id="spk-'+it.id+'"></div>'
       +'<div class="recordings" id="rec-'+it.id+'"></div>'
@@ -728,6 +769,39 @@ function summarizeIfNeeded(it){
   return autoSummarize(it);
 }
 
+// Speaker assignments arrive one dropdown at a time, so wait for the user to
+// stop changing them before spending a summarize call on the item.
+var summarizeTimers={};
+function scheduleSummarize(it, delayMs){
+  if(summarizeTimers[it.id]) clearTimeout(summarizeTimers[it.id]);
+  summarizeTimers[it.id]=setTimeout(function(){
+    delete summarizeTimers[it.id];
+    // Re-read from state: the item object may have been replaced by a poll.
+    var live=(state.items||[]).filter(function(x){ return x.id===it.id; })[0];
+    if(live) summarizeIfNeeded(live);
+  }, delayMs||1500);
+}
+function clearScheduledSummaries(){
+  Object.keys(summarizeTimers).forEach(function(k){ clearTimeout(summarizeTimers[k]); });
+  summarizeTimers={};
+}
+
+// Summarize every item that has content, one at a time so a ten-topic agenda
+// queues against the API rather than firing ten calls at once. Items whose
+// summary is still current are skipped by summarizeIfNeeded.
+function summarizeAllItems(){
+  clearScheduledSummaries();
+  var ids=(state.items||[]).map(function(it){ return it.id; });
+  var chain=Promise.resolve();
+  ids.forEach(function(id){
+    chain=chain.then(function(){
+      var live=(state.items||[]).filter(function(x){ return x.id===id; })[0];
+      return live ? summarizeIfNeeded(live) : null;
+    });
+  });
+  return chain;
+}
+
 // Generate the summary + action items for one item. Returns a promise and
 // stores it on it._summarizing so concurrent triggers coalesce.
 function autoSummarize(it){
@@ -820,6 +894,10 @@ function renderSpeakerMap(it){
       it.transcript=tx.value;
       saveItemField(it, { speakerMap: it.speaker_map });
       invalidateSummary(it);
+      // Naming a voice changes who said what, so the summary and its action
+      // items are now wrong. Rewrite them without waiting for the topic to be
+      // collapsed.
+      scheduleSummarize(it);
     });
   });
 }
@@ -879,7 +957,12 @@ function renderMeetingSpeakerPanel(){
             syncItems(det.items);
           }
           renderMeetingSpeakerPanel();
-          msg('mspk-msg','ok','Speakers saved — transcripts updated.');
+          msg('mspk-msg','ok','Speakers saved — transcripts updated. Rewriting summaries…');
+          // Saving the map rewrote every meeting-sourced transcript server-side
+          // and cleared their summaries, so regenerate them all now.
+          return summarizeAllItems().then(function(){
+            if(state.meeting && state.meeting.id===mid) msg('mspk-msg','ok','Speakers saved — transcripts and summaries updated.');
+          });
         });
       })['catch'](function(e){ savingMspk=false; setBtn('btn-save-mspk', false); msg('mspk-msg','err',e.message); });
   });
@@ -939,10 +1022,13 @@ function saveItemField(it, fields){
 
 function removeItem(it){
   if(!confirm('Remove "'+it.title+'"?')) return;
-  api('/api/items/'+it.id, { method:'DELETE' }).then(function(){
+  // Only drop it from the list once the server confirms; otherwise the item
+  // silently reappears on the next load and the failure is never reported.
+  api('/api/items/'+it.id, { method:'DELETE' }).then(function(res){
+    if(!res || !res.ok){ msg('imsg-'+it.id,'err',(res && res.error) || 'Could not remove the item.'); return; }
     state.items=state.items.filter(function(x){ return x.id!==it.id; });
     renderItems();
-  });
+  })['catch'](function(e){ msg('imsg-'+it.id,'err',e.message); });
 }
 
 // ── Recording → diarized transcription ──────────────────────────────────────
@@ -960,7 +1046,16 @@ function toggleRecording(it, btn){
   if(activeRec && activeRec.it.id===it.id){ stopRecording(); return; }
   if(activeRec){ stopRecording(); }
   var rs=document.getElementById('recstat-'+it.id);
-  if(meetingRec){ rs.innerHTML='<span style="color:var(--rej-fg)">The meeting recording is running — it will capture this topic automatically.</span>'; return; }
+  // Defence in depth: the controls are hidden during a whole-meeting recording,
+  // but there is only one microphone, so never start a second capture.
+  if(meetingRec){
+    rs.innerHTML='<span style="color:var(--rej-fg)">'
+      +(meetingRecordingActive()
+          ? 'The meeting recording is capturing this topic already.'
+          : 'A recording of &ldquo;'+esc(meetingRec.title||'another meeting')+'&rdquo; is running — stop it first.')
+      +'</span>';
+    return;
+  }
   if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder){
     rs.innerHTML='<span style="color:var(--rej-fg)">This browser cannot record audio. Upload a recording instead.</span>';
     return;
@@ -1015,6 +1110,13 @@ function transcribeBlob(it, blob, mime){
 function uploadAudio(it, input){
   if(!input.files.length) return;
   var f=input.files[0]; input.value='';
+  // The control is hidden during a whole-meeting recording; refuse anyway so a
+  // stray upload cannot land a second transcript on a topic being captured.
+  if(meetingRecordingActive()){
+    var rs=document.getElementById('recstat-'+it.id);
+    if(rs) rs.innerHTML='<span style="color:var(--rej-fg)">The meeting recording is capturing this topic already.</span>';
+    return;
+  }
   transcribeBlob(it, f, f.type);
 }
 
@@ -1022,13 +1124,84 @@ function uploadAudio(it, input){
 // One MediaRecorder for the entire meeting. ~20s chunks upload as they are
 // produced (strictly ordered by a promise chain), so a crash loses seconds,
 // not the meeting. Topic clicks lay down markers; processing segments by them.
-var meetingRec=null; // {meetingId, recordingId, mr, stream, t0, chain, failedChunk, timer}
+var meetingRec=null; // {meetingId, recordingId, title, topic, mr, stream, t0, chain, failedChunk, timer}
 var meetingRecStarting=false; // true only during the getUserMedia→POST /recording/start window
+var meetingRecFinishing=false; // true from "Stop" until the server accepts the recording
 
 function meetingElapsedSeconds(){ return meetingRec ? (performance.now()-meetingRec.t0)/1000 : 0; }
 function fmtClock(s){ var m=Math.floor(s/60), r=Math.floor(s%60); return m+':'+(r<10?'0':'')+r; }
 
+// True while the whole-meeting recorder is running for the meeting on screen.
+// There is one microphone, so per-topic capture is meaningless during it.
+function meetingRecordingActive(){
+  return !!(meetingRec && state.meeting && meetingRec.meetingId===state.meeting.id);
+}
+
+// Swap each topic's Record / Upload audio controls for an explanatory note
+// while the whole meeting is being recorded. Hiding the controls (rather than
+// disabling them) keeps a single, unambiguous way to capture audio.
+function syncItemRecControls(){
+  var locked=meetingRecordingActive();
+  (state.items||[]).forEach(function(it){
+    var row=document.getElementById('recrow-'+it.id);
+    var note=document.getElementById('reclock-'+it.id);
+    if(row) row.hidden=locked;
+    if(note) note.hidden=!locked;
+  });
+}
+
+// ── Global recording banner ─────────────────────────────────────────────────
+// The whole-meeting recorder keeps running when you scroll away or go back to
+// the meetings list, so its status is rendered into a viewport-fixed banner
+// driven by the recorder itself rather than by the detail view.
+function renderRecBanner(){
+  var el=document.getElementById('rec-banner');
+  if(!el) return;
+  // Between "Stop" and the server accepting the recording the microphone is
+  // already off, so the bar must stop claiming to record. It stays up, in a
+  // neutral colour, only while audio is still being uploaded.
+  if(!meetingRec && meetingRecFinishing){
+    el.className='finishing';
+    el.innerHTML='<span class="spin" style="border-top-color:var(--navy)"></span>'
+      +'<span class="rb-title">Finishing upload&hellip;</span>'
+      +'<span class="rb-topic">Keep this tab open until it completes.</span>';
+    el.hidden=false;
+    document.body.classList.add('has-rec-banner');
+    return;
+  }
+  if(!meetingRec){
+    el.hidden=true;
+    el.className='';
+    el.innerHTML='';
+    document.body.classList.remove('has-rec-banner');
+    return;
+  }
+  el.className='';
+  var onThisMeeting = state.meeting && state.meeting.id===meetingRec.meetingId;
+  el.innerHTML='<span class="rec-dot"></span>'
+    +'<span class="rb-title">Recording &middot; '+esc(meetingRec.title||'meeting')+'</span>'
+    +'<span class="rb-clock">'+fmtClock(meetingElapsedSeconds())+'</span>'
+    // Audio files under the most recently opened topic and keeps doing so until
+    // another is opened — collapsing a topic lays down no marker.
+    +(meetingRec.topic
+        ? '<span class="rb-topic">Filing under: '+esc(meetingRec.topic)+'</span>'
+        : '<span class="rb-topic rb-warn">No topic opened yet &mdash; audio files under the first item</span>')
+    +'<span class="rb-actions">'
+      +(onThisMeeting ? '' : '<button class="btn-sm" id="rb-open">Open meeting</button> ')
+      +'<button class="btn-sm" id="rb-stop">Stop &amp; process</button>'
+    +'</span>';
+  el.hidden=false;
+  document.body.classList.add('has-rec-banner');
+  var open=document.getElementById('rb-open');
+  if(open) open.addEventListener('click', function(){ openMeeting(meetingRec.meetingId); });
+  document.getElementById('rb-stop').addEventListener('click', function(){ stopMeetingRecording(); });
+}
+
 function renderMeetingRecUi(){
+  // Both of these must run even on the list view, where the meeting card below
+  // does not exist: the recorder outlives the detail view.
+  renderRecBanner();
+  syncItemRecControls();
   var b=document.getElementById('btn-meeting-rec');
   var st=document.getElementById('mrec-status');
   var ex=document.getElementById('mrec-extra');
@@ -1115,6 +1288,9 @@ function uploadMeetingChunk(blob){
 
 function postTopicMarker(itemId){
   if(!meetingRec || !state.meeting || meetingRec.meetingId!==state.meeting.id) return;
+  var it=(state.items||[]).filter(function(x){ return x.id===itemId; })[0];
+  meetingRec.topic = it ? it.title : '';
+  renderRecBanner();
   api('/api/meeting-recordings/'+meetingRec.recordingId+'/marker', {
     method:'POST', body:{ itemId: itemId, atSeconds: meetingElapsedSeconds() }
   })['catch'](function(){});
@@ -1150,7 +1326,8 @@ function toggleMeetingRecording(){
             return;
           }
           var mr=new MediaRecorder(stream, mime?{ mimeType:mime }:undefined);
-          meetingRec={ meetingId:state.meeting.id, recordingId:res.recordingId, mr:mr, stream:stream,
+          meetingRec={ meetingId:state.meeting.id, recordingId:res.recordingId,
+                       title:state.meeting.title, topic:'', mr:mr, stream:stream,
                        t0:performance.now(), chain:Promise.resolve(), failedChunk:null, timer:null };
           meetingRecStarting=false;
           mr.ondataavailable=function(e){ if(e.data && e.data.size) uploadMeetingChunk(e.data); };
@@ -1181,6 +1358,13 @@ function finalizeMeetingRecording(){
   window.onbeforeunload=null;
   if(rec.timer) clearInterval(rec.timer);
   try { rec.stream.getTracks().forEach(function(t){ t.stop(); }); } catch(e){}
+  // Repaint NOW. Clearing meetingRec and the 1s timer without re-rendering left
+  // the red recording bar frozen on screen for the whole upload-and-finish
+  // round trip — the microphone was already off but the UI still said
+  // "Recording". The bar switches to a neutral "finishing" state instead.
+  meetingRecFinishing=true;
+  renderMeetingRecUi();
+  var settle=function(){ meetingRecFinishing=false; renderMeetingRecUi(); };
   rec.chain.then(function(){
     if(rec.failedChunk){
       var fd=new FormData(); fd.append('file', rec.failedChunk, 'chunk.webm');
@@ -1189,11 +1373,12 @@ function finalizeMeetingRecording(){
   }).then(function(){
     return api('/api/meeting-recordings/'+rec.recordingId+'/finish', { method:'POST' });
   }).then(function(res){
-    if(!res || !res.ok){ msg('mrec-msg','err',(res&&res.error)||'Could not queue processing.'); renderMeetingRecUi(); return; }
-    state.meeting.recording_status='queued';
-    renderMeetingRecUi();
+    if(!res || !res.ok){ msg('mrec-msg','err',(res&&res.error)||'Could not queue processing.'); settle(); return; }
+    // The meeting on screen may have changed while the upload drained.
+    if(state.meeting && state.meeting.id===rec.meetingId) state.meeting.recording_status='queued';
+    settle();
     if(typeof startPolling==='function') startPolling();
-  })['catch'](function(e){ msg('mrec-msg','err',e.message); renderMeetingRecUi(); });
+  })['catch'](function(e){ msg('mrec-msg','err',e.message); settle(); });
 }
 
 // ── Status polling ──────────────────────────────────────────────────────────
@@ -1218,6 +1403,9 @@ function anyPendingWork(){ return anyTranscribing() || meetingProcessing(); }
 function stopPolling(){
   pollGen++;
   if(pollTimer){ clearTimeout(pollTimer); pollTimer=null; }
+  // Both callers are navigations. A debounced summarize queued against the
+  // meeting being left must not fire against the one being opened.
+  clearScheduledSummaries();
 }
 
 function startPolling(){
@@ -1272,6 +1460,13 @@ function pollOnce(){
           var live=state.items.filter(function(x){ return x.id===it.id; })[0];
           if(live) onTranscriptionSettled(live);
         });
+        // A whole-meeting recording writes transcripts straight to every topic
+        // it covered, without those topics ever passing through queued /
+        // processing — so none of them appear in `settled` and nothing above
+        // summarizes them. Summarize the whole agenda once processing lands.
+        if(meetingSettled && state.meeting.recording_status==='done'){
+          summarizeAllItems();
+        }
       }
       afterPollRound();
     });

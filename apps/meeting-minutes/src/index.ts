@@ -9,6 +9,7 @@ import { settingsRoutes } from "./routes/settings";
 import { peopleRoutes } from "./routes/people";
 import { meetingsRoutes } from "./routes/meetings";
 import { recoverPendingJobs, recoverPendingMeetingJobs } from "./transcribeQueue";
+import { warmUpWhisper } from "./whisper";
 
 const app = Fastify({ logger: true, trustProxy: true, bodyLimit: 2 * 1024 * 1024 });
 
@@ -31,6 +32,15 @@ async function start() {
   }
   await app.listen({ host: "0.0.0.0", port: config.port });
   app.log.info(`meeting-minutes listening on ${config.port}`);
+
+  // Not awaited: whisper loads its models on the first request, and that cost
+  // belongs to boot rather than to whoever records first. Serving starts
+  // immediately either way. Skipped when a job was recovered — that job will
+  // load the models itself, and the warm-up does not run on the serial queue,
+  // so racing it would only take threads away from real work.
+  if (config.whisperWarmUp && !recovered && !recoveredMeetings) {
+    void warmUpWhisper((m) => app.log.info(m));
+  }
 }
 
 start().catch((err) => {

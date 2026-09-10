@@ -53,6 +53,33 @@
 .rec-dot{width:9px;height:9px;border-radius:50%;background:var(--rej-fg);display:inline-block;animation:pulse 1s infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
 .rec-status{font-size:11.5px;color:var(--muted)}
+/* Shown in place of a topic's Record / Upload controls while the whole-meeting
+   recorder is running. */
+.rec-locked{display:flex;align-items:center;gap:7px;color:var(--rej-fg)}
+
+/* ---- Whole-meeting recording banner ---- */
+/* Fixed to the viewport so capture status is visible on every view, including
+   the meetings list. The body is padded to match so nothing hides beneath it. */
+#rec-banner{
+  position:fixed; top:0; left:0; right:0; z-index:90;
+  display:flex; align-items:center; gap:12px; flex-wrap:wrap;
+  padding:9px 24px; background:var(--rej-bg); color:var(--rej-fg);
+  border-bottom:1px solid var(--danger-border);
+  font-size:12.5px; font-weight:600;
+  box-shadow:0 1px 4px rgba(9,45,62,.12);
+}
+body.has-rec-banner{padding-top:44px}
+/* Upload still draining, microphone already off — no longer an alarm colour. */
+#rec-banner.finishing{background:var(--info-bg);color:var(--info-fg);border-bottom-color:var(--rule)}
+#rec-banner .rb-clock{font-variant-numeric:tabular-nums;font-weight:700}
+#rec-banner .rb-topic{font-weight:500;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:40ch}
+#rec-banner .rb-topic.rb-warn{color:var(--rej-fg)}
+#rec-banner .rb-actions{margin-left:auto;display:flex;gap:8px;flex-wrap:wrap}
+@media (max-width:640px){
+  #rec-banner{padding:8px 16px;gap:8px}
+  body.has-rec-banner{padding-top:72px}
+  #rec-banner .rb-actions{margin-left:0}
+}
 .rec-list { list-style: none; margin: 4px 0 0; padding: 0; }
 .rec-list li { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 13px; }
 .rec-list .rec-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

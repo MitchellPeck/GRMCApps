@@ -104,6 +104,27 @@ export function createQueue(log: (message: string) => void): Queue {
   };
 }
 
+// ── Job timing ──────────────────────────────────────────────────────────────
+
+// One line covering where a job's wall-clock actually went. The split matters:
+// "slow transcription" is usually whisper on CPU, but it can equally be the
+// speaker-reconciliation call to Claude, and the aggregate number cannot tell
+// the two apart. Realtime factor is elapsed ÷ audio duration — under 1.0 is
+// faster than the recording itself.
+export function timingSummary(
+  audioSeconds: number,
+  started: number,
+  transcribed: number,
+  reconciled: number
+): string {
+  const whisper = (transcribed - started) / 1000;
+  const reconcile = (reconciled - transcribed) / 1000;
+  const elapsed = (Date.now() - started) / 1000;
+  const factor = audioSeconds > 0 ? (elapsed / audioSeconds).toFixed(2) : "n/a";
+  return `${audioSeconds.toFixed(1)}s audio in ${elapsed.toFixed(1)}s `
+    + `(whisper ${whisper.toFixed(1)}s, speaker naming ${reconcile.toFixed(1)}s, realtime factor ${factor})`;
+}
+
 // ── Item transcription pipeline ─────────────────────────────────────────────
 
 // The per-item pipeline: transcribe, absorb diarization glitches, reconcile
@@ -114,19 +135,17 @@ export async function runItemJob(deps: QueueDeps, job: TranscribeJob): Promise<v
   await deps.setStatus(job.itemId, "processing");
   const started = Date.now();
   const result = await deps.transcribe(job);
+  const transcribed = Date.now();
   const segments = absorbMicroTurns(result.segments);
   // Reconciliation is advisory: never let it fail a transcription.
   let map: SpeakerMap = {};
   try { map = await deps.reconcile(job, segments); } catch { map = {}; }
+  const reconciled = Date.now();
   await deps.saveResult(job, segments, map);
   await deps.setStatus(job.itemId, "done");
   const audioSeconds = segments.length ? segments[segments.length - 1].end : 0;
-  const elapsed = (Date.now() - started) / 1000;
-  const factor = audioSeconds > 0 ? (elapsed / audioSeconds).toFixed(2) : "n/a";
   try {
-    deps.log(
-      `transcribed item ${job.itemId}: ${audioSeconds.toFixed(1)}s audio in ${elapsed.toFixed(1)}s (realtime factor ${factor})`
-    );
+    deps.log(`transcribed item ${job.itemId}: ${timingSummary(audioSeconds, started, transcribed, reconciled)}`);
   } catch { /* logging must never break the pipeline */ }
 }
 
@@ -178,9 +197,11 @@ export async function runMeetingJob(d: MeetingDeps, job: MeetingJob): Promise<vo
   await d.setStatus(job.meetingId, "processing");
   const started = Date.now();
   const result = await d.transcribe(job);
+  const transcribed = Date.now();
   const segments = absorbMicroTurns(result.segments);
   let map: SpeakerMap = {};
   try { map = await d.reconcile(job, segments); } catch { map = {}; }
+  const reconciled = Date.now();
   const markers = await d.loadMarkers(job.recordingId);
   const fallback = await d.fallbackItemId(job.meetingId);
   const byItem = segmentByMarkers(segments, markers, fallback);
@@ -196,10 +217,9 @@ export async function runMeetingJob(d: MeetingDeps, job: MeetingJob): Promise<vo
   await d.saveMeetingMap(job.meetingId, map);
   await d.setStatus(job.meetingId, "done");
   const audioSeconds = segments.length ? segments[segments.length - 1].end : 0;
-  const elapsed = (Date.now() - started) / 1000;
-  const factor = audioSeconds > 0 ? (elapsed / audioSeconds).toFixed(2) : "n/a";
   try {
-    d.log(`processed meeting ${job.meetingId}: ${byItem.size} topic(s), ${audioSeconds.toFixed(1)}s audio in ${elapsed.toFixed(1)}s (realtime factor ${factor})`);
+    d.log(`processed meeting ${job.meetingId}: ${byItem.size} topic(s), `
+      + timingSummary(audioSeconds, started, transcribed, reconciled));
   } catch { /* logging must never break the pipeline — a throw here must not flip a finished job to error */ }
 }
 
