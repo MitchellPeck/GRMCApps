@@ -13,6 +13,7 @@ import { permissionRoutes } from "./routes/permissions";
 import { cardRoutes } from "./routes/cards";
 import { decisionRoutes } from "./routes/decisions";
 import { receiptRoutes } from "./routes/receipts";
+import { reportRoutes } from "./routes/reports";
 
 const app = Fastify({ logger: true, bodyLimit: 2 * 1024 * 1024 });
 
@@ -30,6 +31,7 @@ app.register(permissionRoutes);
 app.register(cardRoutes);
 app.register(decisionRoutes);
 app.register(receiptRoutes);
+app.register(reportRoutes);
 
 app.get("/healthz", async () => ({ ok: true }));
 

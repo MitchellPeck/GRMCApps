@@ -11,7 +11,7 @@
 <header>
   <div class="logo">
     <div class="seal">G</div>
-    <div><h1>GRMC Expenses</h1><p>Expense request forms</p></div>
+    <div><h1>GRMC Expenses</h1><p>Requests &amp; approvals</p></div>
   </div>
   <div class="hright"><span class="hlabel" id="me-label">&hellip;</span></div>
 </header>
@@ -19,99 +19,241 @@
 <div class="layout">
   <div class="tabs">
     <button class="tab active" data-tab="new">New request</button>
-    <button class="tab" data-tab="history">History <span id="history-count" class="tcount"></span></button>
+    <button class="tab" data-tab="queue">Awaiting you <span id="queue-count" class="tcount"></span></button>
+    <button class="tab" data-tab="history">History</button>
+    <button class="tab" data-tab="reports" data-needs="manage" hidden>Reports</button>
     <button class="tab" data-tab="settings">Settings</button>
   </div>
 
   <!-- ── NEW REQUEST ───────────────────────────────────────────── -->
   <div class="panel active" id="p-new">
-
-    <div class="card">
-      <div class="ct">Import from receipts</div>
-      <div id="import-msg"></div>
-      <p class="hint" style="margin:-6px 0 12px">
-        Add one or more receipt PDFs. Each is read separately for accuracy, and they run in
-        parallel. Receipts that are scans or images are handled too.
+    <div id="no-perms" class="card" hidden>
+      <div class="ct">No permissions yet</div>
+      <p class="muted" style="font-size:13px;margin:0">
+        Your account can open Expenses but hasn't been given any permissions in it yet.
+        Ask an Expenses administrator to grant you access to submit requests.
       </p>
-      <div class="btn-row" style="margin-top:0">
-        <label class="btn btn-gold" style="cursor:pointer">
-          Add PDFs
-          <input type="file" id="f-receipts" accept="application/pdf" multiple hidden>
-        </label>
-        <button class="btn btn-primary" id="btn-extract" data-default="Extract &amp; fill form">Extract &amp; fill form</button>
-        <button class="btn" id="btn-add-item">Add item manually</button>
-      </div>
-      <div id="file-queue"></div>
-      <div id="items-wrap"></div>
     </div>
 
+    <div id="submit-area">
+      <div class="card">
+        <div class="ct">What kind of request?</div>
+        <div class="grid2">
+          <div class="field">
+            <label for="f_kind">Timing</label>
+            <select id="f_kind">
+              <option value="post_purchase">Already purchased — submitting the expense</option>
+              <option value="pre_purchase">Not yet purchased — requesting approval first</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="f_payment">Paid with</label>
+            <select id="f_payment">
+              <option value="church_card">A church card</option>
+              <option value="reimbursement">My own money — reimburse me</option>
+            </select>
+          </div>
+        </div>
+        <div class="hint" id="kind-hint"></div>
+      </div>
+
+      <div class="card" id="import-card">
+        <div class="ct">Import from receipts</div>
+        <div id="import-msg"></div>
+        <p class="hint" style="margin:-6px 0 12px">
+          Add one or more receipt PDFs. Each is read separately for accuracy, and they run in
+          parallel. Receipts that are scans or images are handled too.
+        </p>
+        <div class="btn-row" style="margin-top:0">
+          <label class="btn btn-gold" style="cursor:pointer">
+            Add PDFs
+            <input type="file" id="f-receipts" accept="application/pdf" multiple hidden>
+          </label>
+          <button class="btn btn-primary" id="btn-extract" data-default="Extract &amp; fill form">Extract &amp; fill form</button>
+          <button class="btn" id="btn-add-item">Add item manually</button>
+        </div>
+        <div id="file-queue"></div>
+        <div id="items-wrap"></div>
+      </div>
+
+      <div class="card">
+        <div class="ct">Request details</div>
+        <div id="form-msg"></div>
+
+        <div class="grid2">
+          <div class="field"><label for="f_date">Date</label><input type="date" id="f_date"></div>
+          <div class="field" id="amount-field">
+            <label for="f_amount">Amount</label>
+            <input type="number" id="f_amount" step="0.01" min="0" placeholder="0.00">
+          </div>
+        </div>
+
+        <div class="field" id="estimate-field" hidden>
+          <label for="f_estimate">Estimated amount</label>
+          <input type="number" id="f_estimate" step="0.01" min="0" placeholder="0.00">
+          <div class="hint">Actual receipts are added after the purchase.</div>
+        </div>
+
+        <div class="field"><label for="f_reason">Reason for purchase</label>
+          <textarea id="f_reason" placeholder="What was purchased and why"></textarea></div>
+
+        <div class="field"><label for="f_vendor">Vendor</label>
+          <input type="text" id="f_vendor" placeholder="Where this was purchased from"></div>
+
+        <div class="grid2">
+          <div class="field"><label for="f_chargeCode">Charge code</label>
+            <input type="text" id="f_chargeCode" list="chargeCodeList" placeholder="Select or type a code" autocomplete="off">
+            <datalist id="chargeCodeList"></datalist>
+          </div>
+          <div class="field" id="sub-field"><label for="f_subChargeCode">Sub-charge code</label>
+            <input type="text" id="f_subChargeCode" list="subChargeCodeList" placeholder="Select or type a code" autocomplete="off">
+            <datalist id="subChargeCodeList"></datalist>
+          </div>
+        </div>
+
+        <div class="grid2">
+          <div class="field">
+            <label for="f_purchasedBy">Purchased by</label>
+            <input type="text" id="f_purchasedBy" list="peopleList" autocomplete="off">
+            <datalist id="peopleList"></datalist>
+            <div class="hint" id="behalf-hint" hidden>Pick someone on GRMCApps, or type any name.</div>
+          </div>
+          <div class="field" id="card-field">
+            <label for="f_card">Charged to which card</label>
+            <select id="f_card"></select>
+            <div class="hint" id="card-hint"></div>
+          </div>
+        </div>
+
+        <div class="grid2">
+          <div class="field"><label for="f_submittedBy">Submitted by</label>
+            <input type="text" id="f_submittedBy" list="peopleList" autocomplete="off"></div>
+          <div class="field"><label for="f_approver">Approver</label>
+            <select id="f_approver"></select></div>
+        </div>
+
+        <div class="btn-row">
+          <button class="btn btn-primary" id="btn-save" data-default="Submit for approval">Submit for approval</button>
+          <button class="btn btn-gold" id="btn-pdf">Download PDF</button>
+          <button class="btn" id="btn-clear">Clear form</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── AWAITING YOU ──────────────────────────────────────────── -->
+  <div class="panel" id="p-queue">
     <div class="card">
-      <div class="ct">Request details</div>
-      <div id="form-msg"></div>
-
-      <div class="grid2">
-        <div class="field"><label for="f_date">Date</label><input type="date" id="f_date"></div>
-        <div class="field"><label for="f_amount">Amount</label><input type="number" id="f_amount" step="0.01" min="0" placeholder="0.00"></div>
-      </div>
-
-      <div class="field"><label for="f_reason">Reason for purchase</label>
-        <textarea id="f_reason" placeholder="What was purchased and why"></textarea></div>
-
-      <div class="field"><label for="f_vendor">Vendor</label>
-        <input type="text" id="f_vendor" placeholder="Where this was purchased from"></div>
-
-      <div class="grid2">
-        <div class="field"><label for="f_chargeCode">Charge code</label>
-          <input type="text" id="f_chargeCode" list="chargeCodeList" placeholder="Select or type a code" autocomplete="off">
-          <datalist id="chargeCodeList"></datalist>
-        </div>
-        <div class="field" id="sub-field"><label for="f_subChargeCode">Sub-charge code</label>
-          <input type="text" id="f_subChargeCode" list="subChargeCodeList" placeholder="Select or type a code" autocomplete="off">
-          <datalist id="subChargeCodeList"></datalist>
-        </div>
-      </div>
-
-      <div class="grid2">
-        <div class="field"><label for="f_purchasedBy">Purchased by</label><input type="text" id="f_purchasedBy"></div>
-        <div class="field"><label for="f_card">Charged to which card</label><input type="text" id="f_card"></div>
-      </div>
-      <div class="grid2">
-        <div class="field"><label for="f_submittedBy">Submitted by</label><input type="text" id="f_submittedBy"></div>
-        <div class="field"><label for="f_approvedBy">Approved by</label><input type="text" id="f_approvedBy"></div>
-      </div>
-
-      <div class="btn-row">
-        <button class="btn btn-primary" id="btn-pdf">Download PDF</button>
-        <button class="btn btn-gold" id="btn-save" data-default="Save to history">Save to history</button>
-        <button class="btn" id="btn-clear">Clear form</button>
-      </div>
+      <div class="ct">Awaiting your decision</div>
+      <div id="queue-msg"></div>
+      <div id="queue-list"><div class="empty">Loading&hellip;</div></div>
     </div>
   </div>
 
   <!-- ── HISTORY ───────────────────────────────────────────────── -->
   <div class="panel" id="p-history">
     <div class="card">
-      <div class="ct">Saved requests</div>
+      <div class="ct">All requests</div>
       <div id="history-msg"></div>
+      <div class="grid3" style="margin-bottom:14px">
+        <select id="h-stage">
+          <option value="">Any stage</option>
+          <option>Awaiting approval</option>
+          <option>Changes requested</option>
+          <option>Rejected</option>
+          <option>Approved — awaiting receipts</option>
+          <option>Approved — awaiting reimbursement</option>
+          <option>Complete</option>
+        </select>
+        <input type="text" id="h-search" placeholder="Search reason, vendor or person">
+        <select id="h-payment">
+          <option value="">Any payment</option>
+          <option value="church_card">Church card</option>
+          <option value="reimbursement">Reimbursement</option>
+        </select>
+      </div>
       <div id="history-list"><div class="empty">Loading&hellip;</div></div>
+    </div>
+  </div>
+
+  <!-- ── REQUEST DETAIL ────────────────────────────────────────── -->
+  <div class="panel" id="p-detail">
+    <div class="btn-row" style="margin:0 0 14px"><button class="btn" id="btn-back">&larr; Back</button></div>
+    <div id="detail-body"></div>
+  </div>
+
+  <!-- ── REPORTS ───────────────────────────────────────────────── -->
+  <div class="panel" id="p-reports">
+    <div class="card">
+      <div class="ct">Spend by charge code</div>
+      <div id="reports-msg"></div>
+      <div class="grid3" style="margin-bottom:14px">
+        <input type="date" id="r-from">
+        <input type="date" id="r-to">
+        <button class="btn btn-primary" id="btn-report">Run</button>
+      </div>
+      <div id="report-body"><div class="empty">Choose a date range and run.</div></div>
+      <div class="btn-row"><button class="btn btn-gold" id="btn-csv">Download CSV</button></div>
     </div>
   </div>
 
   <!-- ── SETTINGS ──────────────────────────────────────────────── -->
   <div class="panel" id="p-settings">
-    <div class="card">
-      <div class="ct">Anthropic API key</div>
-      <div id="key-msg"></div>
-      <div class="field">
-        <label for="s_key">API key</label>
-        <input type="password" id="s_key" placeholder="sk-ant-&hellip;" autocomplete="off">
-        <div class="hint" id="key-hint">Used to read receipts. Leave blank to keep the stored key.</div>
-      </div>
-      <div class="btn-row"><button class="btn btn-primary" id="btn-save-key" data-default="Save key">Save key</button></div>
+    <div class="card" data-needs="admin" hidden>
+      <div class="ct">Permissions</div>
+      <div id="perm-msg"></div>
+      <div id="perm-list"><div class="empty">Loading&hellip;</div></div>
+      <p class="hint" style="margin-top:12px">
+        Manage implies approve. Admin grants this screen only — it does not grant any expense
+        permission. You cannot remove the last administrator.
+      </p>
     </div>
 
-    <div class="card">
-      <div class="ct">Form defaults</div>
+    <div class="card" data-needs="admin" hidden>
+      <div class="ct">Cards</div>
+      <div id="cards-msg"></div>
+      <div id="cards-list"><div class="empty">Loading&hellip;</div></div>
+      <div class="grid3" style="margin-top:14px">
+        <input type="text" id="c-nickname" placeholder="Nickname, e.g. Ministry Visa">
+        <input type="text" id="c-last4" placeholder="Last 4" maxlength="4" inputmode="numeric">
+        <select id="c-primary"></select>
+      </div>
+      <div class="btn-row"><button class="btn btn-gold" id="btn-add-card" data-default="Add card">Add card</button></div>
+      <p class="hint">Only the last four digits are ever stored.</p>
+    </div>
+
+    <div class="card" data-needs="manage" hidden>
+      <div class="ct">Charge codes</div>
+      <div id="codes-msg"></div>
+      <div id="codes-list"><div class="empty">Loading&hellip;</div></div>
+      <div class="grid3" style="margin-top:16px">
+        <input type="text" id="cc-code" placeholder="Code, e.g. 7080">
+        <input type="text" id="cc-label" placeholder="Label, e.g. Livestream">
+        <select id="cc-parent"></select>
+      </div>
+      <div class="btn-row"><button class="btn btn-gold" id="btn-add-code" data-default="Add code">Add code</button></div>
+    </div>
+
+    <div class="card" data-needs="admin" hidden>
+      <div class="ct">Approval rules</div>
+      <div id="rules-msg"></div>
+      <div class="field">
+        <label><input type="checkbox" id="s_selfApprove"> Allow people to approve their own requests</label>
+        <div class="hint">Off by default. Turn this on only if there is no one else to approve.</div>
+      </div>
+      <div class="grid2">
+        <div class="field"><label for="s_tolPct">Overage tolerance (%)</label>
+          <input type="number" id="s_tolPct" step="1" min="0"></div>
+        <div class="field"><label for="s_tolAbs">Overage tolerance ($)</label>
+          <input type="number" id="s_tolAbs" step="1" min="0"></div>
+      </div>
+      <p class="hint">A completed pre-purchase returns for re-approval if the actual exceeds the
+        estimate by more than the greater of these two.</p>
+      <div class="btn-row"><button class="btn btn-primary" id="btn-save-rules" data-default="Save rules">Save rules</button></div>
+    </div>
+
+    <div class="card" data-needs="admin" hidden>
+      <div class="ct">Form defaults &amp; API key</div>
       <div id="defaults-msg"></div>
       <div class="field"><label for="s_org">Organization name</label><input type="text" id="s_org"></div>
       <div class="grid2">
@@ -122,22 +264,12 @@
         <div class="field"><label for="s_submittedBy">Submitted by</label><input type="text" id="s_submittedBy"></div>
         <div class="field"><label for="s_approvedBy">Approved by</label><input type="text" id="s_approvedBy"></div>
       </div>
-      <div class="btn-row"><button class="btn btn-primary" id="btn-save-defaults" data-default="Save defaults">Save defaults</button></div>
-    </div>
-
-    <div class="card">
-      <div class="ct">Charge codes</div>
-      <div id="codes-msg"></div>
-      <div id="codes-list"><div class="empty">Loading&hellip;</div></div>
-      <div class="field" style="margin-top:16px">
-        <label>Add a code</label>
-        <div class="grid3">
-          <input type="text" id="c-code" placeholder="Code, e.g. 7080">
-          <input type="text" id="c-label" placeholder="Label, e.g. Livestream">
-          <select id="c-parent"></select>
-        </div>
+      <div class="field">
+        <label for="s_key">Anthropic API key</label>
+        <input type="password" id="s_key" placeholder="sk-ant-&hellip;" autocomplete="off">
+        <div class="hint" id="key-hint">Used to read receipts. Leave blank to keep the stored key.</div>
       </div>
-      <div class="btn-row"><button class="btn btn-gold" id="btn-add-code" data-default="Add code">Add code</button></div>
+      <div class="btn-row"><button class="btn btn-primary" id="btn-save-defaults" data-default="Save">Save</button></div>
     </div>
   </div>
 </div>

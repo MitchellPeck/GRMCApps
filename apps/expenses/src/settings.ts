@@ -14,6 +14,9 @@ export async function setSetting(pool: Pool, key: string, value: string): Promis
 }
 
 export interface SettingsView {
+  allowSelfApproval: boolean;
+  overageTolerancePct: number;
+  overageToleranceAbs: number;
   orgName: string;
   defaultPurchasedBy: string;
   defaultCard: string;
@@ -28,6 +31,9 @@ export interface SettingsView {
 export async function getSettingsView(pool: Pool): Promise<SettingsView> {
   const key = await getSetting(pool, "anthropic_api_key");
   return {
+    allowSelfApproval: (await getSetting(pool, "allow_self_approval")) === "true",
+    overageTolerancePct: Number(await getSetting(pool, "overage_tolerance_pct")) || 0.1,
+    overageToleranceAbs: Number(await getSetting(pool, "overage_tolerance_abs")) || 25,
     orgName: await getSetting(pool, "org_name"),
     defaultPurchasedBy: await getSetting(pool, "default_purchased_by"),
     defaultCard: await getSetting(pool, "default_card"),
