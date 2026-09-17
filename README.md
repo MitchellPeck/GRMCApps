@@ -103,21 +103,54 @@ between apps. Both are served to each app at `/assets/` (see *Shared UI* below).
   triggers a one-time model download into the `whisperdata` volume, so the
   first transcription after that change is slow.
 
-- **Expenses** (`expenses.grmc.app`) — build a church expense request form from
-  receipts. Upload one or more receipt PDFs and Claude reads each one
-  separately (in parallel) into line items, vendor, shipping, tax and
-  discounts, then writes a short reason and picks a charge code, validated
-  against the taxonomy so an invented code never lands on the form. Shipping,
-  tax and discounts are combined across receipts into one line each, in plain
-  arithmetic rather than by the model. **Receipts that are scans or images work
-  too:** each PDF is converted to markdown first, and any document whose
-  markdown carries no currency amount is re-sent to Claude as the PDF itself —
-  without that, a browser-printed invoice like Sweetwater's extracts nothing and
-  fails silently. Download the finished form as a PDF (page one is the form with
-  signature lines, page two the itemized list), and save it to a shared history
-  everyone with access can see. Charge codes, the org name, the four name
-  defaults and the Anthropic key all live in Settings; data is in the
-  `expenses` database.
+- **Expenses** (`expenses.grmc.app`) — expense requests, approvals and records.
+
+  **Two dimensions.** Every request says *when* (already purchased, or asking
+  approval first) and *how it was paid* (a church card, or your own money to be
+  reimbursed). Those are independent, and together they decide what the form
+  asks for: a card only for church-card spending, an estimate only before a
+  purchase, receipts only after one, and a reimbursement step only when someone
+  is owed money.
+
+  **Receipts.** Upload receipt PDFs and Claude reads each one separately (in
+  parallel) into line items, vendor, shipping, tax and discounts, then writes a
+  short reason and picks a charge code, validated against the taxonomy so an
+  invented code never lands on the form. Shipping, tax and discounts are
+  combined across receipts into one line each in plain arithmetic, not by the
+  model. Receipts that are scans or images work too: each PDF is converted to
+  markdown first, and any document whose markdown carries no currency amount is
+  re-sent to Claude as the PDF itself — without that, a browser-printed invoice
+  like Sweetwater's extracts nothing and fails silently. Uploaded receipts are
+  kept and shown to the approver; the generated PDF still carries the clean
+  itemized list rather than receipt scans, because that is what prints and files.
+
+  **Approvals.** A request goes to a named approver, who approves, rejects or
+  requests changes with a comment. Every action is recorded on a timeline with
+  who and when. **Nobody can approve their own request** unless an administrator
+  deliberately turns that on in Settings. The **paper path is kept** for the
+  transition: someone with approve rights records a paper approval with its
+  date, so paper-era and digital requests sit in one log correctly labelled —
+  every request that predates the digital workflow was migrated as exactly that.
+
+  **Completion.** An approved pre-purchase request is closed out with the actual
+  amount and receipts. If the actual exceeds the estimate by more than the
+  greater of the two tolerances in Settings (10% or $25 by default), it goes
+  back to the approver with both figures shown. Reimbursements are marked paid,
+  with a date and reference, by anyone with manage rights.
+
+  **Permissions** are per-app, on top of who the hub lets in: submit, submit on
+  another's behalf, edit own, approve, manage (implies approve; acts on
+  anyone's requests and edits charge codes) and admin (permissions, cards and
+  settings only — it grants no expense rights of its own). Each person can have
+  a default approver. The last administrator cannot be removed, and
+  `mitchell.peck@graceresurrection.org` is restored if there is ever none.
+
+  **Cards** hold a nickname, the last four digits (never a full number), a
+  primary holder and additional users. *Charged to which card* is a dropdown of
+  the cards that person may actually use.
+
+  **Reports** (manage only): spend by charge code over a date range, and a CSV
+  export for bookkeeping. Data lives in the `expenses` database.
 
 ## Users and access
 
