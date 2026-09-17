@@ -59,4 +59,20 @@ CREATE TABLE IF NOT EXISTS app_users (
   created_at             timestamptz NOT NULL DEFAULT now(),
   updated_at             timestamptz NOT NULL DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS cards (
+  id            bigserial PRIMARY KEY,
+  last4         text NOT NULL,
+  nickname      text NOT NULL,
+  primary_email text NOT NULL,
+  active        boolean NOT NULL DEFAULT true,
+  created_at    timestamptz NOT NULL DEFAULT now()
+);
+
+-- Additional authorized users on a card.
+CREATE TABLE IF NOT EXISTS card_users (
+  card_id bigint NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+  email   text NOT NULL,
+  PRIMARY KEY (card_id, email)
+);
 `;
