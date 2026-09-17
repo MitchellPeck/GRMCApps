@@ -1,0 +1,12 @@
+FROM node:20-alpine
+WORKDIR /app
+COPY apps/expenses/package.json ./
+RUN npm install
+COPY apps/expenses/tsconfig.json ./
+COPY apps/expenses/src ./src
+COPY shared/ui/grmc.css ./src/public/assets/grmc.css
+COPY shared/ui/grmc-nav.js ./src/public/assets/grmc-nav.js
+COPY shared/ui/fonts ./src/public/assets/fonts
+RUN npm run build && (cp -r src/public dist/public 2>/dev/null || true)
+EXPOSE 3000
+CMD ["node", "dist/index.js"]
