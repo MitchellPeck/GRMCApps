@@ -67,7 +67,12 @@ export type CheckResult = { ok: true } | { ok: false; status: number; error: str
 
 const same = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
 
-export function statusAfterDecision(action: DecisionAction): RequestStatus {
+// A decision always lands on one of three terminal-ish states — never back on
+// `pending` — and the narrowed return type says so, which is what lets these
+// double as audit event names without a cast.
+export type DecidedStatus = Exclude<RequestStatus, "pending">;
+
+export function statusAfterDecision(action: DecisionAction): DecidedStatus {
   if (action === "approve") return "approved";
   if (action === "reject") return "rejected";
   return "changes_requested";

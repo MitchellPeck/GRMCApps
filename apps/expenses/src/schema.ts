@@ -75,4 +75,43 @@ CREATE TABLE IF NOT EXISTS card_users (
   email   text NOT NULL,
   PRIMARY KEY (card_id, email)
 );
+
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS kind                    text NOT NULL DEFAULT 'post_purchase';
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS payment_method          text NOT NULL DEFAULT 'church_card';
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS status                  text NOT NULL DEFAULT 'approved';
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS card_id                 bigint REFERENCES cards(id) ON DELETE SET NULL;
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS submitted_by_email      text NOT NULL DEFAULT '';
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS purchased_by_email      text NOT NULL DEFAULT '';
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS approver_email          text NOT NULL DEFAULT '';
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS approval_method         text;
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS approved_at             timestamptz;
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS approved_by_email       text;
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS estimated_amount        numeric(12,2);
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS actuals_completed_at    timestamptz;
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS reimbursed_at           timestamptz;
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS reimbursed_by_email     text;
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS reimbursement_reference text;
+
+CREATE TABLE IF NOT EXISTS receipts (
+  id                bigserial PRIMARY KEY,
+  request_id        bigint NOT NULL REFERENCES requests(id) ON DELETE CASCADE,
+  file_name         text NOT NULL,
+  mime_type         text NOT NULL,
+  byte_size         integer NOT NULL,
+  content           bytea NOT NULL,
+  uploaded_by_email text NOT NULL,
+  uploaded_at       timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS request_events (
+  id          bigserial PRIMARY KEY,
+  request_id  bigint NOT NULL REFERENCES requests(id) ON DELETE CASCADE,
+  type        text NOT NULL,
+  actor_email text NOT NULL,
+  actor_name  text NOT NULL DEFAULT '',
+  comment     text NOT NULL DEFAULT '',
+  meta        jsonb,
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS request_events_request_idx ON request_events (request_id, created_at);
 `;

@@ -9,6 +9,10 @@ import { requestRoutes } from "./routes/requests";
 import { chargeCodeRoutes } from "./routes/charge-codes";
 import { settingsRoutes } from "./routes/settings";
 import { meRoutes } from "./routes/me";
+import { permissionRoutes } from "./routes/permissions";
+import { cardRoutes } from "./routes/cards";
+import { decisionRoutes } from "./routes/decisions";
+import { receiptRoutes } from "./routes/receipts";
 
 const app = Fastify({ logger: true, bodyLimit: 2 * 1024 * 1024 });
 
@@ -22,6 +26,10 @@ app.register(extractRoutes);
 app.register(requestRoutes);
 app.register(chargeCodeRoutes);
 app.register(settingsRoutes);
+app.register(permissionRoutes);
+app.register(cardRoutes);
+app.register(decisionRoutes);
+app.register(receiptRoutes);
 
 app.get("/healthz", async () => ({ ok: true }));
 

@@ -1,5 +1,6 @@
 import { FastifyInstance } from "fastify";
 import { pool } from "../db";
+import { requirePermission } from "../guard";
 import {
   chargeCodeTree,
   createChargeCode,
@@ -14,7 +15,7 @@ export async function chargeCodeRoutes(app: FastifyInstance): Promise<void> {
     codes: chargeCodeTree(await listChargeCodes(pool)),
   }));
 
-  app.post("/api/charge-codes", async (req, reply) => {
+  app.post("/api/charge-codes", { preHandler: requirePermission("manage") }, async (req, reply) => {
     const body = (req.body ?? {}) as { code?: string; label?: string; parentId?: number | null };
     const code = String(body.code ?? "").trim();
     const label = String(body.label ?? "").trim();
@@ -29,7 +30,7 @@ export async function chargeCodeRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
-  app.patch("/api/charge-codes/:id", async (req, reply) => {
+  app.patch("/api/charge-codes/:id", { preHandler: requirePermission("manage") }, async (req, reply) => {
     const { id } = req.params as { id: string };
     const body = (req.body ?? {}) as { code?: string; label?: string; active?: boolean };
     const ok = await updateChargeCode(pool, Number(id), body);
@@ -37,7 +38,7 @@ export async function chargeCodeRoutes(app: FastifyInstance): Promise<void> {
     return { ok: true };
   });
 
-  app.delete("/api/charge-codes/:id", async (req, reply) => {
+  app.delete("/api/charge-codes/:id", { preHandler: requirePermission("manage") }, async (req, reply) => {
     const { id } = req.params as { id: string };
     // Sub-codes cascade with the parent.
     const ok = await deleteChargeCode(pool, Number(id));
