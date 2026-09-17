@@ -10,6 +10,7 @@ import { pool } from "./db";
 import { PgSessionStore } from "./session-store";
 import { authRoutes } from "./auth/routes";
 import { appRoutes } from "./apps/routes";
+import { adminRoutes } from "./admin/routes";
 import { ensureUserSchema } from "./users/provision";
 
 declare module "fastify" {
@@ -51,6 +52,7 @@ app.register(fastifySession, {
 app.register(fastifyStatic, { root: join(__dirname, "public", "assets"), prefix: "/assets/", decorateReply: false });
 app.register(authRoutes);
 app.register(appRoutes);
+app.register(adminRoutes);
 
 app.get("/healthz", async () => ({ ok: true }));
 
