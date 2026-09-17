@@ -2,9 +2,17 @@ import { FastifyInstance } from "fastify";
 import type { AuthorizationParameters } from "openid-client";
 import { getOidcClient, generators } from "./oidc";
 import { config } from "../config";
-import { pool } from "../db";
-import { getAppBySubdomain, getUser } from "../apps/registry";
 import { subdomainFromHost } from "../apps/host";
+import { decideAccess, roleHeader } from "../users/access-decision";
+import { decideLogin } from "../users/login-decision";
+import { normalizeEmail } from "../users/email";
+import {
+  bindGoogleIdentity,
+  findByEmail,
+  findBySub,
+  loadVerifyContext,
+  touchLogin,
+} from "../users/repo";
 
 // Short-lived marker cookie set on logout. It survives the destroyed session
 // cookie and tells the next /auth/login to force a Google prompt instead of
@@ -72,18 +80,35 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       return;
     }
 
-    const result = await pool.query(
-      `INSERT INTO users (google_sub, email, name, last_login)
-       VALUES ($1, $2, $3, now())
-       ON CONFLICT (google_sub)
-       DO UPDATE SET email = EXCLUDED.email, name = EXCLUDED.name, last_login = now()
-       RETURNING id`,
-      [claims.sub, claims.email, claims.name ?? null]
-    );
+    // Invite-only: an account must already exist. This replaces the previous
+    // just-in-time INSERT, which let any Google account in.
+    const email = normalizeEmail(claims.email);
+    const bySub = await findBySub(claims.sub);
+    const byEmail = bySub ? null : await findByEmail(email);
+    const name = claims.name ?? null;
+    const decision = decideLogin(bySub, byEmail, { sub: claims.sub, email, name });
+
+    if (decision.kind === "deny") {
+      req.log.warn(
+        { email, sub: claims.sub, reason: decision.reason },
+        "login denied by user management"
+      );
+      await req.session.destroy();
+      reply.redirect(
+        `${config.publicUrl}?error=${decision.reason}&email=${encodeURIComponent(claims.email)}`
+      );
+      return;
+    }
+
+    if (decision.kind === "bind") {
+      await bindGoogleIdentity(decision.userId, claims.sub, claims.email, name);
+    } else {
+      await touchLogin(decision.userId, claims.email, name);
+    }
 
     // New session id now that the user is authenticated (session-fixation defense).
     await req.session.regenerate();
-    req.session.userId = result.rows[0].id;
+    req.session.userId = decision.userId;
     reply.redirect(returnTo);
   });
 
@@ -118,23 +143,41 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       );
     }
 
+    const hubHost = new URL(config.publicUrl).host;
+    const deny = (message: string) =>
+      reply.code(403).view("denied.ejs", { message, hubHost });
+
     const subdomain = subdomainFromHost(forwardedHost, config.baseDomain);
-    const appRow = subdomain ? await getAppBySubdomain(subdomain) : null;
-    if (!appRow || !appRow.enabled) {
-      return reply.code(403).send("Forbidden: unknown or disabled app");
+    if (!subdomain) return deny("That address is not a GRMC app.");
+
+    // One query: identity, app and grant together, on the gateway hot path.
+    const ctx = await loadVerifyContext(req.session.userId, subdomain);
+    if (!ctx) return deny("Your account could not be found. Sign in again.");
+    if (ctx.app_id === null) return deny("That address is not a GRMC app.");
+
+    const decision = decideAccess({
+      userActive: ctx.user_active,
+      appEnabled: ctx.app_enabled === true,
+      hasGrant: ctx.has_grant,
+    });
+
+    if (!decision.allowed) {
+      req.log.warn(
+        { userId: ctx.id, subdomain, reason: decision.reason },
+        "app access denied"
+      );
+      if (decision.reason === "app_disabled") return deny("That app is turned off.");
+      if (decision.reason === "user_disabled") {
+        return deny("Your account has been disabled. Ask an administrator.");
+      }
+      return deny("You do not have access to this app. Ask an administrator.");
     }
 
-    const user = await getUser(req.session.userId);
-    if (!user) {
-      return reply.code(403).send("Forbidden: unknown user");
-    }
-
-    // v1: any authenticated user may access any enabled app.
     reply
-      .header("X-Auth-User-Id", user.id)
-      .header("X-Auth-Email", user.email)
-      .header("X-Auth-Name", user.name ?? "")
-      .header("X-Auth-Roles", "user")
+      .header("X-Auth-User-Id", ctx.id)
+      .header("X-Auth-Email", ctx.email)
+      .header("X-Auth-Name", ctx.name ?? "")
+      .header("X-Auth-Roles", roleHeader(ctx.is_admin))
       .code(200)
       .send("ok");
   });

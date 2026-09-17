@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>GRMC Apps — No access</title>
+    <!--
+      Absolute URLs: this page is rendered by the hub but served to the browser
+      under the APP's hostname by Traefik's forwardAuth, so a root-relative
+      /assets/grmc.css would resolve against the wrong origin.
+    -->
+    <link rel="stylesheet" href="https://<%= hubHost %>/assets/grmc.css" />
+    <style>body{display:grid;place-items:center;height:100vh}</style>
+  </head>
+  <body>
+    <div class="card" style="text-align:center;max-width:420px;padding:34px 38px">
+      <div class="seal" style="margin:0 auto 14px">G</div>
+      <div class="kicker">Grace Resurrection Methodist Church</div>
+      <h1 style="font-size:24px;margin:6px 0 8px">No access</h1>
+      <p class="muted" style="font-size:13px;margin-bottom:18px"><%= message %></p>
+      <a class="btn btn-primary" href="https://<%= hubHost %>/" style="text-decoration:none">Back to GRMC Apps</a>
+    </div>
+  </body>
+</html>
