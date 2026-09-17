@@ -58,21 +58,43 @@ export interface UploadedDoc {
   buffer: Buffer;
 }
 
+// Minimal logger surface so the Fastify request logger can be threaded in
+// without this module importing Fastify.
+export interface ExtractLog {
+  info(obj: Record<string, unknown>, msg: string): void;
+  warn(obj: Record<string, unknown>, msg: string): void;
+}
+
+const NO_LOG: ExtractLog = { info: () => undefined, warn: () => undefined };
+
+const since = (t: number) => Math.round(Date.now() - t);
+
 export interface ExtractionResult extends Combined, Classification {}
 
-async function toMarkdown(buffer: Buffer): Promise<string> {
+async function toMarkdown(buffer: Buffer, name: string, log: ExtractLog): Promise<string> {
+  const started = Date.now();
   try {
-    return await pdf2md(new Uint8Array(buffer));
-  } catch {
+    const md = await pdf2md(new Uint8Array(buffer));
+    log.info({ doc: name, ms: since(started), chars: md.length }, "pdf2md converted");
+    return md;
+  } catch (err) {
     // A conversion failure is not fatal — it just means this document takes
-    // the PDF route, which is the more capable path anyway.
+    // the PDF route, which is the more capable path anyway. It IS logged,
+    // because a silent conversion failure looks identical to an image-only
+    // receipt and we would never know which we were looking at.
+    log.warn({ doc: name, ms: since(started), err: String(err) }, "pdf2md failed");
     return "";
   }
 }
 
-async function extractOne(client: Anthropic, doc: UploadedDoc): Promise<DocResult> {
+async function extractOne(
+  client: Anthropic,
+  doc: UploadedDoc,
+  log: ExtractLog
+): Promise<DocResult> {
+  const started = Date.now();
   try {
-    const markdown = await toMarkdown(doc.buffer);
+    const markdown = await toMarkdown(doc.buffer, doc.name, log);
 
     // Markdown when the page actually carries text; the original PDF when it
     // does not, which is what makes image-only invoices work at all.
@@ -90,16 +112,34 @@ async function extractOne(client: Anthropic, doc: UploadedDoc): Promise<DocResul
           { type: "text", text: docPrompt(doc.name) },
         ];
 
+    const route = content.some((c) => c.type === "document") ? "pdf-fallback" : "markdown";
+    log.info({ doc: doc.name, route, bytes: doc.buffer.length }, "extraction call starting");
+
+    const callStarted = Date.now();
     const res = await client.messages.parse({
       model: MODEL,
       max_tokens: 16000,
       messages: [{ role: "user", content }],
       output_config: { format: zodOutputFormat(DocSchema) },
     });
+    log.info(
+      { doc: doc.name, route, ms: since(callStarted), usage: res.usage },
+      "extraction call returned"
+    );
 
-    if (!res.parsed_output) return { doc: doc.name, ok: false };
+    if (!res.parsed_output) {
+      log.warn({ doc: doc.name, stopReason: res.stop_reason }, "extraction returned unparsable output");
+      return { doc: doc.name, ok: false };
+    }
     return { doc: doc.name, ok: true, result: res.parsed_output };
-  } catch {
+  } catch (err) {
+    // Logged, not swallowed. A bare `catch {}` here made every failure —
+    // timeout, auth, rate limit, oversized document — indistinguishable from
+    // "this receipt had no items on it".
+    log.warn(
+      { doc: doc.name, ms: since(started), err: err instanceof Error ? err.message : String(err) },
+      "extraction failed"
+    );
     return { doc: doc.name, ok: false };
   }
 }
@@ -118,8 +158,10 @@ function codeListText(tree: ChargeCodeNode[]): string {
 async function classify(
   client: Anthropic,
   titles: string[],
-  tree: ChargeCodeNode[]
+  tree: ChargeCodeNode[],
+  log: ExtractLog
 ): Promise<Classification> {
+  const started = Date.now();
   const fallback: Classification = {
     reason: heuristicSummary(titles),
     chargeCode: "",
@@ -146,32 +188,49 @@ Write a very short expense reason (under 8 words, no trailing period) and pick t
       output_config: { format: zodOutputFormat(ClassifySchema) },
     });
 
+    log.info({ ms: since(started), usage: res.usage }, "classification returned");
     if (!res.parsed_output) return fallback;
     const validated = validateClassification(res.parsed_output, tree);
     return { ...validated, reason: validated.reason || fallback.reason };
-  } catch {
+  } catch (err) {
     // Keep the heuristic reason and leave the codes blank rather than failing
-    // the whole extraction over the cosmetic half of it.
+    // the whole extraction over the cosmetic half of it — but say so.
+    log.warn(
+      { ms: since(started), err: err instanceof Error ? err.message : String(err) },
+      "classification failed, using heuristic reason"
+    );
     return fallback;
   }
 }
 
 export async function extractDocuments(
   pool: Pool,
-  docs: UploadedDoc[]
+  docs: UploadedDoc[],
+  log: ExtractLog = NO_LOG
 ): Promise<ExtractionResult> {
+  const started = Date.now();
   const key = await getSetting(pool, "anthropic_api_key");
   if (!key) throw new Error(MISSING_KEY_ERROR);
   const client = new Anthropic({ apiKey: key });
+  log.info(
+    { docs: docs.length, totalBytes: docs.reduce((n, d) => n + d.buffer.length, 0) },
+    "extraction starting"
+  );
 
   // Parallel, unlike the Artifact's sequential loop. Per-document isolation is
   // what made extraction reliable — running them one at a time was never part
   // of that, only slower.
-  const results = await Promise.all(docs.map((d) => extractOne(client, d)));
+  const results = await Promise.all(docs.map((d) => extractOne(client, d, log)));
   const combined = combineDocs(results);
+  log.info(
+    { ms: since(started), failed: combined.failed, items: combined.items.length },
+    "all documents processed"
+  );
 
   const tree = chargeCodeTree(await listChargeCodes(pool));
   const titles = combined.items.filter((i) => !i.autoType).map((i) => i.title);
 
-  return { ...combined, ...(await classify(client, titles, tree)) };
+  const classified = await classify(client, titles, tree, log);
+  log.info({ ms: since(started) }, "extraction complete");
+  return { ...combined, ...classified };
 }

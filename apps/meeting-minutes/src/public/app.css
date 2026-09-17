@@ -1,4 +1,10 @@
 /* Meeting Minutes — bespoke components (inherits grmc.css tokens). */
+
+/* The `hidden` attribute must win over the display rules below. Rules like
+   `#rec-banner{display:flex}` are author-origin, so they override the UA
+   sheet's `[hidden]{display:none}` and leave elements on screen that the JS
+   believes it has hidden — the empty recording bar showed on every view. */
+[hidden]{display:none !important}
 /* .grid2 lives in the shared grmc.css. */
 .back{margin-bottom:16px}
 

@@ -53,7 +53,7 @@ export async function extractRoutes(app: FastifyInstance): Promise<void> {
     }
 
     try {
-      const result = await extractDocuments(pool, docs);
+      const result = await extractDocuments(pool, docs, req.log);
       return { ok: true, ...result, rejected, documentCount: docs.length };
     } catch (err) {
       const message = err instanceof Error ? err.message : "Extraction failed.";
