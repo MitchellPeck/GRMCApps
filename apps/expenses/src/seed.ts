@@ -28,6 +28,9 @@ const DEFAULT_SETTINGS: [string, string][] = [
   ["default_card", "Taylor Bacon"],
   ["default_submitted_by", "Mitchell Peck"],
   ["default_approved_by", "Taylor Bacon"],
+  ["allow_self_approval", "false"],
+  ["overage_tolerance_pct", "0.10"],
+  ["overage_tolerance_abs", "25"],
 ];
 
 export async function seedDefaults(pool: Pool): Promise<void> {

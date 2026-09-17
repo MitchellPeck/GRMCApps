@@ -45,4 +45,18 @@ CREATE TABLE IF NOT EXISTS request_items (
   auto_type  text,
   PRIMARY KEY (request_id, idx)
 );
+
+CREATE TABLE IF NOT EXISTS app_users (
+  email                  text PRIMARY KEY,
+  name                   text NOT NULL DEFAULT '',
+  can_submit             boolean NOT NULL DEFAULT false,
+  can_submit_for_others  boolean NOT NULL DEFAULT false,
+  can_edit_own           boolean NOT NULL DEFAULT false,
+  can_approve            boolean NOT NULL DEFAULT false,
+  can_manage             boolean NOT NULL DEFAULT false,
+  is_admin               boolean NOT NULL DEFAULT false,
+  default_approver_email text,
+  created_at             timestamptz NOT NULL DEFAULT now(),
+  updated_at             timestamptz NOT NULL DEFAULT now()
+);
 `;
