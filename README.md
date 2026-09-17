@@ -102,6 +102,38 @@ between apps. Both are served to each app at `/assets/` (see *Shared UI* below).
   triggers a one-time model download into the `whisperdata` volume, so the
   first transcription after that change is slow.
 
+## Users and access
+
+GRMC Apps is invite-only. A Google sign-in succeeds only if an account already
+exists for that address, and each account is granted apps one at a time.
+
+- **Users screen:** https://hub.grmc.app/admin/users (administrators only; the
+  **Users** link appears in the hub header).
+- **Adding someone:** enter their email and, optionally, a display name. No mail
+  is sent — the account simply works the next time they sign in with Google,
+  which is also when their real name and Google identity are attached. Until
+  then the row shows as **Invited**.
+- **Granting apps:** tick the app's column on that person's row. Changes take
+  effect on their next page load; nothing waits for a session to expire.
+- **Administrator** grants the Users screen **only**. It does not grant any app —
+  an administrator still needs each app ticked like anyone else.
+- **Disable vs delete:** disabling locks the account out immediately but keeps
+  its grants for when you turn it back on. Deleting removes the account and its
+  grants; that person would have to be invited again.
+- **You cannot remove the last active administrator** — demote, disable and
+  delete are all refused with an explanation.
+- **First run:** on a fresh database the account
+  `mitchell.peck@graceresurrection.org` is created as an administrator holding
+  every app, so there is always a way in. If every administrator is ever
+  removed, that account is restored on the next hub restart.
+- **Existing installs:** the first time the hub starts with user management, every
+  account already in the database keeps access to every app that existed at that
+  moment, so nobody is locked out by the upgrade. Prune from the Users screen.
+
+The schema is applied by the hub on boot (`hub/src/users/provision.ts`), not by
+`db/init/`, because those files only run on a fresh Postgres volume and can
+never reach a live database.
+
 ## Adding an app
 
 1. Create `apps/<name>/` (its own container listening on port 3000).
@@ -113,6 +145,9 @@ between apps. Both are served to each app at `/assets/` (see *Shared UI* below).
    `hub-forward-auth@file` middleware (copy the `whoami` service).
 5. Copy the shared UI into the image and load it on the page (see below). The
    app then appears in every other app's switcher automatically.
+6. Grant the app to whoever needs it on https://hub.grmc.app/admin/users — a new
+   app starts with **no** grants, so it is invisible until someone is ticked
+   into it (including you).
 
 ## Shared UI
 
