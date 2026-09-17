@@ -1,24 +1,37 @@
 import { FastifyInstance } from "fastify";
 import { config } from "../config";
 import { isSiblingOrigin } from "./host";
-import { listEnabledApps, getUser } from "./registry";
+import { listAppsForUser, getUser } from "./registry";
 
-async function appsWithHosts() {
-  const apps = await listEnabledApps();
+// Enabled AND granted to this user. Both the dashboard and the switcher use
+// this, so neither ever offers an app that answers 403.
+async function appsWithHosts(userId: string) {
+  const apps = await listAppsForUser(userId);
   return apps.map((a) => ({ ...a, host: `${a.subdomain}.${config.baseDomain}` }));
 }
 
 export async function appRoutes(app: FastifyInstance): Promise<void> {
   app.get("/", async (req, reply) => {
-    if (!req.session.userId) {
-      return reply.view("login.ejs", {});
-    }
+    const q = req.query as { error?: string; email?: string };
+    const loginView = () =>
+      reply.view("login.ejs", { error: q.error ?? "", email: q.email ?? "" });
+
+    if (!req.session.userId) return loginView();
+
     const user = await getUser(req.session.userId);
-    if (!user) {
+    // A user disabled or deleted while holding a live session loses it here.
+    if (!user || !user.active) {
       await req.session.destroy();
-      return reply.view("login.ejs", {});
+      return reply.view("login.ejs", {
+        error: user ? "disabled" : "not_provisioned",
+        email: user?.email ?? "",
+      });
     }
-    return reply.view("dashboard.ejs", { user, apps: await appsWithHosts() });
+    return reply.view("dashboard.ejs", {
+      user,
+      apps: await appsWithHosts(user.id),
+      hubHost: new URL(config.publicUrl).host,
+    });
   });
 
   // The registry, for the cross-app switcher every app header renders. Only our
@@ -32,7 +45,7 @@ export async function appRoutes(app: FastifyInstance): Promise<void> {
       reply.header("vary", "Origin");
     }
     if (!req.session.userId) return reply.code(401).send({ ok: false, error: "Not signed in." });
-    const apps = (await appsWithHosts()).map((a) => ({
+    const apps = (await appsWithHosts(req.session.userId)).map((a) => ({
       slug: a.slug, name: a.name, subdomain: a.subdomain, icon: a.icon, url: `https://${a.host}/`,
     }));
     return { ok: true, hubUrl: config.publicUrl, apps };

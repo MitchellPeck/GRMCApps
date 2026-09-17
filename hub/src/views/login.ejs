@@ -12,6 +12,37 @@
       <div class="seal" style="margin:0 auto 14px">G</div>
       <div class="kicker">Grace Resurrection Methodist Church</div>
       <h1 style="font-size:26px;margin:6px 0 4px">GRMC Apps</h1>
+      <%
+        // The typeof guards matter: /auth/callback's failure path redirects
+        // here with ?error=auth_failed, and other paths render this view with
+        // no locals at all. Escaped interpolation is used below, so reflecting
+        // the attempted address back to the visitor is safe.
+        var err = typeof error !== "undefined" ? error : "";
+        var who = typeof email !== "undefined" && email ? email : "";
+      %>
+      <% if (err === "not_provisioned") { %>
+        <div class="alert alert-warn" style="text-align:left">
+          <strong>No account yet.</strong>
+          <%= who || "That address" %> isn't set up for GRMC Apps.
+          Ask an administrator to add it.
+        </div>
+      <% } else if (err === "disabled") { %>
+        <div class="alert alert-warn" style="text-align:left">
+          <strong>Account disabled.</strong>
+          Access for <%= who || "that address" %> has been turned off.
+          Ask an administrator.
+        </div>
+      <% } else if (err === "email_bound_elsewhere") { %>
+        <div class="alert alert-warn" style="text-align:left">
+          <strong>Address already in use.</strong>
+          <%= who || "That address" %> is linked to a different Google account.
+          Ask an administrator.
+        </div>
+      <% } else if (err === "auth_failed") { %>
+        <div class="alert alert-err" style="text-align:left">
+          <strong>Sign-in failed.</strong> Please try again.
+        </div>
+      <% } %>
       <p class="muted" style="font-size:13px;margin-bottom:18px">Sign in to continue.</p>
       <a class="btn btn-primary" href="/auth/login" style="text-decoration:none">Sign in with Google</a>
     </div>

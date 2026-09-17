@@ -14,6 +14,9 @@
       </div>
       <div class="hright">
         <span class="hlabel" id="me-label"><%= user.email %></span>
+        <% if (user.is_admin) { %>
+          <a class="btn-hdr" href="/admin/users" style="text-decoration:none">Users</a>
+        <% } %>
         <a class="btn-hdr" href="/auth/logout" style="text-decoration:none">Sign out</a>
       </div>
     </header>
@@ -23,6 +26,14 @@
         <h1>Your apps</h1>
         <p>Open any GRMC tool below.</p>
       </div>
+      <% if (apps.length === 0) { %>
+        <div class="card" style="padding:26px 28px">
+          <h3 style="font-size:17px;margin:0 0 6px">No apps yet</h3>
+          <p class="muted" style="font-size:13px;margin:0">
+            Your account doesn't have access to any apps yet. Ask an administrator to grant you access.
+          </p>
+        </div>
+      <% } %>
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px">
         <% apps.forEach(function (a) { %>
           <a class="appcard" href="https://<%= a.host %>/" style="text-decoration:none;display:flex;flex-direction:column;min-height:120px">
