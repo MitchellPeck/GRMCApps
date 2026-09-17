@@ -10,6 +10,7 @@ import { pool } from "./db";
 import { PgSessionStore } from "./session-store";
 import { authRoutes } from "./auth/routes";
 import { appRoutes } from "./apps/routes";
+import { ensureUserSchema } from "./users/provision";
 
 declare module "fastify" {
   interface Session {
@@ -53,8 +54,15 @@ app.register(appRoutes);
 
 app.get("/healthz", async () => ({ ok: true }));
 
-app
-  .listen({ host: "0.0.0.0", port: config.port })
+// Bring the user-management schema up to date before accepting any traffic. A
+// failure here (e.g. users_email_lower_idx rejected because two rows differ
+// only by case) must stop the hub rather than run with an ambiguous invite key
+// — the shared .catch below exits the process.
+ensureUserSchema(pool, {
+  info: (msg) => app.log.info(msg),
+  warn: (obj, msg) => app.log.warn(obj, msg),
+})
+  .then(() => app.listen({ host: "0.0.0.0", port: config.port }))
   .then(() => {
     app.log.info(`hub listening on ${config.port}`);
     // Periodically reclaim expired session rows (hourly).
