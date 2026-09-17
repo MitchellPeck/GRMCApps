@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GRMC Expenses</title>
+<link rel="stylesheet" href="/assets/grmc.css">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<header>
+  <div class="logo">
+    <div class="seal">G</div>
+    <div><h1>GRMC Expenses</h1><p>Expense request forms</p></div>
+  </div>
+  <div class="hright"><span class="hlabel" id="me-label">&hellip;</span></div>
+</header>
+
+<div class="layout">
+  <div class="tabs">
+    <button class="tab active" data-tab="new">New request</button>
+    <button class="tab" data-tab="history">History <span id="history-count" class="tcount"></span></button>
+    <button class="tab" data-tab="settings">Settings</button>
+  </div>
+
+  <!-- ── NEW REQUEST ───────────────────────────────────────────── -->
+  <div class="panel active" id="p-new">
+
+    <div class="card">
+      <div class="ct">Import from receipts</div>
+      <div id="import-msg"></div>
+      <p class="hint" style="margin:-6px 0 12px">
+        Add one or more receipt PDFs. Each is read separately for accuracy, and they run in
+        parallel. Receipts that are scans or images are handled too.
+      </p>
+      <div class="btn-row" style="margin-top:0">
+        <label class="btn btn-gold" style="cursor:pointer">
+          Add PDFs
+          <input type="file" id="f-receipts" accept="application/pdf" multiple hidden>
+        </label>
+        <button class="btn btn-primary" id="btn-extract" data-default="Extract &amp; fill form">Extract &amp; fill form</button>
+        <button class="btn" id="btn-add-item">Add item manually</button>
+      </div>
+      <div id="file-queue"></div>
+      <div id="items-wrap"></div>
+    </div>
+
+    <div class="card">
+      <div class="ct">Request details</div>
+      <div id="form-msg"></div>
+
+      <div class="grid2">
+        <div class="field"><label for="f_date">Date</label><input type="date" id="f_date"></div>
+        <div class="field"><label for="f_amount">Amount</label><input type="number" id="f_amount" step="0.01" min="0" placeholder="0.00"></div>
+      </div>
+
+      <div class="field"><label for="f_reason">Reason for purchase</label>
+        <textarea id="f_reason" placeholder="What was purchased and why"></textarea></div>
+
+      <div class="field"><label for="f_vendor">Vendor</label>
+        <input type="text" id="f_vendor" placeholder="Where this was purchased from"></div>
+
+      <div class="grid2">
+        <div class="field"><label for="f_chargeCode">Charge code</label>
+          <input type="text" id="f_chargeCode" list="chargeCodeList" placeholder="Select or type a code" autocomplete="off">
+          <datalist id="chargeCodeList"></datalist>
+        </div>
+        <div class="field" id="sub-field"><label for="f_subChargeCode">Sub-charge code</label>
+          <input type="text" id="f_subChargeCode" list="subChargeCodeList" placeholder="Select or type a code" autocomplete="off">
+          <datalist id="subChargeCodeList"></datalist>
+        </div>
+      </div>
+
+      <div class="grid2">
+        <div class="field"><label for="f_purchasedBy">Purchased by</label><input type="text" id="f_purchasedBy"></div>
+        <div class="field"><label for="f_card">Charged to which card</label><input type="text" id="f_card"></div>
+      </div>
+      <div class="grid2">
+        <div class="field"><label for="f_submittedBy">Submitted by</label><input type="text" id="f_submittedBy"></div>
+        <div class="field"><label for="f_approvedBy">Approved by</label><input type="text" id="f_approvedBy"></div>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn btn-primary" id="btn-pdf">Download PDF</button>
+        <button class="btn btn-gold" id="btn-save" data-default="Save to history">Save to history</button>
+        <button class="btn" id="btn-clear">Clear form</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── HISTORY ───────────────────────────────────────────────── -->
+  <div class="panel" id="p-history">
+    <div class="card">
+      <div class="ct">Saved requests</div>
+      <div id="history-msg"></div>
+      <div id="history-list"><div class="empty">Loading&hellip;</div></div>
+    </div>
+  </div>
+
+  <!-- ── SETTINGS ──────────────────────────────────────────────── -->
+  <div class="panel" id="p-settings">
+    <div class="card">
+      <div class="ct">Anthropic API key</div>
+      <div id="key-msg"></div>
+      <div class="field">
+        <label for="s_key">API key</label>
+        <input type="password" id="s_key" placeholder="sk-ant-&hellip;" autocomplete="off">
+        <div class="hint" id="key-hint">Used to read receipts. Leave blank to keep the stored key.</div>
+      </div>
+      <div class="btn-row"><button class="btn btn-primary" id="btn-save-key" data-default="Save key">Save key</button></div>
+    </div>
+
+    <div class="card">
+      <div class="ct">Form defaults</div>
+      <div id="defaults-msg"></div>
+      <div class="field"><label for="s_org">Organization name</label><input type="text" id="s_org"></div>
+      <div class="grid2">
+        <div class="field"><label for="s_purchasedBy">Purchased by</label><input type="text" id="s_purchasedBy"></div>
+        <div class="field"><label for="s_card">Charged to which card</label><input type="text" id="s_card"></div>
+      </div>
+      <div class="grid2">
+        <div class="field"><label for="s_submittedBy">Submitted by</label><input type="text" id="s_submittedBy"></div>
+        <div class="field"><label for="s_approvedBy">Approved by</label><input type="text" id="s_approvedBy"></div>
+      </div>
+      <div class="btn-row"><button class="btn btn-primary" id="btn-save-defaults" data-default="Save defaults">Save defaults</button></div>
+    </div>
+
+    <div class="card">
+      <div class="ct">Charge codes</div>
+      <div id="codes-msg"></div>
+      <div id="codes-list"><div class="empty">Loading&hellip;</div></div>
+      <div class="field" style="margin-top:16px">
+        <label>Add a code</label>
+        <div class="grid3">
+          <input type="text" id="c-code" placeholder="Code, e.g. 7080">
+          <input type="text" id="c-label" placeholder="Label, e.g. Livestream">
+          <select id="c-parent"></select>
+        </div>
+      </div>
+      <div class="btn-row"><button class="btn btn-gold" id="btn-add-code" data-default="Add code">Add code</button></div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="/assets/grmc-nav.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

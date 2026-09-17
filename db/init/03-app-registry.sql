@@ -15,5 +15,6 @@ INSERT INTO apps (slug, name, subdomain, icon) VALUES
   ('whoami',          'Who Am I',        'whoami',    '👤'),
   ('social-posts',    'Social Posts',    'social',    '📣'),
   ('approvals',       'Approvals',       'approvals', '✅'),
-  ('meeting-minutes', 'Meeting Minutes', 'minutes',   '📝')
+  ('meeting-minutes', 'Meeting Minutes', 'minutes',   '📝'),
+  ('expenses',        'Expenses',        'expenses',  '🧾')
 ON CONFLICT (slug) DO NOTHING;

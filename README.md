@@ -46,6 +46,7 @@ Cloudflare Tunnel, with no per-device certificate install.
 - Social Posts:  https://social.grmc.app
 - Approvals:     https://approvals.grmc.app
 - Meeting Minutes: https://minutes.grmc.app
+- Expenses:        https://expenses.grmc.app
 - Traefik dashboard (host-local only): http://localhost:8080
 
 ## Apps
@@ -101,6 +102,22 @@ between apps. Both are served to each app at `/assets/` (see *Shared UI* below).
   speakers, lower it if two people are being merged). Changing `WHISPER_MODEL`
   triggers a one-time model download into the `whisperdata` volume, so the
   first transcription after that change is slow.
+
+- **Expenses** (`expenses.grmc.app`) — build a church expense request form from
+  receipts. Upload one or more receipt PDFs and Claude reads each one
+  separately (in parallel) into line items, vendor, shipping, tax and
+  discounts, then writes a short reason and picks a charge code, validated
+  against the taxonomy so an invented code never lands on the form. Shipping,
+  tax and discounts are combined across receipts into one line each, in plain
+  arithmetic rather than by the model. **Receipts that are scans or images work
+  too:** each PDF is converted to markdown first, and any document whose
+  markdown carries no currency amount is re-sent to Claude as the PDF itself —
+  without that, a browser-printed invoice like Sweetwater's extracts nothing and
+  fails silently. Download the finished form as a PDF (page one is the form with
+  signature lines, page two the itemized list), and save it to a shared history
+  everyone with access can see. Charge codes, the org name, the four name
+  defaults and the Anthropic key all live in Settings; data is in the
+  `expenses` database.
 
 ## Users and access
 

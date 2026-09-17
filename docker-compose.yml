@@ -244,6 +244,33 @@ services:
 networks:
   hubnet:
 
+  expenses:
+    build:
+      context: .
+      dockerfile: apps/expenses/Dockerfile
+    image: ghcr.io/mitchellpeck/grmc-expenses:latest
+    restart: unless-stopped
+    environment:
+      EXPENSES_DATABASE_URL: "postgres://${EXPENSES_DB_USER}:${EXPENSES_DB_PASSWORD}@postgres:5432/${EXPENSES_DB_NAME}"
+      EXPENSES_DB_USER: "${EXPENSES_DB_USER}"
+      EXPENSES_DB_PASSWORD: "${EXPENSES_DB_PASSWORD}"
+      EXPENSES_DB_NAME: "${EXPENSES_DB_NAME}"
+      BASE_DOMAIN: "${BASE_DOMAIN}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
+    networks: [hubnet]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.expenses.rule=Host(`expenses.${BASE_DOMAIN}`)"
+      - "traefik.http.routers.expenses.entrypoints=websecure"
+      - "traefik.http.routers.expenses.tls=true"
+      - "traefik.http.routers.expenses.middlewares=hub-forward-auth@file"
+      - "traefik.http.services.expenses.loadbalancer.server.port=3000"
+      - "com.centurylinklabs.watchtower.enable=true"
+
 volumes:
   pgdata:
   letsencrypt:

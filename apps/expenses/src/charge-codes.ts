@@ -36,7 +36,11 @@ export function chargeCodeTree(rows: ChargeCodeRow[]): ChargeCodeNode[] {
 
 export async function listChargeCodes(pool: Pool): Promise<ChargeCodeRow[]> {
   const r = await pool.query<ChargeCodeRow>(
-    "SELECT id, code, label, parent_id, sort, active FROM charge_codes ORDER BY sort, code"
+    // ::int on both ids — node-pg returns bigserial as a string, which would
+    // make the parent/child comparison in chargeCodeTree depend on both sides
+    // happening to be strings.
+    `SELECT id::int AS id, code, label, parent_id::int AS parent_id, sort, active
+       FROM charge_codes ORDER BY sort, code`
   );
   return r.rows;
 }
@@ -50,7 +54,7 @@ export async function createChargeCode(
   const r = await pool.query(
     `INSERT INTO charge_codes (code, label, parent_id, sort)
      VALUES ($1, $2, $3, COALESCE((SELECT max(sort) + 1 FROM charge_codes WHERE parent_id IS NOT DISTINCT FROM $3), 0))
-     RETURNING id`,
+     RETURNING id::int AS id`,
     [code.trim(), label.trim(), parentId]
   );
   return r.rows[0].id;

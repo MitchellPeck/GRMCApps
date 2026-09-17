@@ -4,7 +4,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SRC="$ROOT/shared/ui"
-for d in apps/approvals apps/meeting-minutes apps/social-posts apps/whoami hub; do
+for d in apps/approvals apps/expenses apps/meeting-minutes apps/social-posts apps/whoami hub; do
   DEST="$ROOT/$d/src/public/assets"
   mkdir -p "$DEST/fonts"
   cp "$SRC/grmc.css" "$DEST/grmc.css"
