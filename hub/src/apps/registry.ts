@@ -24,7 +24,32 @@ export async function getAppBySubdomain(subdomain: string): Promise<AppRow | nul
   return r.rows[0] ?? null;
 }
 
-export async function getUser(userId: string): Promise<{ id: string; email: string; name: string | null } | null> {
-  const r = await pool.query("SELECT id, email, name FROM users WHERE id = $1", [userId]);
+export interface HubUser {
+  id: string;
+  email: string;
+  name: string | null;
+  is_admin: boolean;
+  active: boolean;
+}
+
+export async function getUser(userId: string): Promise<HubUser | null> {
+  const r = await pool.query<HubUser>(
+    "SELECT id, email, name, is_admin, active FROM users WHERE id = $1",
+    [userId]
+  );
   return r.rows[0] ?? null;
+}
+
+// Enabled AND granted. The dashboard and the cross-app switcher both use this,
+// so the switcher never advertises an app that would answer 403.
+export async function listAppsForUser(userId: string): Promise<AppRow[]> {
+  const r = await pool.query<AppRow>(
+    `SELECT a.id, a.slug, a.name, a.subdomain, a.icon, a.enabled
+       FROM apps a
+       JOIN user_app_access ua ON ua.app_id = a.id
+      WHERE ua.user_id = $1 AND a.enabled = true
+      ORDER BY a.name`,
+    [userId]
+  );
+  return r.rows;
 }
