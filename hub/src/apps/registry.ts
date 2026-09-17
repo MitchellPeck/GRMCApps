@@ -53,3 +53,27 @@ export async function listAppsForUser(userId: string): Promise<AppRow[]> {
   );
   return r.rows;
 }
+
+// Active users only — a disabled account must not appear in any picker.
+export async function listActiveUsers(): Promise<HubUser[]> {
+  const r = await pool.query<HubUser>(
+    `SELECT id, email, name, is_admin, active FROM users
+      WHERE active = true ORDER BY lower(COALESCE(name, email))`
+  );
+  return r.rows;
+}
+
+// Users the hub has granted a given app. Apps use this to populate pickers;
+// each app remains the authority on what those users may do inside it.
+export async function listUsersForApp(slug: string): Promise<HubUser[]> {
+  const r = await pool.query<HubUser>(
+    `SELECT u.id, u.email, u.name, u.is_admin, u.active
+       FROM users u
+       JOIN user_app_access ua ON ua.user_id = u.id
+       JOIN apps a ON a.id = ua.app_id
+      WHERE a.slug = $1 AND u.active = true
+      ORDER BY lower(COALESCE(u.name, u.email))`,
+    [slug]
+  );
+  return r.rows;
+}
