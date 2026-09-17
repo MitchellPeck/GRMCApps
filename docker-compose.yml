@@ -241,9 +241,6 @@ services:
       - whisperdata:/var/lib/whisper
     networks: [hubnet]
 
-networks:
-  hubnet:
-
   expenses:
     build:
       context: .
@@ -270,6 +267,9 @@ networks:
       - "traefik.http.routers.expenses.middlewares=hub-forward-auth@file"
       - "traefik.http.services.expenses.loadbalancer.server.port=3000"
       - "com.centurylinklabs.watchtower.enable=true"
+
+networks:
+  hubnet:
 
 volumes:
   pgdata:
