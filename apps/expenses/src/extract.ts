@@ -14,8 +14,14 @@ import {
   validateClassification,
 } from "./extract-logic";
 import { heuristicSummary } from "./format";
+import { withTimeout } from "./with-timeout";
 
 const MODEL = "claude-opus-5";
+
+// PDF-to-markdown conversion is local and fast — about a second for a typical
+// receipt. Anything beyond this is a hang, not slow work, and the document
+// takes the raw-PDF route instead, which is the more capable path anyway.
+const MARKDOWN_TIMEOUT_MS = 20_000;
 
 export const MISSING_KEY_ERROR = "No Anthropic API key. Go to Settings to add it.";
 
@@ -74,7 +80,11 @@ export interface ExtractionResult extends Combined, Classification {}
 async function toMarkdown(buffer: Buffer, name: string, log: ExtractLog): Promise<string> {
   const started = Date.now();
   try {
-    const md = await pdf2md(new Uint8Array(buffer));
+    const md = await withTimeout(pdf2md(new Uint8Array(buffer)), MARKDOWN_TIMEOUT_MS, "");
+    if (!md) {
+      log.warn({ doc: name, ms: since(started) }, "pdf2md timed out — using the PDF route");
+      return "";
+    }
     log.info({ doc: name, ms: since(started), chars: md.length }, "pdf2md converted");
     return md;
   } catch (err) {
