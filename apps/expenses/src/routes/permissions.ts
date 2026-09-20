@@ -43,7 +43,6 @@ export async function permissionRoutes(app: FastifyInstance): Promise<void> {
         name: body.name === undefined ? undefined : String(body.name),
         can_submit: body.can_submit as boolean | undefined,
         can_submit_for_others: body.can_submit_for_others as boolean | undefined,
-        can_edit_own: body.can_edit_own as boolean | undefined,
         can_approve: body.can_approve as boolean | undefined,
         can_manage: body.can_manage as boolean | undefined,
         is_admin: body.is_admin as boolean | undefined,

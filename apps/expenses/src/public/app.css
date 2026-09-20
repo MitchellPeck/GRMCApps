@@ -59,6 +59,7 @@
 .st-warn { color: var(--gold-d) }
 .st-rej  { color: var(--rej-fg) }
 .st-ok   { color: var(--ok-fg) }
+.st-void { color: var(--muted) }
 
 .tagp { display:inline-block; font-size:11px; color:var(--muted);
         background:var(--paper); border:1px solid var(--rule);

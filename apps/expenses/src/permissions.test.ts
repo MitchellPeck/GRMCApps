@@ -38,6 +38,15 @@ test("a missing row means no permissions at all", () => {
   assert.equal(NO_PERMISSIONS.admin, false);
 });
 
+test("edit-own is not a permission \u2014 submitting a request carries the right to revise it", () => {
+  // The can_edit_own column stays on app_users so no data is destroyed, but
+  // nothing reads it: the lifecycle guard decides own-edits from status alone.
+  assert.deepEqual(Object.keys(NO_PERMISSIONS).sort(), [
+    "admin", "approve", "defaultApprover", "manage", "submit", "submitForOthers",
+  ]);
+  assert.equal("editOwn" in effectivePermissions(row({ can_edit_own: true })), false);
+});
+
 test("plain approve does not imply manage", () => {
   const p = effectivePermissions(row({ can_approve: true }));
   assert.equal(p.approve, true);

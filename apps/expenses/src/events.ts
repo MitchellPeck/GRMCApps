@@ -13,7 +13,8 @@ export type EventType =
   | "actuals_completed"
   | "reapproval_required"
   | "reimbursed"
-  | "edited";
+  | "edited"
+  | "withdrawn";
 
 export interface RequestEvent {
   id: number;

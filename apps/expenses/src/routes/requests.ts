@@ -11,12 +11,16 @@ import {
   getRequest,
   listRequests,
   saveRequest,
+  setStatus,
   updateRequest,
 } from "../requests";
 import {
   PaymentMethod,
   RequestKind,
+  checkDelete,
   checkEdit,
+  describeEdit,
+  reapprovalAfterEdit,
   requiredFields,
   stageOf,
 } from "../lifecycle";
@@ -120,7 +124,7 @@ export async function requestRoutes(app: FastifyInstance): Promise<void> {
     if (!guard.ok) return reply.code(guard.status).send({ ok: false, error: guard.error });
 
     const b = (req.body ?? {}) as Record<string, unknown>;
-    await updateRequest(pool, Number(id), {
+    const patch: Partial<ExpenseRequestInput> = {
       requestDate: b.requestDate === undefined ? undefined : String(b.requestDate),
       amount: b.amount === undefined ? undefined : Number(b.amount),
       reason: b.reason === undefined ? undefined : String(b.reason),
@@ -131,21 +135,67 @@ export async function requestRoutes(app: FastifyInstance): Promise<void> {
       approverEmail: b.approverEmail === undefined ? undefined : String(b.approverEmail),
       approvedBy: b.approvedBy === undefined ? undefined : String(b.approvedBy),
       items: b.items === undefined ? undefined : parseItems(b.items),
-    });
-    await addEvent(pool, Number(id), "edited", identity, String(b.note ?? ""));
-    return { ok: true };
+    };
+
+    const before = found.request;
+    // The stored row and the patch spell the same fields differently, so the
+    // previous values are mapped into the patch's vocabulary to be compared.
+    const changes = describeEdit(
+      {
+        requestDate: before.request_date,
+        amount: before.amount,
+        reason: before.reason,
+        vendor: before.vendor,
+        chargeCode: before.charge_code,
+        subChargeCode: before.sub_charge_code,
+        cardId: before.card_id,
+        approverEmail: before.approver_email,
+        approvedBy: before.approved_by,
+        items: found.items,
+      },
+      patch as Record<string, unknown>
+    );
+
+    await updateRequest(pool, Number(id), patch);
+    await addEvent(pool, Number(id), "edited", identity, String(b.note ?? ""), { changes });
+
+    // Correcting an approved total is normally reconciliation — the card was
+    // charged $118.42, not the $115 that was approved. A correction past the
+    // overage tolerance is a different thing, and goes back to the approver.
+    const amount = patch.amount ?? before.amount;
+    const pct = Number(await getSetting(pool, "overage_tolerance_pct")) || 0.1;
+    const abs = Number(await getSetting(pool, "overage_tolerance_abs")) || 25;
+    if (reapprovalAfterEdit(before.status, before.amount, amount, pct, abs)) {
+      await setStatus(pool, Number(id), "pending");
+      await addEvent(pool, Number(id), "reapproval_required", identity, "", {
+        previousAmount: before.amount,
+        amount,
+      });
+      return { ok: true, reapprovalRequired: true };
+    }
+    return { ok: true, reapprovalRequired: false };
   });
 
-  app.delete(
-    "/api/requests/:id",
-    { preHandler: requirePermission("manage") },
-    async (req, reply) => {
-      const { id } = req.params as { id: string };
-      const ok = await deleteRequest(pool, Number(id));
-      if (!ok) return reply.code(404).send({ ok: false, error: "Request not found." });
-      return { ok: true };
+  // Deleting your own request is a right rather than a permission, but what it
+  // means depends on whether anything has been decided: see checkDelete.
+  app.delete("/api/requests/:id", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const found = await getRequest(pool, Number(id));
+    if (!found) return reply.code(404).send({ ok: false, error: "Request not found." });
+
+    const identity = getIdentity(req);
+    const perms = await loadPermissions(req);
+    const guard = checkDelete(found.request, identity.email, perms);
+    if (!guard.ok) return reply.code(guard.status).send({ ok: false, error: guard.error });
+
+    if (guard.mode === "withdraw") {
+      await setStatus(pool, Number(id), "withdrawn");
+      await addEvent(pool, Number(id), "withdrawn", identity);
+      return { ok: true, mode: "withdraw" };
     }
-  );
+    await deleteRequest(pool, Number(id));
+    return { ok: true, mode: "hard" };
+  });
 
   // Anyone who can see a request may comment on it; the thread and the audit
   // trail are the same table, so a conversation is part of the record.

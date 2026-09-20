@@ -16,7 +16,6 @@ export interface PermissionRow {
 export interface Permissions {
   submit: boolean;
   submitForOthers: boolean;
-  editOwn: boolean;
   approve: boolean;
   manage: boolean;
   admin: boolean;
@@ -26,7 +25,6 @@ export interface Permissions {
 export const NO_PERMISSIONS: Permissions = {
   submit: false,
   submitForOthers: false,
-  editOwn: false,
   approve: false,
   manage: false,
   admin: false,
@@ -41,7 +39,9 @@ export function effectivePermissions(row: PermissionRow | null): Permissions {
   return {
     submit: row.can_submit,
     submitForOthers: row.can_submit_for_others,
-    editOwn: row.can_edit_own,
+    // can_edit_own is deliberately not mapped: revising your own undecided
+    // request is a right that comes with submitting it, not a grant. The column
+    // stays on app_users so no data is destroyed, but nothing reads it.
     // manage implies approve — resolved here so no route has to check both.
     approve: row.can_approve || row.can_manage,
     manage: row.can_manage,

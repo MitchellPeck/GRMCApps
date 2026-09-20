@@ -93,6 +93,7 @@
   function can(p) { return !!me.permissions[p]; }
 
   function stageClass(stage) {
+    if (stage === "Withdrawn") return "st-void";
     if (stage === "Rejected") return "st-rej";
     if (stage === "Complete") return "st-ok";
     if (stage === "Changes requested") return "st-warn";
@@ -638,6 +639,209 @@
     return f;
   }
 
+  // ── editing ────────────────────────────────────────────────────────────────
+
+  // Mirrors checkEdit on the server, which is the gate that actually counts.
+  // The submitter revises their own request until it is decided; manage reaches
+  // one step further, into an approved request whose real charge came in
+  // different from the one that was approved.
+  function canEditRequest(r) {
+    var mine = r.submitted_by_email.toLowerCase() === me.email.toLowerCase();
+    if (can("manage")) {
+      return r.status === "pending" || r.status === "changes_requested" || r.status === "approved";
+    }
+    return mine && (r.status === "pending" || r.status === "changes_requested");
+  }
+
+  function editField(label, id, type, value, attrs) {
+    var f = el("div", "field");
+    var l = el("label", "", label);
+    l.setAttribute("for", id);
+    f.appendChild(l);
+    var i = el(type === "textarea" ? "textarea" : "input");
+    if (type !== "textarea") i.type = type;
+    i.id = id;
+    i.value = value === null || value === undefined ? "" : value;
+    Object.keys(attrs || {}).forEach(function (k) { i.setAttribute(k, attrs[k]); });
+    f.appendChild(i);
+    return f;
+  }
+
+  function editPanel(d) {
+    var r = d.request;
+    // Kept separate from the `items` global, which belongs to the new-request
+    // form — both can be alive at once.
+    var editItems = d.items.map(function (i) {
+      return { title: i.title, price: Number(i.price) || 0, autoType: i.autoType || null };
+    });
+
+    var wrap = el("div", "card");
+    wrap.id = "edit-panel";
+    wrap.style.display = "none";
+    wrap.appendChild(el("div", "ct", "Edit request"));
+    wrap.appendChild(el("div", "", "")).id = "edit-msg";
+
+    var g1 = el("div", "grid2");
+    g1.appendChild(editField("Date", "e_date", "date", r.request_date || ""));
+    g1.appendChild(editField("Amount", "e_amount", "number", Number(r.amount).toFixed(2),
+      { step: "0.01", min: "0" }));
+    wrap.appendChild(g1);
+
+    wrap.appendChild(editField("Vendor", "e_vendor", "text", r.vendor));
+
+    var g2 = el("div", "grid2");
+    g2.appendChild(editField("Charge code", "e_chargeCode", "text", r.charge_code,
+      { list: "chargeCodeList", autocomplete: "off" }));
+    g2.appendChild(editField("Sub-charge code", "e_subChargeCode", "text", r.sub_charge_code,
+      { list: "editSubCodeList", autocomplete: "off" }));
+    wrap.appendChild(g2);
+
+    // Its own datalist: the new-request form owns subChargeCodeList and the two
+    // panels can hold different parent codes at the same time.
+    var dl = el("datalist");
+    dl.id = "editSubCodeList";
+    wrap.appendChild(dl);
+    // Scoped to `wrap`, not the document: this runs once while the panel is
+    // still detached, before it has been appended.
+    function syncSubCodes() {
+      var typed = wrap.querySelector("#e_chargeCode").value.trim();
+      var parent = codeTree.find(function (c) { return c.code === typed; });
+      dl.innerHTML = ((parent && parent.subs) || []).map(function (sub) {
+        return '<option value="' + sub.code + '">' + sub.code + " — " + sub.label + "</option>";
+      }).join("");
+    }
+
+    wrap.appendChild(editField("Reason", "e_reason", "textarea", r.reason));
+
+    if (r.payment_method === "church_card") {
+      var cf = el("div", "field");
+      var cl = el("label", "", "Card");
+      cl.setAttribute("for", "e_card");
+      cf.appendChild(cl);
+      var sel = el("select");
+      sel.id = "e_card";
+      var opts = cards.slice();
+      // The card already on the request may not be one of the viewer's own.
+      if (r.card_id && !opts.some(function (c) { return c.id === r.card_id; })) {
+        opts.unshift({ id: r.card_id, nickname: r.card_label || r.card || "Current card", last4: "" });
+      }
+      sel.innerHTML = opts.map(function (c) {
+        var label = c.last4 ? c.nickname + " ••" + c.last4 : c.nickname;
+        return '<option value="' + c.id + '"' + (c.id === r.card_id ? " selected" : "") + ">" + label + "</option>";
+      }).join("");
+      cf.appendChild(sel);
+      wrap.appendChild(cf);
+    }
+
+    // Line items, so a corrected total and the items that justify it cannot
+    // drift apart on the record.
+    var ic = el("div", "field");
+    ic.appendChild(el("label", "", "Line items"));
+    var rows = el("div");
+    ic.appendChild(rows);
+    wrap.appendChild(ic);
+
+    function total() {
+      return editItems.reduce(function (sum, i) { return sum + (Number(i.price) || 0); }, 0);
+    }
+    function drawItems() {
+      rows.innerHTML = "";
+      editItems.forEach(function (it, idx) {
+        var row = el("div", "grid2");
+        var t = el("input");
+        t.type = "text"; t.value = it.title; t.placeholder = "Item";
+        t.addEventListener("input", function () { it.title = t.value; });
+        var priceWrap = el("div", "btn-row");
+        var pr = el("input");
+        pr.type = "number"; pr.step = "0.01"; pr.min = "0"; pr.value = Number(it.price).toFixed(2);
+        pr.addEventListener("input", function () {
+          it.price = parseFloat(pr.value) || 0;
+          $("e_amount").value = total().toFixed(2);
+        });
+        var rm = el("button", "btn", "Remove");
+        rm.addEventListener("click", function () {
+          editItems.splice(idx, 1);
+          drawItems();
+          $("e_amount").value = total().toFixed(2);
+        });
+        priceWrap.appendChild(pr);
+        priceWrap.appendChild(rm);
+        row.appendChild(t);
+        row.appendChild(priceWrap);
+        rows.appendChild(row);
+      });
+      if (!editItems.length) rows.appendChild(el("div", "empty", "No line items."));
+    }
+    drawItems();
+
+    var add = el("button", "btn", "Add item");
+    add.addEventListener("click", function () {
+      editItems.push({ title: "", price: 0, autoType: null });
+      drawItems();
+    });
+    wrap.appendChild(add);
+
+    wrap.appendChild(editField("Note (optional)", "e_note", "text", "",
+      { placeholder: "What changed, and why" }));
+
+    var save = el("button", "btn btn-primary", "Save changes");
+    save.id = "btn-edit-save";
+    save.setAttribute("data-default", "Save changes");
+    save.addEventListener("click", async function () {
+      busy("btn-edit-save", true, "Saving…");
+      var payload = {
+        requestDate: $("e_date").value,
+        amount: parseFloat($("e_amount").value) || 0,
+        vendor: $("e_vendor").value,
+        reason: $("e_reason").value,
+        chargeCode: $("e_chargeCode").value,
+        subChargeCode: $("e_subChargeCode").value,
+        items: editItems,
+        note: $("e_note").value
+      };
+      if ($("e_card") && $("e_card").value) payload.cardId = Number($("e_card").value);
+      try {
+        var out = await api("PATCH", "/api/requests/" + r.id, payload);
+        await openDetail(r.id);
+        msg("detail-msg", out.reapprovalRequired
+          ? "Saved. That is a large enough change that the request has gone back to the approver."
+          : "Saved.", "ok");
+      } catch (err) {
+        msg("edit-msg", err.message, "err");
+      } finally {
+        busy("btn-edit-save", false);
+      }
+    });
+    var srow = el("div", "btn-row");
+    srow.appendChild(save);
+    wrap.appendChild(srow);
+
+    syncSubCodes();
+    wrap.querySelector("#e_chargeCode").addEventListener("input", syncSubCodes);
+    return wrap;
+  }
+
+  var CHANGE_LABELS = {
+    requestDate: "Date", amount: "Amount", reason: "Reason", vendor: "Vendor",
+    chargeCode: "Charge code", subChargeCode: "Sub-code", cardId: "Card",
+    approverEmail: "Approver", approvedBy: "Approver name", items: "Line items"
+  };
+
+  function changeValue(field, value) {
+    if (value === null || value === "" || value === undefined) return "\u2014";
+    if (field === "amount") return fmtAmount(value);
+    if (field === "items") return (value.length || 0) + (value.length === 1 ? " item" : " items");
+    return String(value);
+  }
+
+  function describeChanges(changes) {
+    return Object.keys(changes).map(function (field) {
+      var c = changes[field];
+      return (CHANGE_LABELS[field] || field) + ": " +
+             changeValue(field, c.from) + " \u2192 " + changeValue(field, c.to);
+    });
+  }
+
   function renderDetail(d) {
     var r = d.request;
     var body = $("detail-body");
@@ -772,17 +976,45 @@
       ac.appendChild(rrow);
     }
 
-    if (can("manage")) {
-      var del = el("button", "btn", "Delete request");
-      del.addEventListener("click", async function () {
-        if (!confirm("Delete this request and its receipts? This cannot be undone.")) return;
-        try { await api("DELETE", "/api/requests/" + r.id); showTab("history"); loadHistory(); }
-        catch (err) { msg("detail-msg", err.message, "err"); }
+    var lastRow = el("div", "btn-row");
+
+    if (canEditRequest(r)) {
+      var editBtn = el("button", "btn", "Edit request");
+      editBtn.addEventListener("click", function () {
+        var panel = $("edit-panel");
+        var open = panel.style.display === "none";
+        panel.style.display = open ? "" : "none";
+        editBtn.textContent = open ? "Hide editor" : "Edit request";
+        if (open) panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
       });
-      var drow = el("div", "btn-row"); drow.appendChild(del);
-      ac.appendChild(drow);
+      lastRow.appendChild(editBtn);
     }
+
+    // Deleting your own request is always on offer; what it means depends on
+    // whether anything has been decided. checkDelete on the server decides for
+    // real — this only has to label the button honestly.
+    var canWithdraw = mine && r.status !== "withdrawn";
+    var undecided = r.status === "pending" || r.status === "changes_requested";
+    if (can("manage") || canWithdraw) {
+      var hard = can("manage") || undecided;
+      var del = el("button", "btn", hard ? "Delete request" : "Withdraw request");
+      del.addEventListener("click", async function () {
+        if (!confirm(hard
+          ? "Delete this request and its receipts? This cannot be undone."
+          : "Withdraw this request? It stays on the record and drops out of spend reports."
+        )) return;
+        try {
+          await api("DELETE", "/api/requests/" + r.id);
+          if (hard) { showTab("history"); loadHistory(); }
+          else { await openDetail(r.id); msg("detail-msg", "Withdrawn.", "ok"); }
+        } catch (err) { msg("detail-msg", err.message, "err"); }
+      });
+      lastRow.appendChild(del);
+    }
+    if (lastRow.childNodes.length) ac.appendChild(lastRow);
     body.appendChild(ac);
+
+    if (canEditRequest(r)) body.appendChild(editPanel(d));
 
     // Timeline + comments
     var tc = el("div", "card");
@@ -797,6 +1029,15 @@
       if (e.meta && e.meta.estimate !== undefined && e.meta.estimate !== null) {
         item.appendChild(el("div", "tl-comment",
           "Estimated " + fmtAmount(e.meta.estimate) + ", actual " + fmtAmount(e.meta.actual)));
+      }
+      if (e.meta && e.meta.previousAmount !== undefined && e.meta.previousAmount !== null) {
+        item.appendChild(el("div", "tl-comment",
+          "Approved at " + fmtAmount(e.meta.previousAmount) + ", corrected to " + fmtAmount(e.meta.amount)));
+      }
+      if (e.meta && e.meta.changes) {
+        describeChanges(e.meta.changes).forEach(function (line) {
+          item.appendChild(el("div", "tl-comment", line));
+        });
       }
       tl.appendChild(item);
     });
@@ -912,8 +1153,10 @@
         if (!merged.some(function (m) { return m.email.toLowerCase() === e; })) merged.push(byEmail[e]);
       });
 
+      // No "Edit own": revising your own undecided request comes with
+      // submitting it, so there is nothing left to grant.
       var flags = [["can_submit", "Submit"], ["can_submit_for_others", "For others"],
-                   ["can_edit_own", "Edit own"], ["can_approve", "Approve"],
+                   ["can_approve", "Approve"],
                    ["can_manage", "Manage"], ["is_admin", "Admin"]];
       list.innerHTML = "";
       var t = el("table", "umatrix");
