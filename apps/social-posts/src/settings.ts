@@ -24,6 +24,9 @@ export interface SettingsView {
   defaultPostTime: string;
   defaultTimezone: string;
   hasR2: boolean;
+  hasBuzzsprout: boolean;
+  buzzsproutPodcastId: string;
+  buzzsproutPodcastName: string;
 }
 
 // Mirrors Code.gs getSettings(): never returns full keys, only a hint + flags.
@@ -35,6 +38,8 @@ export async function getSettingsView(pool: Pool): Promise<SettingsView> {
   const mcUser = await getSetting(pool, "metricool_user_id");
   const r2Key = await getSetting(pool, "r2_access_key_id");
   const r2Bucket = await getSetting(pool, "r2_bucket");
+  const bzToken = await getSetting(pool, "buzzsprout_api_token");
+  const bzPodcast = await getSetting(pool, "buzzsprout_podcast_id");
   return {
     anthropicKeyHint: ak ? ak.substring(0, 10) + "..." : "",
     hasAnthropicKey: ak.length > 0,
@@ -46,5 +51,9 @@ export async function getSettingsView(pool: Pool): Promise<SettingsView> {
     defaultPostTime: (await getSetting(pool, "default_post_time")) || "09:00",
     defaultTimezone: (await getSetting(pool, "default_timezone")) || "America/New_York",
     hasR2: !!(r2Key && r2Bucket),
+    // The token itself never leaves the server, same as every other key here.
+    hasBuzzsprout: !!(bzToken && bzPodcast),
+    buzzsproutPodcastId: bzPodcast,
+    buzzsproutPodcastName: await getSetting(pool, "buzzsprout_podcast_name"),
   };
 }

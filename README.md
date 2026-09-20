@@ -57,18 +57,33 @@ between apps. Both are served to each app at `/assets/` (see *Shared UI* below).
 
 - **whoami** (`whoami.grmc.app`) — validation app echoing identity headers.
 - **Social Posts** (`social.grmc.app`) — drafts GRMC social posts with Claude,
-  pulls Grace Notes / blog from Mailchimp, manages multi-week post series. Two
-  runs: **Wednesday** (Grace Notes post + Saturday invite) and **Friday** (weekly
-  blog post). Configure the Anthropic + Mailchimp keys in its Settings tab
-  (stored in the `socialposts` database). Source ported from the Apps Script
-  tool in `docs/reference/social-posts/`. Send drafted posts straight to
-  Metricool as scheduled drafts on Facebook, Instagram and X (Settings →
-  Metricool: API token + User ID + Blog ID via 'Load brands'). A post with an
-  associated weekday opens the scheduler on that day of the current week. You
-  can attach an image by **uploading one** or by picking an **approved graphic
-  from the Approvals app** — either is published to a public Cloudflare R2 URL
-  so Metricool can fetch it (Settings → Image hosting). Requires the Metricool
+  pulls Grace Notes / blog from Mailchimp, manages multi-week post series. Three
+  runs: **Wednesday** (Grace Notes post + Saturday invite), **Friday** (weekly
+  blog post) and **Podcast** (below). Configure the Anthropic + Mailchimp keys
+  in its Settings tab (stored in the `socialposts` database). Source ported
+  from the Apps Script tool in `docs/reference/social-posts/`. Send drafted
+  posts straight to Metricool as scheduled drafts on Facebook, Instagram and X
+  (Settings → Metricool: API token + User ID + Blog ID via 'Load brands'). A
+  post with an associated weekday opens the scheduler on that day of the
+  current week, and a podcast post on the episode's own date. You can attach an
+  image by **uploading one** or by picking an **approved graphic from the
+  Approvals app** — either is published to a public Cloudflare R2 URL so
+  Metricool can fetch it (Settings → Image hosting). Requires the Metricool
   Advanced plan.
+
+  **Podcast run.** Promote an episode straight from Buzzsprout (Settings →
+  Podcast: paste an API token from Buzzsprout's *Profile → API*, then **Load
+  podcasts** and pick the show). The Podcast tab lists recent episodes newest
+  first and fills in the title, show notes and listen link — all editable, and
+  all paste-able by hand if you would rather not pull from Buzzsprout at all.
+  Episodes that **have not dropped yet** are listed too and clearly marked, so
+  you can line posts up ahead of a release; Claude is told not to announce an
+  unreleased episode as though it is already out. Tick the **angles** you want
+  for that episode — announcement, the question it wrestles with, a pull quote,
+  a guest or topic spotlight, an invite to Sunday — and each one is drafted as
+  its own post. Podcast posts are scheduled from the **episode's publish date**
+  rather than the current week, so an episode landing three weeks out gets posts
+  three weeks out.
 - **Approvals** (`approvals.grmc.app`) — request and grant sign-off on graphics.
   Submitters upload an image and pick an approver from a roster (managed in
   Settings); the approver approves, rejects, or requests changes. Change

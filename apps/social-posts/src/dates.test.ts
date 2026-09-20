@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { formatMonthDayYear, isWeekday, suggestDate, suggestDateTime, todayInTimezone } from "./dates";
+import { addDays, draftScheduleDate, formatMonthDayYear, isWeekday, localDateIn, suggestDate, suggestDateTime, todayInTimezone } from "./dates";
 
 test("a weekday resolves to that day inside the reference week", () => {
   // 2026-06-10 is a Wednesday; its week runs Sun Jun 7 - Sat Jun 13.
@@ -44,4 +44,24 @@ test("formatMonthDayYear keeps bare dates from sliding a day backwards", () => {
   assert.equal(formatMonthDayYear("2026-07-31T14:02:00+00:00", "America/New_York"), "Jul 31, 2026");
   assert.equal(formatMonthDayYear(""), "");
   assert.equal(formatMonthDayYear("not a date"), "");
+});
+
+test("addDays rolls over month boundaries", () => {
+  assert.equal(addDays("2026-09-27", 4), "2026-10-01");
+  assert.equal(addDays("2026-09-27", 0), "2026-09-27");
+  assert.equal(addDays("", 3), "");
+});
+
+test("localDateIn reads an instant as the church's calendar date, not UTC's", () => {
+  // 01:30 UTC on the 28th is still the evening of the 27th in New York.
+  assert.equal(localDateIn("America/New_York", new Date("2026-09-28T01:30:00Z")), "2026-09-27");
+  assert.equal(localDateIn("America/New_York", new Date("2026-09-27T15:00:00Z")), "2026-09-27");
+});
+
+test("draftScheduleDate falls back to the stored post date for non-weekday keys", () => {
+  const ref = "2026-09-20";
+  assert.equal(draftScheduleDate("wednesday", "", ref), "2026-09-23", "weekday keys still resolve in the current week");
+  assert.equal(draftScheduleDate("announcement", "2026-09-27", ref), "2026-09-27", "a podcast draft keeps the episode's date");
+  assert.equal(draftScheduleDate("announcement", "", ref), "", "nothing to go on, nothing suggested");
+  assert.equal(draftScheduleDate("announcement", "not-a-date", ref), "", "junk is not a date");
 });

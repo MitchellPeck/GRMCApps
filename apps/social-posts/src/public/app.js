@@ -39,6 +39,7 @@ function switchTab(id) {
   var p=document.getElementById('p-'+id);
   if(p) p.classList.add('active');
   if(id==='series') loadSeries();
+  if(id==='pod') loadAngles();
   if(id==='drafts') loadDrafts();
   if(id==='settings') checkAuthStatus();
 }
@@ -96,6 +97,13 @@ function checkAuthStatus() {
     var mcBlog=document.getElementById('s-mc-blog'); if(mcBlog && s.metricoolBlogId) mcBlog.value=s.metricoolBlogId;
     var mcTime=document.getElementById('s-mc-time'); if(mcTime && s.defaultPostTime) mcTime.value=s.defaultPostTime;
     var mcTz=document.getElementById('s-mc-tz'); if(mcTz && s.defaultTimezone) mcTz.value=s.defaultTimezone;
+    // Buzzsprout
+    var bzHint=document.getElementById('s-bz-hint');
+    if(bzHint) bzHint.textContent = s.hasBuzzsprout
+      ? 'Connected' + (s.buzzsproutPodcastName ? ' to ' + s.buzzsproutPodcastName : '') + '.'
+      : 'No token saved.';
+    var bzPod=document.getElementById('s-bz-podcast'); if(bzPod && s.buzzsproutPodcastId) bzPod.value=s.buzzsproutPodcastId;
+    if(s.buzzsproutPodcastName) window._bzPodcastName=s.buzzsproutPodcastName;
   }).catch(function(e){ console.error(e); });
 }
 
@@ -105,11 +113,13 @@ function saveSettings() {
     metricoolToken:v('s-mc-token'), metricoolUserId:v('s-mc-user'), metricoolBlogId:v('s-mc-blog'),
     defaultPostTime:v('s-mc-time'), defaultTimezone:v('s-mc-tz'),
     r2AccountId:v('s-r2-account'), r2AccessKeyId:v('s-r2-key'), r2SecretAccessKey:v('s-r2-secret'),
-    r2Bucket:v('s-r2-bucket'), r2PublicBaseUrl:v('s-r2-baseurl') }})
+    r2Bucket:v('s-r2-bucket'), r2PublicBaseUrl:v('s-r2-baseurl'),
+    buzzsproutToken:v('s-bz-token'), buzzsproutPodcastId:v('s-bz-podcast'),
+    buzzsproutPodcastName:window._bzPodcastName||'' }})
     .then(function(res){
       setBtn('btn-settings', false, 'Save settings');
       var el=document.getElementById('results-settings');
-      if(res.ok){ el.innerHTML='<div class="alert alert-ok">Settings saved.</div>'; document.getElementById('s-ak').value=''; document.getElementById('s-mk').value=''; checkAuthStatus(); }
+      if(res.ok){ el.innerHTML='<div class="alert alert-ok">Settings saved.</div>'; document.getElementById('s-ak').value=''; document.getElementById('s-mk').value=''; document.getElementById('s-bz-token').value=''; checkAuthStatus(); }
       else el.innerHTML='<div class="alert alert-err">'+esc(res.error)+'</div>';
     })
     .catch(function(e){ setBtn('btn-settings',false,'Save settings'); document.getElementById('results-settings').innerHTML='<div class="alert alert-err">'+esc(e.message)+'</div>'; });
@@ -232,6 +242,122 @@ function clearFriday() {
   document.getElementById('blog-preview').style.display='none';
   document.getElementById('blog-manual').style.display='block';
   document.getElementById('results-fri').innerHTML='';
+}
+
+// ── Podcast ───────────────────────────────────────────────────────────────────
+var _podEpisodes = {};
+var _podAngles = [];
+
+// The angle list is served by the app so the checkboxes and the prompt can
+// never drift apart.
+function loadAngles() {
+  if (_podAngles.length) return;
+  api('/api/podcast/angles').then(function(res){
+    if(!res.ok) return;
+    _podAngles = res.angles || [];
+    document.getElementById('pod-angles').innerHTML = _podAngles.map(function(a){
+      var checked = a.key === 'announcement' ? ' checked' : '';
+      return '<label class="check"><input type="checkbox" class="pod-angle" value="'+esc(a.key)+'"'+checked+'> '+esc(a.label)+'</label>';
+    }).join('');
+  }).catch(function(e){
+    document.getElementById('pod-angles').innerHTML='<div class="alert alert-err">'+esc(e.message)+'</div>';
+  });
+}
+
+function episodeAlertClass(ep) { return 'alert ' + (ep.isPublished ? 'alert-ok' : 'alert-warn'); }
+
+function episodeAlertBody(ep, lead) {
+  return (ep.isPublished ? '' : '<strong>NOT YET PUBLIC</strong> &mdash; ')
+    + (lead ? esc(lead) + ' ' : '')
+    + '<strong>' + esc(ep.title || '(untitled episode)') + '</strong>'
+    + (ep.dateLine ? '<br>' + esc(ep.dateLine) : '')
+    + (ep.durationLabel ? ' &middot; ' + esc(ep.durationLabel) : '');
+}
+
+function episodeAlert(ep, lead) {
+  return '<div class="'+episodeAlertClass(ep)+'">'+episodeAlertBody(ep, lead)+'</div>';
+}
+
+function loadEpisodes() {
+  var btn=document.getElementById('btn-load-eps');
+  btn.disabled=true; btn.textContent='Loading...';
+  api('/api/podcast/episodes').then(function(res){
+    btn.disabled=false; btn.textContent='Load episodes';
+    if(!res.ok){ alert('Error: '+res.error); return; }
+    _podEpisodes = {};
+    var sel=document.getElementById('pod-episode');
+    var opts='<option value="">&mdash; choose an episode &mdash;</option>';
+    (res.episodes||[]).forEach(function(ep){
+      _podEpisodes[String(ep.id)] = ep;
+      var mark = ep.isPrivate ? ' (private)' : (ep.isPublished ? '' : ' (not yet public)');
+      opts += '<option value="'+esc(String(ep.id))+'">'+esc(ep.label)+mark+'</option>';
+    });
+    sel.innerHTML=opts;
+    if(!(res.episodes||[]).length) alert('No episodes came back from Buzzsprout.');
+  }).catch(function(e){
+    btn.disabled=false; btn.textContent='Load episodes';
+    alert('Error: '+e.message);
+  });
+}
+
+function selectEpisode() {
+  var id=document.getElementById('pod-episode').value;
+  var badge=document.getElementById('pod-badge');
+  var ep=_podEpisodes[id];
+  if(!ep){ badge.style.display='none'; return; }
+  badge.style.display='block';
+  badge.className = episodeAlertClass(ep);
+  badge.innerHTML = episodeAlertBody(ep, '');
+  document.getElementById('pod-title').value = ep.title || '';
+  document.getElementById('pod-content').value = ep.description || '';
+  document.getElementById('pod-url').value = ep.listenUrl || '';
+  document.getElementById('pod-date').value = ep.publishDate || '';
+}
+
+function pickedAngles() {
+  return Array.prototype.slice.call(document.querySelectorAll('.pod-angle:checked')).map(function(c){ return c.value; });
+}
+
+function runPodcast() {
+  var angles = pickedAngles();
+  var el=document.getElementById('results-pod');
+  if(!angles.length){ el.innerHTML='<div class="alert alert-warn">Pick at least one angle to draft.</div>'; return; }
+  setBtn('btn-pod', true, 'Drafting...');
+  el.innerHTML='';
+  api('/api/draft/podcast', {method:'POST', body:{
+    episodeId: document.getElementById('pod-episode').value,
+    title: v('pod-title'), content: v('pod-content'),
+    listenUrl: v('pod-url'), publishDate: v('pod-date'),
+    angles: angles
+  }}).then(function(res){
+    setBtn('btn-pod',false);
+    if(!res.ok){ el.innerHTML='<div class="alert alert-err">'+esc(res.error)+'</div>'; return; }
+    var html='';
+    if(res.buzzsproutFetched && res.episode){
+      html += episodeAlert(res.episode, 'Episode:');
+    } else if(res.buzzsproutError){
+      html += '<div class="alert alert-warn">Buzzsprout unavailable: '+esc(res.buzzsproutError)+'. Drafted from what was on the form.</div>';
+    }
+    var dates=res.dates||{};
+    angles.forEach(function(key){
+      var text=res.posts[key];
+      if(!text) return;
+      var angle=_podAngles.filter(function(a){ return a.key===key; })[0];
+      html += postCard(angle ? angle.label : key, 'lbl-pod', text, 'pp-'+key,
+        {date:dates[key], sourceType:'podcast', sourceRef:key});
+    });
+    el.innerHTML=html;
+  }).catch(function(e){
+    setBtn('btn-pod',false);
+    el.innerHTML='<div class="alert alert-err">'+esc(e.message)+'</div>';
+  });
+}
+
+function clearPodcast() {
+  ['pod-title','pod-content','pod-url','pod-date'].forEach(function(id){ var el=document.getElementById(id); if(el) el.value=''; });
+  var sel=document.getElementById('pod-episode'); if(sel) sel.value='';
+  var badge=document.getElementById('pod-badge'); if(badge) badge.style.display='none';
+  document.getElementById('results-pod').innerHTML='';
 }
 
 // ── Series ────────────────────────────────────────────────────────────────────
@@ -599,6 +725,27 @@ function loadBrands(){
     sel.innerHTML = (res.brands||[]).map(function(b){ return '<option value="'+esc(b.id)+'">'+esc(b.label)+'</option>'; }).join('');
     if(res.brands && res.brands.length){ document.getElementById('s-mc-blog').value = res.brands[0].id; }
   }).catch(function(e){ if(btn){btn.disabled=false;btn.textContent='Load brands';} alert('Error: '+e.message); });
+}
+
+function pickPodcast(sel){
+  if(!sel.value) return;
+  document.getElementById('s-bz-podcast').value = sel.value;
+  var opt = sel.options[sel.selectedIndex];
+  window._bzPodcastName = opt ? opt.textContent : '';
+}
+
+function loadPodcasts(){
+  var btn=document.getElementById('btn-load-podcasts'); if(btn){btn.disabled=true;btn.textContent='Loading...';}
+  api('/api/podcast/podcasts').then(function(res){
+    if(btn){btn.disabled=false;btn.textContent='Load podcasts';}
+    var sel=document.getElementById('bz-podcasts'); if(!sel) return;
+    if(!res.ok){ alert('Error: '+res.error); return; }
+    sel.innerHTML=(res.podcasts||[]).map(function(p){ return '<option value="'+esc(p.id)+'">'+esc(p.title)+'</option>'; }).join('');
+    if(res.podcasts && res.podcasts.length){
+      document.getElementById('s-bz-podcast').value=res.podcasts[0].id;
+      window._bzPodcastName=res.podcasts[0].title;
+    }
+  }).catch(function(e){ if(btn){btn.disabled=false;btn.textContent='Load podcasts';} alert('Error: '+e.message); });
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────

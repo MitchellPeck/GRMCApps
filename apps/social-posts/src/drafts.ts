@@ -1,5 +1,5 @@
 import { Pool } from "pg";
-import { isWeekday, suggestDate } from "./dates";
+import { draftScheduleDate } from "./dates";
 import { referenceDate } from "./schedule";
 
 export async function savePostDrafts(
@@ -16,7 +16,7 @@ export async function savePostDrafts(
 
 export interface DraftRow {
   dateDrafted: string; run: string; postDate: string; key: string; text: string; status: string; createdBy: string;
-  /** This draft's weekday resolved to a date in the current week, for scheduling. */
+  /** A weekday key resolved inside the current week, or the draft's own date. */
   scheduleDate: string;
 }
 export async function getRecentDrafts(pool: Pool): Promise<{ ok: true; rows: DraftRow[] } | { ok: false; error: string }> {
@@ -26,7 +26,7 @@ export async function getRecentDrafts(pool: Pool): Promise<{ ok: true; rows: Dra
     const rows = r.rows.map((row) => ({
       dateDrafted: String(row.created_at), run: row.run, postDate: row.post_date,
       key: row.key, text: row.text, status: row.status, createdBy: row.created_by,
-      scheduleDate: isWeekday(row.key) ? suggestDate({ kind: "weekday", weekday: row.key }, ref) : "",
+      scheduleDate: draftScheduleDate(row.key, row.post_date, ref),
     }));
     return { ok: true, rows };
   } catch (e) { return { ok: false, error: (e as Error).message }; }

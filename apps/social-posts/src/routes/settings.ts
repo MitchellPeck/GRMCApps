@@ -16,6 +16,9 @@ interface SaveBody {
   r2SecretAccessKey?: string;
   r2Bucket?: string;
   r2PublicBaseUrl?: string;
+  buzzsproutToken?: string;
+  buzzsproutPodcastId?: string;
+  buzzsproutPodcastName?: string;
 }
 
 export async function settingsRoutes(app: FastifyInstance): Promise<void> {
@@ -56,6 +59,12 @@ export async function settingsRoutes(app: FastifyInstance): Promise<void> {
         await setSetting(pool, "r2_bucket", s.r2Bucket.trim());
       if (s.r2PublicBaseUrl && s.r2PublicBaseUrl.trim())
         await setSetting(pool, "r2_public_base_url", s.r2PublicBaseUrl.trim());
+      if (s.buzzsproutToken && s.buzzsproutToken.trim())
+        await setSetting(pool, "buzzsprout_api_token", s.buzzsproutToken.trim());
+      if (s.buzzsproutPodcastId && s.buzzsproutPodcastId.trim())
+        await setSetting(pool, "buzzsprout_podcast_id", s.buzzsproutPodcastId.trim());
+      if (s.buzzsproutPodcastName && s.buzzsproutPodcastName.trim())
+        await setSetting(pool, "buzzsprout_podcast_name", s.buzzsproutPodcastName.trim());
       return { ok: true };
     } catch (e) {
       return { ok: false, error: (e as Error).message };

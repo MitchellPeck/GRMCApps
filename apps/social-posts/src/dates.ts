@@ -23,12 +23,16 @@ function noonUTC(iso: string): Date {
 // "Today" as the church experiences it, not as the container's UTC clock does.
 // en-CA formats as YYYY-MM-DD, which is exactly the shape the rest of this
 // module (and every <input type="date">) expects.
-export function todayInTimezone(tz: string, now: Date = new Date()): string {
+export function localDateIn(tz: string, instant: Date): string {
   try {
-    return new Intl.DateTimeFormat("en-CA", { timeZone: tz || DEFAULT_TZ, year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
+    return new Intl.DateTimeFormat("en-CA", { timeZone: tz || DEFAULT_TZ, year: "numeric", month: "2-digit", day: "2-digit" }).format(instant);
   } catch {
-    return isoOf(now);
+    return isoOf(instant);
   }
+}
+
+export function todayInTimezone(tz: string, now: Date = new Date()): string {
+  return localDateIn(tz, now);
 }
 
 export type DateSource =
@@ -77,4 +81,19 @@ export function formatMonthDayYear(value: string, tz: string = DEFAULT_TZ): stri
   } catch {
     return `${MONTH_NAMES[d.getUTCMonth()]} ${d.getUTCDate()}, ${d.getUTCFullYear()}`;
   }
+}
+
+export function addDays(iso: string, days: number): string {
+  if (!iso) return "";
+  const d = noonUTC(iso);
+  if (isNaN(d.getTime())) return "";
+  return isoOf(new Date(d.getTime() + days * 86400000));
+}
+
+// A draft's suggested date. Weekday keys ("wednesday") mean that day in the
+// current week; every other key — a podcast angle, say — carries its own date
+// on the draft row, which is the episode's, and that is what we honour.
+export function draftScheduleDate(key: string, postDate: string, refDate: string): string {
+  if (isWeekday(key)) return suggestDate({ kind: "weekday", weekday: key }, refDate);
+  return /^\d{4}-\d{2}-\d{2}$/.test(postDate || "") ? postDate : "";
 }

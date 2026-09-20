@@ -25,6 +25,7 @@
   <div class="tabs">
     <button class="tab active" data-tab="wed">Wednesday run</button>
     <button class="tab" data-tab="fri">Friday run</button>
+    <button class="tab" data-tab="pod">Podcast</button>
     <button class="tab" data-tab="series">Series</button>
     <button class="tab" data-tab="drafts">Drafts</button>
     <button class="tab" data-tab="settings">Settings</button>
@@ -88,6 +89,39 @@
       <button class="btn btn-secondary" onclick="clearFriday()">Clear</button>
     </div>
     <div id="results-fri" class="results"></div>
+  </div>
+
+  <!-- PODCAST -->
+  <div id="p-pod" class="panel">
+    <div class="card">
+      <div class="ct">Episode</div>
+      <div class="row2">
+        <div class="field"><label>Episode</label>
+          <select id="pod-episode" onchange="selectEpisode()"><option value="">&mdash; load episodes to choose one &mdash;</option></select>
+          <div class="hint">Newest first. Episodes that have not dropped yet are included and marked.</div>
+        </div>
+        <div class="field" style="display:flex;align-items:flex-end;padding-bottom:1px">
+          <button class="btn btn-secondary" style="width:100%" id="btn-load-eps" onclick="loadEpisodes()">Load episodes</button>
+        </div>
+      </div>
+      <div id="pod-badge" class="alert alert-ok" style="display:none;margin-top:10px"></div>
+      <div class="field" style="margin-top:10px"><label>Episode title</label><input type="text" id="pod-title" placeholder="e.g. Too small or too big?"></div>
+      <div class="field"><label>Episode description (auto-filled, edit if needed)</label><textarea id="pod-content" style="min-height:110px" placeholder="Or paste the show notes here"></textarea></div>
+      <div class="row2">
+        <div class="field"><label>Listen URL</label><input type="text" id="pod-url" placeholder="https://www.buzzsprout.com/..."></div>
+        <div class="field"><label>Publish date</label><input type="date" id="pod-date"><div class="hint">Posts are scheduled from this date.</div></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="ct">Angles</div>
+      <div class="hint" style="margin-bottom:8px">Pick what you want drafted for this episode.</div>
+      <div id="pod-angles"><div class="hint" style="padding:4px 0">Loading angles...</div></div>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-primary" id="btn-pod" data-default="Draft podcast posts" onclick="runPodcast()">Draft podcast posts</button>
+      <button class="btn btn-secondary" onclick="clearPodcast()">Clear</button>
+    </div>
+    <div id="results-pod" class="results"></div>
   </div>
 
   <!-- SERIES -->
@@ -155,6 +189,18 @@
       <div class="row2">
         <div class="field"><label>Mailchimp API key</label><input type="text" id="s-mk" placeholder="xxxxxxxx-us21" autocomplete="off"></div>
         <div class="field"><label>Server prefix</label><input type="text" id="s-ms" placeholder="e.g. us21"><div class="hint">From your Mailchimp API URL</div></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="ct">Podcast (Buzzsprout)</div>
+      <div class="field"><label>Buzzsprout API token</label><input type="text" id="s-bz-token" placeholder="From Profile &rarr; API in Buzzsprout" autocomplete="off"><div class="hint" id="s-bz-hint">Loading...</div></div>
+      <div class="field"><label>Podcast</label>
+        <div style="display:flex;gap:8px;align-items:flex-start">
+          <input type="text" id="s-bz-podcast" placeholder="Podcast ID" style="flex:1">
+          <button class="btn btn-secondary" id="btn-load-podcasts" onclick="loadPodcasts()" style="white-space:nowrap;padding:8px 12px;font-size:12px">Load podcasts</button>
+        </div>
+        <select id="bz-podcasts" style="margin-top:6px" onchange="pickPodcast(this)"><option value="">&mdash; select a podcast &mdash;</option></select>
+        <div class="hint">Save the token first, then load the podcasts on the account.</div>
       </div>
     </div>
     <div class="card">
