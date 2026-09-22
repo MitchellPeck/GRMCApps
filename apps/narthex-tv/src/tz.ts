@@ -111,3 +111,37 @@ export function parseHM(value: string): number | null {
   if (h < 0 || h > 23 || mi < 0 || mi > 59) return null;
   return h * 60 + mi;
 }
+
+export interface Span {
+  start: Date;
+  end: Date;
+}
+
+/**
+ * A wall-clock time range anchored to one local calendar day, as instants.
+ *
+ * `end <= start` means the range runs past midnight (22:00-02:00), and
+ * `end === start` means a full 24 hours. Both the recurring schedule and the
+ * operating-hours grid are the same shape, so both go through here.
+ */
+export function daySpan(
+  dateKey: string,
+  startTime: string,
+  endTime: string,
+  timeZone: string
+): Span | null {
+  const startMin = parseHM(startTime);
+  const endMin = parseHM(endTime);
+  if (startMin === null || endMin === null) return null;
+
+  const from = parseDateKey(dateKey);
+  if (!from) return null;
+  const endKey = endMin <= startMin ? addDays(dateKey, 1) : dateKey;
+  const to = parseDateKey(endKey);
+  if (!to) return null;
+
+  return {
+    start: zonedTimeToUtc(from.year, from.month, from.day, Math.floor(startMin / 60), startMin % 60, timeZone),
+    end: zonedTimeToUtc(to.year, to.month, to.day, Math.floor(endMin / 60), endMin % 60, timeZone),
+  };
+}

@@ -147,6 +147,12 @@ export interface PlanDisplay {
   loopSingleVideo: boolean;
 }
 
+export interface PlanPower {
+  /** false = show nothing at all: the narthex is outside its opening hours. */
+  on: boolean;
+  changesAt: string | null;
+}
+
 export interface Plan {
   revision: string;
   /** Changes whenever a different schedule entry takes the screen. */
@@ -159,6 +165,7 @@ export interface Plan {
   endsAt: string | null;
   changesAt: string | null;
   display: PlanDisplay;
+  power: PlanPower;
   frames: Frame[];
 }
 
@@ -170,6 +177,9 @@ export function planRevision(plan: Omit<Plan, "revision" | "serverTime" | "chang
     playlistId: plan.playlistId,
     entryId: plan.entryId,
     display: plan.display,
+    // `on` only: `changesAt` is a moving timestamp and would churn the
+    // revision on every poll.
+    power: plan.power.on,
     frames: plan.frames,
   });
   return createHash("sha1").update(material).digest("hex").slice(0, 16);

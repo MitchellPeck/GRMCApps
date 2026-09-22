@@ -391,6 +391,72 @@
     </div>
 
     <div class="card" data-needs="admin" hidden>
+      <div class="ct">When the screen is on</div>
+      <div class="field">
+        <label for="hours-mode">Operating hours</label>
+        <select id="hours-mode">
+          <option value="always">Always on &mdash; the screen never goes dark</option>
+          <option value="scheduled">Only during the hours below</option>
+        </select>
+        <div class="hint">
+          Outside these hours the screen shows nothing at all &mdash; true black, with
+          the video torn down rather than hidden. That alone costs nothing and works
+          with any television. Actually cutting the panel's power is the card below.
+        </div>
+      </div>
+
+      <div id="hours-state"></div>
+
+      <div id="hours-box" hidden>
+        <div id="hours-list" class="empty">No hours set yet.</div>
+        <div class="row3">
+          <div class="field">
+            <label for="hr-day">Day</label>
+            <select id="hr-day"></select>
+          </div>
+          <div class="field">
+            <label for="hr-from">From</label>
+            <input type="time" id="hr-from" value="08:00">
+          </div>
+          <div class="field">
+            <label for="hr-to">Until</label>
+            <input type="time" id="hr-to" value="17:00">
+          </div>
+        </div>
+        <div class="btn-row">
+          <button class="btn btn-secondary" id="hr-add" data-default="Add these hours">Add these hours</button>
+          <button class="btn btn-secondary" id="hr-seed" data-default="Fill in a typical week">Fill in a typical week</button>
+        </div>
+        <div class="hint">
+          Times are wall-clock in <strong id="hours-tz">the app timezone</strong> and follow
+          daylight saving. Add more than one row for a day to cover a morning and an
+          evening; rows that touch or overlap are treated as one stretch, so the
+          screen never blinks off between them. An <em>Until</em> earlier than
+          <em>From</em> means the window runs past midnight.
+        </div>
+      </div>
+    </div>
+
+    <div class="card" data-needs="admin" hidden>
+      <div class="ct">Turning the TV on and off</div>
+      <p class="muted" style="font-size:13px;margin:0 0 14px">
+        Optional, and separate from blanking the picture. At each boundary above,
+        the server can send one request on your network &mdash; to the television, a
+        smart plug, or a hub. Leave both at <em>Nothing</em> and the screen simply
+        goes black on time, which is the safe default.
+      </p>
+      <div id="power-on" class="power-editor"></div>
+      <div id="power-off" class="power-editor"></div>
+      <div class="btn-row">
+        <button class="btn btn-primary" id="power-save" data-default="Save power actions">Save power actions</button>
+        <button class="btn btn-secondary" id="power-test-on" data-default="Test turn on">Test turn on</button>
+        <button class="btn btn-secondary" id="power-test-off" data-default="Test turn off">Test turn off</button>
+      </div>
+      <div id="power-events"></div>
+      <div class="hint" style="margin-top:12px" id="power-hint"></div>
+    </div>
+
+    <div class="card" data-needs="admin" hidden>
       <div class="ct">Who can do what</div>
       <div class="grid2">
         <div class="field">

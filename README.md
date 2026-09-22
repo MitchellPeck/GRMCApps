@@ -148,15 +148,27 @@ between apps. Both are served to each app at `/assets/` (see *Shared UI* below).
   ready on its own.
 
   **The player** is one full-screen web page per screen, at
-  `tv.grmc.app/player?t=<token>`. It asks the server every ten seconds what to
-  show, keeps playing through a network outage, comes back on its own, and
-  reloads itself once a day. It is the one surface in the whole stack that sits
-  **outside** the hub's Google sign-in — a television cannot complete one — so
-  it is gated on a per-screen token instead, which is created and reissued under
-  **Screens**. That tab also shows each display's last check-in, which is the
-  first place to look when someone says the TV is stuck. See
-  `scripts/narthex-tv/README.md` for getting the picture onto the Blackmagic
-  output and keeping the kiosk up unattended.
+  `tv.grmc.app/player?t=<token>`, opened in the television's own browser. It
+  asks the server every ten seconds what to show, keeps playing through a
+  network outage, comes back on its own, and reloads itself once a day. It is
+  the one surface in the whole stack that sits **outside** the hub's Google
+  sign-in — a television cannot complete an OAuth flow — so it is gated on a
+  per-screen token instead, created and reissued under **Screens**. That tab
+  also shows each display's last check-in, which is the first place to look when
+  someone says the TV is stuck. The player deliberately avoids anything newer
+  than roughly Chromium 60 on its rendering path, because a TV browser is an old
+  Chromium fork. See `scripts/narthex-tv/README.md` for the per-set caveats.
+
+  **Operating hours.** The screen does not have to be on all day. Settings takes
+  a weekly grid of windows in the app's timezone; outside them the player shows
+  true black and tears the media down rather than decoding frames nobody is
+  watching. Windows that touch or overlap are one stretch, so the screen never
+  blinks off between a morning and an afternoon; an end earlier than its start
+  runs past midnight; and an empty grid means "not configured" rather than "stay
+  dark". Separately and optionally, a **power action** — a web request or a
+  Wake-on-LAN packet — fires at each boundary, so a TV or smart plug that
+  answers on the network can actually be switched. Both can be fired by hand
+  from Settings with the result shown, and the last attempts are logged.
 
   **Configurable** without a rebuild: timezone, seconds per photo and per slide
   (app-wide, per playlist, or per item), crossfade or cut, fit-or-fill,

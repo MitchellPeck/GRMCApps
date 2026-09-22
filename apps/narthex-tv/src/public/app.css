@@ -110,3 +110,19 @@
 .matrix input[type="checkbox"] { width: auto; margin: 0; }
 .matrix .who { font-weight: 500; }
 .matrix .who small { display: block; color: var(--hint); font-weight: 400; }
+
+/* ── operating hours + power ─────────────────────────────────────────────── */
+.hours-row { display: flex; gap: 10px; align-items: center; padding: 8px 0; border-top: 1px solid var(--rule); }
+.hours-row:first-child { border-top: none; }
+.hours-row.is-off { opacity: .5; }
+.hours-day { width: 92px; font-weight: 600; font-size: 13px; }
+.hours-span { flex: 1; font-size: 13px; color: var(--ink-soft); }
+
+.power-editor { border: 1px solid var(--rule); border-radius: var(--r); padding: 14px; margin-bottom: 12px; background: var(--paper); }
+.power-editor .pe-head { font-size: 13px; font-weight: 600; color: var(--navy); margin-bottom: 10px; }
+.power-editor textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; min-height: 64px; }
+
+.events { font-size: 12px; margin-top: 12px; }
+.events div { padding: 4px 0; border-top: 1px solid var(--rule); color: var(--muted); }
+.events div:first-child { border-top: none; }
+.events .bad { color: var(--rej-fg); }

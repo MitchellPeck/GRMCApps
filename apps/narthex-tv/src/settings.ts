@@ -16,6 +16,7 @@ export interface AppSettings {
   idleMessage: string;     // shown when nothing at all is scheduled
   pollSeconds: number;     // how often the TV asks the server what to play
   videoLoopSingle: boolean; // a playlist of one video loops seamlessly
+  hoursMode: "always" | "scheduled"; // is the screen awake round the clock?
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -32,6 +33,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   idleMessage: "",
   pollSeconds: 10,
   videoLoopSingle: true,
+  // Round the clock until somebody deliberately sets narthex hours: a screen
+  // that is dark when it should not be is the worse of the two mistakes.
+  hoursMode: "always",
 };
 
 const KEYS: Record<keyof AppSettings, string> = {
@@ -48,6 +52,7 @@ const KEYS: Record<keyof AppSettings, string> = {
   idleMessage: "idle_message",
   pollSeconds: "poll_seconds",
   videoLoopSingle: "video_loop_single",
+  hoursMode: "hours_mode",
 };
 
 export async function getSetting(pool: Pool, key: string): Promise<string> {
@@ -99,6 +104,7 @@ export function parseSettings(raw: Record<string, string>): AppSettings {
     videoLoopSingle: raw[KEYS.videoLoopSingle] === undefined
       ? d.videoLoopSingle
       : raw[KEYS.videoLoopSingle] === "true",
+    hoursMode: oneOf(raw[KEYS.hoursMode], ["always", "scheduled"] as const, d.hoursMode),
   };
 }
 
@@ -137,4 +143,18 @@ export async function getDefaultPlaylistId(pool: Pool): Promise<number | null> {
 
 export async function setDefaultPlaylistId(pool: Pool, id: number | null): Promise<void> {
   await setSetting(pool, "default_playlist_id", id === null ? "" : String(id));
+}
+
+// The two power hooks are stored as JSON, so they sit beside the value-typed
+// settings above rather than inside them.
+export async function getPowerActionRaw(pool: Pool, when: "on" | "off"): Promise<string> {
+  return getSetting(pool, `power_${when}_action`);
+}
+
+export async function setPowerActionRaw(
+  pool: Pool,
+  when: "on" | "off",
+  value: string
+): Promise<void> {
+  await setSetting(pool, `power_${when}_action`, value);
 }

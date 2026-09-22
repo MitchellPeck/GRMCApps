@@ -33,14 +33,14 @@ html, body {
 
 #stage {
   position: fixed;
-  inset: 0;
+  top: 0; right: 0; bottom: 0; left: 0;
   background: var(--bg);
   transform-origin: center center;
 }
 
 .layer {
   position: absolute;
-  inset: 0;
+  top: 0; right: 0; bottom: 0; left: 0;
   opacity: 0;
   transition: opacity var(--transition-ms) ease-in-out;
   will-change: opacity;
@@ -50,7 +50,7 @@ html, body {
 
 .layer img, .layer video {
   position: absolute;
-  inset: 0;
+  top: 0; right: 0; bottom: 0; left: 0;
   width: 100%;
   height: 100%;
   display: block;
@@ -100,12 +100,14 @@ html, body {
 
 .overlay-center {
   position: absolute;
-  inset: 0;
+  top: 0; right: 0; bottom: 0; left: 0;
   z-index: 5;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
+  /* flexbox `gap` is Chromium 84+; the margin below is what actually spaces
+     these on an older TV browser. */
   gap: 3vh;
   background: var(--bg);
   text-align: center;
@@ -121,7 +123,18 @@ html, body {
   display: flex; align-items: center; justify-content: center;
 }
 #idle-text {
+  margin-top: 3vh;
   font-size: 3vh;
   color: rgba(255, 255, 255, .78);
   max-width: 60ch;
+}
+
+/* Outside the narthex's opening hours. True black, above everything, and the
+   player tears down the <img>/<video> behind it so the panel is not decoding
+   frames nobody is there to watch. */
+#blackout {
+  position: absolute;
+  top: 0; right: 0; bottom: 0; left: 0;
+  z-index: 50;
+  background: #000;
 }

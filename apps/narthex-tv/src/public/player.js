@@ -35,6 +35,7 @@
   var startedAt = Date.now();
   var clearStamp = 0;      // invalidates a pending "wipe the old layer" timer
   var lastHeartbeat = 0;
+  var dark = false;          // outside the narthex's opening hours
 
   var DEFAULT_POLL_MS = 10000;
   var RELOAD_AFTER_MS = 24 * 60 * 60 * 1000;  // shed any browser leak once a day
@@ -134,15 +135,42 @@
       applyDisplay(next.display);
       index = -1;
       pendingPlan = null;
-      advance();
+      // The power state is part of sourceKey, so a boundary always lands here
+      // rather than waiting out the current slide: 21:00 means 21:00.
+      if (isDark(next)) enterBlackout(); else { leaveBlackout(); advance(); }
     } else {
       pendingPlan = next;
       applyDisplay(next.display);
     }
   }
 
+  function isDark(p) {
+    return Boolean(p && p.power && p.power.on === false);
+  }
+
+  // Tear the media down rather than just covering it: a TV left decoding video
+  // behind a black rectangle all night is exactly what this is meant to avoid.
+  function enterBlackout() {
+    dark = true;
+    clearAdvance();
+    index = -1;
+    layers.forEach(function (l) { l.classList.remove("visible"); l.innerHTML = ""; });
+    $("idle").hidden = true;
+    $("clock").hidden = true;
+    $("footer").hidden = true;
+    $("blackout").hidden = false;
+  }
+
+  function leaveBlackout() {
+    if (!dark) return;
+    dark = false;
+    $("blackout").hidden = true;
+    if (plan) applyDisplay(plan.display);
+  }
+
   function applyDisplay(display) {
     if (!display) return;
+    if (dark) return;   // nothing is visible; leaveBlackout() re-applies this
     document.documentElement.style.setProperty("--bg", display.background || "#092D3E");
     document.documentElement.style.setProperty(
       "--transition-ms",
@@ -187,6 +215,7 @@
   // ── playback ─────────────────────────────────────────────────────────────
 
   function showIdle(text) {
+    if (dark) return;
     clearAdvance();
     frames = [];
     index = -1;
@@ -199,6 +228,7 @@
 
   function advance() {
     clearAdvance();
+    if (dark) return;
 
     // A newer plan was waiting for this boundary.
     if (pendingPlan) {
@@ -325,7 +355,7 @@
   function heartbeat() {
     if (!token || Date.now() - lastHeartbeat < HEARTBEAT_MS) return;
     lastHeartbeat = Date.now();
-    var playing = plan ? (plan.playlistName || "") : "";
+    var playing = dark ? "(outside opening hours)" : (plan ? (plan.playlistName || "") : "");
     fetch(apiUrl("/api/player/heartbeat"), {
       method: "POST",
       headers: { "content-type": "application/json" },

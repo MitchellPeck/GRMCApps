@@ -1,95 +1,146 @@
 # Narthex TV — setting up the display
 
 The app half of this lives in `apps/narthex-tv/` and runs in the same Docker
-stack as everything else, on the same Mac. What is left is getting the picture
-from that Mac onto the television, and keeping it there unattended.
+stack as everything else. What is left is getting the picture onto the
+television and deciding when it is on.
 
-## What the player actually is
+## What the player is
 
-A single full-screen web page: `https://tv.<BASE_DOMAIN>/player?t=<token>`.
+A single full-screen web page:
+
+```
+https://tv.<BASE_DOMAIN>/player?t=<token>
+```
 
 It shows one picture or one video at a time and asks the server every ten
 seconds what it should be showing. The server has already flattened every
 PowerPoint into images and re-encoded every video, so the page never renders a
-document and never decodes an exotic codec. It keeps playing through a network
-outage, comes back on its own, and reloads itself once a day.
+document and never decodes an exotic codec — which is what makes it safe to
+run in a television's browser. It keeps playing through a network outage,
+comes back on its own, and reloads itself once a day.
 
-The token in that URL is the screen's only credential: the `/player` and
-`/api/player/*` routes sit outside the hub's Google sign-in, because a TV
-cannot complete one. Anyone with the link can watch what the narthex screen is
-showing — nothing more, no schedule, no user list, no other screen — but keep
-it off anything public, and reissue it (**Screens → New link**) if it gets out.
+The token is the screen's only credential. `/player` and `/api/player/*` sit
+outside the hub's Google sign-in on their own Traefik router, because a TV
+cannot complete an OAuth flow. Anyone with the link can watch what the narthex
+screen is showing — nothing more: no schedule, no user list, no other screen —
+but keep it off anything public, and reissue it (**Screens → New link**) if it
+gets out.
 
-## Getting it onto the Blackmagic output
+## Running it in the TV's own browser
 
-This is the part that depends on which Blackmagic box is in the rack, and it is
-worth checking before you wire anything:
+Open the link in the television's browser and leave it there. Get the link from
+**Screens → Copy link**; typing it by hand on a TV remote is miserable, so mail
+it to yourself and open it from the TV's mail or QR reader if you can.
 
-**If macOS sees the device as a display** (it appears in System Settings →
-Displays, and you can drag a window onto it) — then there is nothing special to
-do. Run `kiosk.sh` and position the window on that display:
+The player is written for this: no `inset`, no flexbox `gap`, no optional
+chaining, nothing newer than about Chromium 60 on the rendering path. Samsung's
+Tizen browser is an old Chromium fork and would have shown a permanently black
+screen on several of the shortcuts a modern page would normally take.
 
-```sh
-./kiosk.sh "https://tv.grmc.app/player?t=<token>" 1920,0
-```
+**Three things to check on a Samsung set before you rely on this:**
 
-**If it is a DeckLink / UltraStudio playback device** — an UltraStudio Monitor
-3G, a DeckLink Mini Monitor, and most of that family — then macOS does *not*
-see it as a display and never will. These are SDK-driven outputs: only an
-application written against Blackmagic's Desktop Video SDK can push frames to
-them, and nothing about a browser window reaches one on its own. Docker on
-macOS cannot see the hardware at all, so the container is not an option either.
+1. **Does it still have a browser?** Samsung dropped the Internet app from a
+   number of recent Tizen models. If there is no browser in the Apps list,
+   this route is closed on that set and you want a cheap HDMI stick instead
+   (below).
 
-The free, Mac-native path is OBS Studio, which ships with Blackmagic output
-support:
+2. **What happens after a power cycle?** This is the one that bites. A consumer
+   Samsung boots to Smart Hub, *not* back to the browser at the last URL.
+   Business and hospitality models have **URL Launcher**, which does auto-open
+   a fixed URL at boot; consumer models generally do not. So if you power the
+   TV off every night, somebody has to walk over and re-open the browser every
+   morning — which defeats the point.
 
-1. Install OBS Studio and Blackmagic **Desktop Video** (the driver package).
-2. In OBS, set the canvas and output resolution to the TV's native resolution
-   (Settings → Video), usually 1920×1080 at 30 or 60 fps.
-3. Add a **Browser** source. URL: the player link. Width/height: 1920×1080.
-   Tick *Shutdown source when not visible* **off** — the page must keep running.
-4. **Tools → Blackmagic Output** (older builds: *DeckLink Output*), pick the
-   device and the matching mode, and start it.
-5. OBS → Settings → General → tick *Automatically start streaming/output on
-   launch* if your build offers it for DeckLink output; otherwise the
-   LaunchAgent below can start OBS and you start the output once per boot.
+   That means **"run it in the TV's browser" and "cut the TV's power nightly"
+   pull against each other.** Pick one:
 
-In that arrangement OBS is the kiosk, not Chrome, and `kiosk.sh` is only useful
-for checking the page on a monitor first.
+   - **Leave the TV powered and let the app go black** outside opening hours
+     (below). Nothing to re-open, nothing to re-navigate. On an LED/LCD panel
+     this is the pragmatic choice — a black screen draws very little and there
+     is nothing to burn in. This is what the app does out of the box.
+   - **Or put a ~$40 device on the HDMI input** — a Raspberry Pi, a mini PC, a
+     Google TV dongle running a kiosk browser — which does come back to the URL
+     by itself, so power cycling is safe. It also gives you HDMI-CEC, which
+     turns the TV on and off over the same cable with no IR and no TV API.
 
-If you would rather avoid OBS entirely and the TV is within HDMI reach, driving
-the panel as an ordinary second display off the Mac is simpler, more reliable,
-and loses nothing — the Blackmagic device buys you nothing here that a display
-output does not, since there is no audio, no keying and no broadcast timing
-involved.
+3. **Turn off the TV's own screen-saver and "Auto Protection Time"**
+   (Settings → General → Panel Care, and Settings → System → Eco / Power
+   Saving). Otherwise the set dims or drifts the image after a few idle hours,
+   because nobody is pressing a button on the remote.
 
-## Keeping it up
+## When the screen is on
 
-`com.grmc.narthextv.plist` is a LaunchAgent that starts the kiosk at login and
-restarts it if it ever quits. Edit the two `CHANGEME` lines, then:
+**Settings → When the screen is on** in the app. Two modes:
 
-```sh
-cp com.grmc.narthextv.plist ~/Library/LaunchAgents/
-launchctl load -w ~/Library/LaunchAgents/com.grmc.narthextv.plist
-```
+- **Always on** — the screen never goes dark. The default.
+- **Only during the hours below** — a weekly grid of windows, in the app's
+  timezone, following daylight saving. Outside them the player shows true
+  black and tears the `<img>`/`<video>` down, so the panel is not decoding
+  frames nobody is there to watch.
 
-Also, on the Mac:
+Rows for one day that touch or overlap are treated as a single stretch, so the
+screen never blinks off between a morning and an afternoon window. An *Until*
+earlier than *From* means the window runs past midnight. An empty grid keeps
+the screen on — that is "nobody configured this", not "stay dark forever".
 
-- **System Settings → Lock Screen** → *Turn display off when inactive*: **Never**,
-  and *Require password*: **Never** (or the lock screen covers the announcements).
-- **System Settings → Users & Groups** → set that account to log in
-  automatically, so a power cut ends with the TV back on rather than at a
-  login window.
-- **System Settings → General → Software Update** → turn off automatic restart
-  for updates, or schedule it for a weekday night.
-- Turn off **Screen Saver** entirely.
+**On now** reports a dark screen as its own state, so nobody mistakes it for a
+fault.
 
-The player also asks for a screen wake lock, which helps, but it is not a
-substitute for the settings above.
+## Actually cutting the power (optional)
+
+**Settings → Turning the TV on and off** can fire one request on your network
+at each boundary, separate from blanking the picture. Leave both at *Nothing*
+and the screen just goes black on time, which is the safe default.
+
+Two shapes, because televisions agree on nothing:
+
+- **A web request** — method, URL, headers, body. Only `http://` and `https://`
+  are dialled, and the request is abandoned after 8 seconds so a TV that is
+  unplugged cannot hold up the clock.
+- **Wake-on-LAN** — a magic packet, optionally aimed at the TV's own address
+  rather than broadcast.
+
+**Test turn on** / **Test turn off** fire one by hand and show you what came
+back, and the last ten attempts are listed underneath. Finding out on a Sunday
+morning that the TV never woke up is the failure this is here to prevent.
+
+### What each brand wants
+
+| TV | Off | On |
+| --- | --- | --- |
+| **Roku TV** (TCL, Hisense, onn) | `POST http://<ip>:8060/keypress/PowerOff` | `POST http://<ip>:8060/keypress/PowerOn` |
+| **Sony** (Android TV) | `POST http://<ip>/sony/system` with `X-Auth-PSK`, body `{"method":"setPowerStatus","params":[{"status":false}],"id":1,"version":"1.0"}` | same with `"status":true` |
+| **Vizio** SmartCast | `PUT https://<ip>:7345/key_command/` with `AUTH` header (needs pairing) | same |
+| **Samsung** | see below | Wake-on-LAN |
+| **LG** webOS | needs an SSAP WebSocket session | Wake-on-LAN |
+
+Roku is the only one that just works with no pairing.
+
+**Samsung specifically.** Power-*off* needs a WebSocket session on port 8002
+with a token you get by accepting a prompt on the TV once, over TLS with a
+self-signed certificate. That is more unverifiable network code than it is
+worth building into this app, and it cannot be tested anywhere but in front of
+the actual television. Two better routes:
+
+- **A smart plug or Home Assistant**, either of which exposes a plain HTTP
+  endpoint you can paste straight into the web-request action above. This is
+  the path with the fewest moving parts.
+- **The TV's own On Timer / Off Timer** (Settings → General → System → Time →
+  Sleep Timer / On Timer), which needs no integration at all and survives every
+  network problem. Its limitation is that it lives in the TV's menu, so
+  changing the hours means walking to the TV — and, per the warning above, a
+  consumer Samsung will come back to Smart Hub rather than to the browser.
+
+For power-*on*, Samsung needs **Network Standby** enabled (Settings → General →
+Network → Expert Settings → Power On with Mobile) and a Wake-on-LAN packet. Be
+aware the container reaches your LAN through Docker Desktop's NAT, so a
+*broadcast* packet will not get out — fill in the TV's IP address as well as its
+MAC so the packet is sent directly.
 
 ## Checking it is alive
 
-**Screens** in the app shows each display's last check-in, the revision of the
-plan it is playing, and which playlist it thinks it is showing. A screen that
-has not checked in for five minutes stops saying "checked in" — that is the
-first place to look when someone says the TV is stuck.
+**Screens** shows each display's last check-in, the revision of the plan it is
+playing, and what it thinks it is showing (including "(outside opening hours)"
+when it is deliberately dark). A screen that has not checked in for five
+minutes stops saying "checked in" — that is the first place to look when
+somebody says the TV is stuck.

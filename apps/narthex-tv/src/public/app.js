@@ -13,6 +13,7 @@
   var openPlaylist = null;   // { playlist, items }
   var picked = {};           // media ids ticked in the "add media" picker
   var timezone = "America/Chicago";
+  var hours = null;          // { mode, windows, state, neverOn, events, onAction, offAction }
 
   var $ = function (id) { return document.getElementById(id); };
   var HUB = "https://hub." + location.hostname.split(".").slice(1).join(".");
@@ -143,6 +144,15 @@
   function describeNow(data, into) {
     into.innerHTML = "";
     into.className = "";
+
+    // Outside opening hours nothing else matters — say that first, and say
+    // what WOULD be playing, so it doesn't read like a fault.
+    if (data.power && data.power.on === false) {
+      var dark = el("div", "alert alert-info",
+        "The screen is off \u2014 outside the narthex's opening hours" +
+        (data.power.changesAt ? ", coming back on " + fmtWhen(data.power.changesAt) : "") + ".");
+      into.appendChild(dark);
+    }
 
     var wrap = el("div", "now");
     var what = el("div", "now-what");
@@ -988,6 +998,253 @@
     fillSettings();
   }
 
+  // ── operating hours ──────────────────────────────────────────────────────
+  var FULL_DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+  function renderHours() {
+    if (!hours) return;
+    $("hours-mode").value = hours.mode;
+    $("hours-box").hidden = hours.mode !== "scheduled";
+    $("hours-tz").textContent = hours.timezone;
+
+    var state = $("hours-state");
+    state.innerHTML = "";
+    if (hours.neverOn) {
+      // Every row switched off is a decision we obey, so say out loud what it
+      // means rather than letting someone find out on a Sunday morning.
+      var warn = el("div", "alert alert-warn",
+        "Every row below is switched off, so the screen will stay dark until one is " +
+        "turned back on. Choose \u201cAlways on\u201d above if that isn't what you meant.");
+      state.appendChild(warn);
+    } else if (hours.mode === "scheduled" && hours.state) {
+      var line = hours.state.on
+        ? "The screen is on" + (hours.state.changesAt ? ", going dark " + fmtWhen(hours.state.changesAt) : "")
+        : "The screen is dark" + (hours.state.changesAt ? ", coming on " + fmtWhen(hours.state.changesAt) : "");
+      state.appendChild(el("div", "alert alert-info", line + "."));
+    }
+
+    var box = $("hours-list");
+    box.innerHTML = "";
+    if (!hours.windows.length) {
+      box.className = "empty";
+      box.textContent = "No hours set yet \u2014 with none, the screen stays on.";
+      return;
+    }
+    box.className = "";
+
+    hours.windows.forEach(function (win) {
+      var row = el("div", "hours-row" + (win.enabled ? "" : " is-off"));
+      row.appendChild(el("div", "hours-day", FULL_DAYS[win.day]));
+      var span = win.startTime + " \u2013 " + win.endTime;
+      if (win.endTime <= win.startTime) span += " (overnight)";
+      row.appendChild(el("div", "hours-span", span));
+
+      var actions = el("div", "row-actions");
+      actions.appendChild(button(win.enabled ? "Turn off" : "Turn on", "btn-sm", async function () {
+        try {
+          await api("PATCH", "/api/hours/" + win.id, { enabled: !win.enabled });
+          await loadHours();
+          loadNow();
+        } catch (e) { msg("settings-msg", e.message, "err"); }
+      }));
+      actions.appendChild(button("Remove", "btn-sm", async function () {
+        try {
+          await api("DELETE", "/api/hours/" + win.id);
+          await loadHours();
+          loadNow();
+        } catch (e) { msg("settings-msg", e.message, "err"); }
+      }));
+      row.appendChild(actions);
+      box.appendChild(row);
+    });
+  }
+
+  $("hours-mode").addEventListener("change", async function () {
+    try {
+      await api("PUT", "/api/settings", { hoursMode: $("hours-mode").value });
+      await loadHours();
+      await loadSettings();
+      loadNow();
+    } catch (e) { msg("settings-msg", e.message, "err"); }
+  });
+
+  $("hr-add").addEventListener("click", async function () {
+    busy("hr-add", true);
+    try {
+      await api("POST", "/api/hours", {
+        day: Number($("hr-day").value),
+        startTime: $("hr-from").value,
+        endTime: $("hr-to").value
+      });
+      await loadHours();
+      loadNow();
+    } catch (e) {
+      msg("settings-msg", e.message, "err");
+    } finally {
+      busy("hr-add", false);
+    }
+  });
+
+  $("hr-seed").addEventListener("click", async function () {
+    busy("hr-seed", true);
+    try {
+      await api("POST", "/api/hours/seed");
+      await loadHours();
+      loadNow();
+    } catch (e) {
+      msg("settings-msg", e.message, "err");
+    } finally {
+      busy("hr-seed", false);
+    }
+  });
+
+  // ── the power hook ───────────────────────────────────────────────────────
+  var POWER_KINDS = [
+    ["none", "Nothing \u2014 just blank the screen"],
+    ["http", "Send a web request"],
+    ["wol", "Send a Wake-on-LAN packet"]
+  ];
+
+  function powerEditor(when) {
+    var id = "power-" + when;
+    var box = $(id);
+    box.innerHTML = "";
+    box.appendChild(el("div", "pe-head",
+      when === "on" ? "When opening hours start" : "When opening hours end"));
+
+    var parsed = { kind: "none" };
+    try {
+      var raw = when === "on" ? hours.onAction : hours.offAction;
+      if (raw) parsed = JSON.parse(raw);
+    } catch (e) { /* a hand-edited row; fall back to Nothing */ }
+
+    var kindField = el("div", "field");
+    kindField.appendChild(el("label", null, "Action"));
+    var kind = el("select");
+    kind.id = id + "-kind";
+    POWER_KINDS.forEach(function (k) {
+      var o = el("option", null, k[1]);
+      o.value = k[0];
+      kind.appendChild(o);
+    });
+    kind.value = parsed.kind || "none";
+    kindField.appendChild(kind);
+    box.appendChild(kindField);
+
+    var httpBox = el("div");
+    var row = el("div", "row2");
+    row.appendChild(field(id + "-method", "Method", "text", parsed.method || "POST"));
+    row.appendChild(field(id + "-url", "URL", "text", parsed.url || ""));
+    httpBox.appendChild(row);
+    httpBox.appendChild(field(id + "-headers", "Headers as JSON (optional)", "text",
+      parsed.headers ? JSON.stringify(parsed.headers) : ""));
+    httpBox.appendChild(field(id + "-body", "Body (optional)", "text", parsed.body || ""));
+    box.appendChild(httpBox);
+
+    var wolBox = el("div");
+    var wolRow = el("div", "row2");
+    wolRow.appendChild(field(id + "-mac", "TV's MAC address", "text", parsed.mac || ""));
+    wolRow.appendChild(field(id + "-ip", "TV's IP (optional, but more reliable)", "text", parsed.ip || ""));
+    wolBox.appendChild(wolRow);
+    box.appendChild(wolBox);
+
+    function sync() {
+      httpBox.hidden = kind.value !== "http";
+      wolBox.hidden = kind.value !== "wol";
+    }
+    kind.addEventListener("change", sync);
+    sync();
+  }
+
+  function field(id, label, type, value) {
+    var wrap = el("div", "field");
+    var lab = el("label", null, label);
+    lab.setAttribute("for", id);
+    wrap.appendChild(lab);
+    var input = el("input");
+    input.type = type;
+    input.id = id;
+    input.value = value || "";
+    wrap.appendChild(input);
+    return wrap;
+  }
+
+  function readPowerEditor(when) {
+    var id = "power-" + when;
+    var kind = $(id + "-kind").value;
+    if (kind === "none") return { kind: "none" };
+    if (kind === "wol") {
+      return { kind: "wol", mac: $(id + "-mac").value.trim(), ip: $(id + "-ip").value.trim() };
+    }
+    var headers = {};
+    var raw = $(id + "-headers").value.trim();
+    if (raw) {
+      try { headers = JSON.parse(raw); }
+      catch (e) { throw new Error("The " + when + " headers aren't valid JSON."); }
+    }
+    return {
+      kind: "http",
+      method: $(id + "-method").value.trim() || "POST",
+      url: $(id + "-url").value.trim(),
+      headers: headers,
+      body: $(id + "-body").value
+    };
+  }
+
+  function renderPowerEvents() {
+    var box = $("power-events");
+    box.innerHTML = "";
+    if (!hours || !hours.events || !hours.events.length) return;
+    var list = el("div", "events");
+    hours.events.forEach(function (ev) {
+      var line = el("div", ev.ok ? "" : "bad",
+        fmtWhen(ev.firedAt) + " \u00b7 " + ev.action + " \u00b7 " + (ev.ok ? "sent" : "failed") +
+        (ev.detail ? " \u00b7 " + ev.detail : ""));
+      list.appendChild(line);
+    });
+    box.appendChild(list);
+  }
+
+  $("power-save").addEventListener("click", async function () {
+    busy("power-save", true);
+    try {
+      var body = { onAction: readPowerEditor("on"), offAction: readPowerEditor("off") };
+      await api("PUT", "/api/power", body);
+      await loadHours();
+      msg("settings-msg", "Power actions saved.", "ok");
+    } catch (e) {
+      msg("settings-msg", e.message, "err");
+    } finally {
+      busy("power-save", false);
+    }
+  });
+
+  ["on", "off"].forEach(function (when) {
+    $("power-test-" + when).addEventListener("click", async function () {
+      busy("power-test-" + when, true, "Sending\u2026");
+      try {
+        var data = await api("POST", "/api/power/test/" + when);
+        msg("settings-msg", "Sent: " + data.detail, "ok");
+      } catch (e) {
+        msg("settings-msg", e.message, "err");
+      } finally {
+        busy("power-test-" + when, false);
+        await loadHours();
+      }
+    });
+  });
+
+  async function loadHours() {
+    if (!can("admin")) return;
+    var data = await api("GET", "/api/hours");
+    hours = data;
+    timezone = data.timezone || timezone;
+    renderHours();
+    powerEditor("on");
+    powerEditor("off");
+    renderPowerEvents();
+  }
+
   // ── permissions ──────────────────────────────────────────────────────────
   var FLAGS = [
     ["canUpload", "Upload"],
@@ -1112,6 +1369,17 @@
     });
     renderDayPicker();
     syncModeFields();
+    FULL_DAYS.forEach(function (name, i) {
+      var o = el("option", null, name);
+      o.value = i;
+      $("hr-day").appendChild(o);
+    });
+    $("power-hint").innerHTML =
+      "Recipes: a <strong>Roku TV</strong> answers POST http://&lt;ip&gt;:8060/keypress/PowerOff " +
+      "and /keypress/PowerOn with no authentication at all. A <strong>Samsung</strong> needs a " +
+      "paired token for off and Wake-on-LAN for on, with Network Standby enabled \u2014 the " +
+      "simplest route there is a smart plug or Home Assistant webhook. Anything that exposes " +
+      "an HTTP endpoint on your network will work.";
     $("preview-at").value = toLocalInput(new Date());
 
     try {
@@ -1131,6 +1399,7 @@
     await loadSchedule().catch(function (e) { msg("schedule-msg", e.message, "err"); });
     await loadScreens().catch(function (e) { msg("screens-msg", e.message, "err"); });
     await loadPermissions().catch(function () { /* not an admin */ });
+    await loadHours().catch(function (e) { msg("settings-msg", e.message, "err"); });
     await loadPeople();
     loadNow();
 

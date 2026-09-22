@@ -1,4 +1,4 @@
-import { addDays, localDateKey, parseDateKey, parseHM, weekdayOf, zonedTimeToUtc } from "./tz";
+import { addDays, daySpan, localDateKey, parseHM, weekdayOf } from "./tz";
 
 export type ScheduleMode = "window" | "until_next" | "recurring";
 
@@ -58,26 +58,15 @@ function firesOn(entry: ScheduleEntry, dateKey: string): boolean {
   return entry.days.includes(weekdayOf(dateKey));
 }
 
-// The occurrence that starts on `dateKey`, as instants. `end <= start` means the
-// window runs past midnight (22:00–02:00), and end === start means a full day.
+// The occurrence that starts on `dateKey`, as instants.
 function occurrenceOn(
   entry: ScheduleEntry,
   dateKey: string,
   timeZone: string
 ): Candidate | null {
-  const startMin = parseHM(entry.startTime);
-  const endMin = parseHM(entry.endTime);
-  if (startMin === null || endMin === null) return null;
   if (!firesOn(entry, dateKey)) return null;
-
-  const d = parseDateKey(dateKey);
-  if (!d) return null;
-
-  const start = zonedTimeToUtc(d.year, d.month, d.day, Math.floor(startMin / 60), startMin % 60, timeZone);
-  const endKey = endMin <= startMin ? addDays(dateKey, 1) : dateKey;
-  const e = parseDateKey(endKey)!;
-  const end = zonedTimeToUtc(e.year, e.month, e.day, Math.floor(endMin / 60), endMin % 60, timeZone);
-  return { entry, start, end };
+  const span = daySpan(dateKey, entry.startTime, entry.endTime, timeZone);
+  return span ? { entry, start: span.start, end: span.end } : null;
 }
 
 /** The recurring occurrence covering `now`, if any. */

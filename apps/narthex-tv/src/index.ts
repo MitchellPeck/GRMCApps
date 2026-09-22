@@ -14,6 +14,8 @@ import { scheduleRoutes } from "./routes/schedule";
 import { screenRoutes } from "./routes/screens";
 import { settingsRoutes } from "./routes/settings";
 import { playerRoutes } from "./routes/player";
+import { powerRoutes } from "./routes/power";
+import { startPowerRunner } from "./power-runner";
 
 const app = Fastify({ logger: true, bodyLimit: 2 * 1024 * 1024 });
 
@@ -29,6 +31,7 @@ app.register(scheduleRoutes);
 app.register(screenRoutes);
 app.register(settingsRoutes);
 app.register(playerRoutes);
+app.register(powerRoutes);
 
 app.get("/healthz", async () => ({ ok: true, queue: queue.size() }));
 
@@ -36,6 +39,11 @@ async function start(): Promise<void> {
   await mkdir(join(config.dataDir, "media"), { recursive: true });
   await ensureSchema();
   await resumePending(queue, pool, (m) => app.log.info(m));
+  // Watches the operating-hours clock and fires the configured power hook on
+  // each boundary. The screen blanking itself does not depend on this — the
+  // player works that out from the plan — so a TV that cannot be controlled
+  // over the network simply goes black on time instead.
+  startPowerRunner(pool, (m) => app.log.info(m));
   await app.listen({ host: "0.0.0.0", port: config.port });
   app.log.info(`narthex-tv listening on ${config.port}`);
 }

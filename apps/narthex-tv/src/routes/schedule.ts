@@ -77,13 +77,19 @@ export async function scheduleRoutes(app: FastifyInstance): Promise<void> {
     const parsed = raw ? new Date(raw) : new Date();
     const at = isNaN(parsed.getTime()) ? new Date() : parsed;
 
-    const { resolution, playlist, source, settings } = await resolveNow(pool, at);
+    const { resolution, playlist, source, settings, power } = await resolveNow(pool, at);
     const items = playlist ? await listItems(pool, playlist.id) : [];
     return {
       ok: true,
       at: at.toISOString(),
       timezone: settings.timezone,
       source,
+      // Whether the narthex is inside its opening hours at all. A dark screen
+      // is a different answer from "nothing is scheduled", and the card says so.
+      power: {
+        on: power.on,
+        changesAt: power.changesAt ? power.changesAt.toISOString() : null,
+      },
       entry: resolution.entry
         ? { id: resolution.entry.id, mode: resolution.entry.mode, label: resolution.entry.label }
         : null,
