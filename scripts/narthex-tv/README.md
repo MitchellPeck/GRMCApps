@@ -20,53 +20,93 @@ run in a television's browser. It keeps playing through a network outage,
 comes back on its own, and reloads itself once a day.
 
 The token is the screen's only credential. `/player` and `/api/player/*` sit
-outside the hub's Google sign-in on their own Traefik router, because a TV
-cannot complete an OAuth flow. Anyone with the link can watch what the narthex
-screen is showing — nothing more: no schedule, no user list, no other screen —
+outside the hub's Google sign-in on their own Traefik router, because neither a
+television nor an unattended script can complete an OAuth flow. Anyone with
+the link can watch what the narthex screen is showing — nothing more: no schedule, no user list, no other screen —
 but keep it off anything public, and reissue it (**Screens → New link**) if it
 gets out.
 
-## Running it in the TV's own browser
+## Two ways to drive the screen
 
-Open the link in the television's browser and leave it there. Get the link from
-**Screens → Copy link**; typing it by hand on a TV remote is miserable, so mail
-it to yourself and open it from the TV's mail or QR reader if you can.
+Pick one. Both read exactly the same `/api/player/plan`, so the schedule,
+operating hours and blackout behave identically either way.
 
-The player is written for this: no `inset`, no flexbox `gap`, no optional
-chaining, nothing newer than about Chromium 60 on the rendering path. Samsung's
-Tizen browser is an old Chromium fork and would have shown a permanently black
-screen on several of the shortcuts a modern page would normally take.
+### A. Through the Blackmagic UltraStudio (`playout.py`)
 
-**Three things to check on a Samsung set before you rely on this:**
+The Mac feeds the UltraStudio directly. No browser, no OBS, no GUI app, and
+nothing to log in to.
+
+```sh
+brew tap amiaopensource/amiaos && brew install ffmpegdecklink
+ffmpegdecklink -sinks decklink          # confirm the device name
+
+./playout.py --url 'https://tv.grmc.app/player?t=<token>' \
+             --device 'UltraStudio Monitor 3G' --mode 1920x1080@30
+```
+
+**How it works, and why.** `ffmpeg -f decklink` *closes the device when its
+input ends*, so one ffmpeg per slide would drop the signal every few seconds
+and the TV would re-sync — a black flash between every photo. Instead:
+
+- **One long-lived ffmpeg owns the card** for the life of the process, reading
+  raw `uyvy422` frames from a pipe. It never sees an end-of-input, so the
+  signal is continuous. Silent 48 kHz stereo is attached because the DeckLink
+  muxer wants an audio stream; the narthex has no speakers.
+- **A feeder decodes one item at a time** into that pipe — a photo held for its
+  duration, one slide, one video. Items are fitted to the canvas *as they
+  play*, not when they are uploaded, so the per-item seconds in the app stays a
+  live setting instead of something baked into a file.
+- **The card paces the pipe**: the outer ffmpeg blocks until it wants the next
+  frame, so the feeder self-times. There is no sleep anywhere.
+- **A change cuts in at once.** The inner decode is killed, the outer ffmpeg
+  keeps the device open, and the next item starts. One repeated frame, no
+  signal loss. Edits within the same airing wait for the current item so nobody
+  saving a caption makes the screen jump — the same rule the browser player
+  follows.
+- **Bytes are copied in exact frame-sized units.** Raw video over a pipe has no
+  framing, so a cut landing mid-frame would shift every frame after it and tear
+  the picture until somebody restarted it. `test_playout.py` checks that
+  invariant.
+- Assets are cached on disk, so a server outage keeps the last schedule
+  playing instead of going black.
+
+`com.grmc.narthextv-playout.plist` runs it at login and restarts it if it ever
+exits. Because nothing is drawn on screen, the Mac can be headless and the
+account can stay locked.
+
+Run the tests with:
+
+```sh
+python3 -m unittest discover -s scripts/narthex-tv -p 'test_*.py'
+```
+
+**Troubleshooting.** `--mode` must be a mode the device actually supports —
+`ffmpegdecklink -f decklink -list_formats 1 -i 'UltraStudio Monitor 3G'` lists
+them. The pixel format is always `uyvy422`; the audio rate is always 48 kHz. If
+ffmpeg refuses the mode, add `-format_code` to the outer command in
+`start_outer()`. Run with `-v` to see every command it builds.
+
+### B. In the TV's own browser
+
+Open the link from **Screens → Copy link** in the television's browser and
+leave it there. Typing it on a TV remote is miserable, so mail it to yourself.
+
+The player is written for this: no `inset`, no flexbox `gap`, nothing newer
+than about Chromium 60 on the rendering path, because a TV browser is an old
+Chromium fork.
+
+**Three things to check on a Samsung set first:**
 
 1. **Does it still have a browser?** Samsung dropped the Internet app from a
-   number of recent Tizen models. If there is no browser in the Apps list,
-   this route is closed on that set and you want a cheap HDMI stick instead
-   (below).
-
-2. **What happens after a power cycle?** This is the one that bites. A consumer
-   Samsung boots to Smart Hub, *not* back to the browser at the last URL.
-   Business and hospitality models have **URL Launcher**, which does auto-open
-   a fixed URL at boot; consumer models generally do not. So if you power the
-   TV off every night, somebody has to walk over and re-open the browser every
-   morning — which defeats the point.
-
-   That means **"run it in the TV's browser" and "cut the TV's power nightly"
-   pull against each other.** Pick one:
-
-   - **Leave the TV powered and let the app go black** outside opening hours
-     (below). Nothing to re-open, nothing to re-navigate. On an LED/LCD panel
-     this is the pragmatic choice — a black screen draws very little and there
-     is nothing to burn in. This is what the app does out of the box.
-   - **Or put a ~$40 device on the HDMI input** — a Raspberry Pi, a mini PC, a
-     Google TV dongle running a kiosk browser — which does come back to the URL
-     by itself, so power cycling is safe. It also gives you HDMI-CEC, which
-     turns the TV on and off over the same cable with no IR and no TV API.
-
-3. **Turn off the TV's own screen-saver and "Auto Protection Time"**
-   (Settings → General → Panel Care, and Settings → System → Eco / Power
-   Saving). Otherwise the set dims or drifts the image after a few idle hours,
-   because nobody is pressing a button on the remote.
+   number of recent Tizen models.
+2. **What happens after a power cycle?** A consumer Samsung boots to Smart Hub,
+   *not* back to the browser at the last URL. Business and hospitality models
+   have **URL Launcher**, which does; consumer models generally do not. So if
+   you cut the TV's power nightly, somebody has to re-open the browser every
+   morning. Option A does not have this problem — the Mac comes back by itself.
+3. **Turn off the TV's screen-saver and "Auto Protection Time"** (Settings →
+   General → Panel Care, and → Eco / Power Saving), or the set dims after a few
+   hours because nobody is pressing a remote.
 
 ## When the screen is on
 
@@ -74,9 +114,9 @@ screen on several of the shortcuts a modern page would normally take.
 
 - **Always on** — the screen never goes dark. The default.
 - **Only during the hours below** — a weekly grid of windows, in the app's
-  timezone, following daylight saving. Outside them the player shows true
-  black and tears the `<img>`/`<video>` down, so the panel is not decoding
-  frames nobody is there to watch.
+  timezone, following daylight saving. Outside them the screen shows true black —
+  the browser player tears the `<img>`/`<video>` down, and `playout.py` feeds
+  black frames — so nothing is being decoded for an empty room.
 
 Rows for one day that touch or overlap are treated as a single stretch, so the
 screen never blinks off between a morning and an afternoon window. An *Until*

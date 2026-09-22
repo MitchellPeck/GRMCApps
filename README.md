@@ -157,7 +157,17 @@ between apps. Both are served to each app at `/assets/` (see *Shared UI* below).
   also shows each display's last check-in, which is the first place to look when
   someone says the TV is stuck. The player deliberately avoids anything newer
   than roughly Chromium 60 on its rendering path, because a TV browser is an old
-  Chromium fork. See `scripts/narthex-tv/README.md` for the per-set caveats.
+  Chromium fork.
+
+  **Or straight out of a Blackmagic card.** `scripts/narthex-tv/playout.py`
+  drives a DeckLink/UltraStudio from the Mac with no browser and no OBS: one
+  long-lived ffmpeg owns the device and a feeder decodes one item at a time
+  into it, so the signal is never interrupted (`ffmpeg -f decklink` closes the
+  card when its input ends, which is why a process per slide would make the TV
+  re-sync between every photo). It reads the same `/api/player/plan`, so there
+  is no second copy of the scheduling logic to drift, and a change cuts in
+  mid-item rather than waiting for a re-render. See
+  `scripts/narthex-tv/README.md` for both paths and the per-set caveats.
 
   **Operating hours.** The screen does not have to be on all day. Settings takes
   a weekly grid of windows in the app's timezone; outside them the player shows
