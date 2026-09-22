@@ -84,6 +84,7 @@ ports and no VPN. It runs only on the always-on Mac (it's defined in
    cloudflared tunnel route dns grmc approvals.grmc.app
    cloudflared tunnel route dns grmc minutes.grmc.app
    cloudflared tunnel route dns grmc expenses.grmc.app
+   cloudflared tunnel route dns grmc tv.grmc.app
    ```
 6. In the Cloudflare dashboard, **delete the old `A  *.grmc.app → <LAN IP>`
    record** (the new per-host CNAMEs take over; the wildcard A is the LAN-only
@@ -153,8 +154,9 @@ agent — and Docker — to be running after a reboot. Logs land in
 Everything that makes the always-on Mac *the* host is either gitignored
 (`.env`, `secrets/`), an uncommitted local edit (`cloudflared/config.yml`
 carries the real tunnel UUID), or a Docker volume (`pgdata` — every app's
-database; `minutesdata` — meeting recordings; `letsencrypt` and `whisperdata` —
-regenerable, but cheap to carry). Nothing in Cloudflare, Google or GHCR is tied
+database; `minutesdata` — meeting recordings; `narthextvdata` — the narthex TV's
+uploaded media; `letsencrypt` and `whisperdata` — regenerable, but cheap to
+carry). Nothing in Cloudflare, Google or GHCR is tied
 to the machine: the tunnel follows its credentials file, the DNS routes point
 at the tunnel, and the OAuth client only knows the hostnames. So a move is
 "snapshot those pieces, restore them on the new Mac, wipe the old one". Two

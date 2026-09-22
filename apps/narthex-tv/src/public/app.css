@@ -1,0 +1,112 @@
+/* App-specific vocabulary only. Everything structural comes from grmc.css. */
+
+.days { display: flex; gap: 6px; flex-wrap: wrap; }
+.day {
+  border: 1px solid var(--rule); background: var(--field-bg); color: var(--muted);
+  border-radius: var(--r); padding: 6px 11px; font-size: 12px; font-weight: 600;
+  cursor: pointer; font-family: var(--font-ui);
+}
+.day.on { background: var(--navy); border-color: var(--navy); color: #fff; }
+
+/* ── rows shared by the schedule, playlists and screens ──────────────────── */
+.row {
+  display: flex; gap: 12px; align-items: flex-start;
+  padding: 12px 0; border-top: 1px solid var(--rule);
+}
+.row:first-child { border-top: none; }
+.row-main { flex: 1; min-width: 0; }
+.row-title { font-size: 14px; font-weight: 600; color: var(--ink); }
+.row-sub { font-size: 12px; color: var(--muted); margin-top: 3px; line-height: 1.5; }
+.row-actions { display: flex; gap: 6px; align-items: center; flex-shrink: 0; flex-wrap: wrap; }
+.row.is-off { opacity: .55; }
+.row.is-active { background: var(--ok-bg); margin: 0 -20px; padding: 12px 20px; }
+
+.clickable { cursor: pointer; }
+.clickable:hover .row-title { color: var(--navy); }
+.row.selected { background: var(--paper); margin: 0 -20px; padding: 12px 20px; }
+
+/* ── "on now" ────────────────────────────────────────────────────────────── */
+.now {
+  display: flex; gap: 16px; align-items: center;
+}
+.now-what { flex: 1; min-width: 0; }
+.now-title { font-family: var(--font-display); font-size: 24px; color: var(--navy); }
+.now-why { font-size: 13px; color: var(--muted); margin-top: 6px; line-height: 1.6; }
+
+/* ── media ───────────────────────────────────────────────────────────────── */
+.drop {
+  border: 2px dashed var(--rule); border-radius: var(--r-lg);
+  padding: 26px 18px; text-align: center; background: var(--paper);
+}
+.drop.over { border-color: var(--gold); background: var(--gold-ring); }
+.drop p { font-size: 13px; color: var(--ink-soft); }
+.drop .hint { margin-top: 8px; }
+.linkish {
+  background: none; border: none; padding: 0; font: inherit; cursor: pointer;
+  color: var(--navy); text-decoration: underline;
+}
+
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+.tile {
+  border: 1px solid var(--rule); border-radius: var(--r); overflow: hidden;
+  background: var(--field-bg); display: flex; flex-direction: column;
+}
+.tile-shot {
+  aspect-ratio: 16 / 9; background: var(--navy);
+  display: flex; align-items: center; justify-content: center;
+  color: rgba(255,255,255,.5); font-size: 11px;
+}
+.tile-shot img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.tile-body { padding: 8px 10px; font-size: 12px; }
+.tile-name {
+  font-weight: 600; color: var(--ink); overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.tile-meta { color: var(--hint); font-size: 11px; margin-top: 2px; }
+.tile-actions { display: flex; gap: 6px; padding: 0 10px 9px; }
+.tile.picked { outline: 2px solid var(--gold); }
+
+.picker {
+  border: 1px solid var(--rule); border-radius: var(--r);
+  padding: 12px; margin: 12px 0; background: var(--paper); max-height: 340px; overflow: auto;
+}
+
+/* ── playlist items ──────────────────────────────────────────────────────── */
+.item-row { display: flex; gap: 10px; align-items: center; padding: 9px 0; border-top: 1px solid var(--rule); }
+.item-row:first-child { border-top: none; }
+.item-shot { width: 58px; height: 33px; border-radius: 3px; background: var(--navy); flex-shrink: 0; overflow: hidden; }
+.item-shot img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.item-main { flex: 1; min-width: 0; }
+.item-name { font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.item-meta { font-size: 11px; color: var(--hint); }
+.item-secs { width: 62px; }
+.item-secs input { padding: 5px 7px; font-size: 12px; }
+.item-row.is-off { opacity: .5; }
+
+.tuning { margin-top: 18px; border-top: 1px solid var(--rule); padding-top: 14px; }
+.tuning summary {
+  cursor: pointer; font-size: 13px; font-weight: 600; color: var(--navy);
+  margin-bottom: 12px; list-style: revert;
+}
+
+/* ── screens ─────────────────────────────────────────────────────────────── */
+.kiosk-url {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px; color: var(--muted); word-break: break-all;
+  background: var(--paper); border: 1px solid var(--rule); border-radius: 4px;
+  padding: 6px 8px; margin-top: 6px;
+}
+
+.tvframe {
+  width: 100%; aspect-ratio: 16 / 9; border: 1px solid var(--rule);
+  border-radius: var(--r); background: #000; margin-top: 12px; display: block;
+}
+
+/* ── permissions matrix ──────────────────────────────────────────────────── */
+.matrix { width: 100%; border-collapse: collapse; font-size: 13px; }
+.matrix th, .matrix td { padding: 8px 6px; border-bottom: 1px solid var(--rule); text-align: left; }
+.matrix th { font-size: 10.5px; text-transform: uppercase; letter-spacing: .07em; color: var(--hint); }
+.matrix td.mid, .matrix th.mid { text-align: center; }
+.matrix input[type="checkbox"] { width: auto; margin: 0; }
+.matrix .who { font-weight: 500; }
+.matrix .who small { display: block; color: var(--hint); font-weight: 400; }

@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GRMC Narthex TV</title>
+<link rel="stylesheet" href="/player.css">
+</head>
+<body>
+<!-- Everything the TV shows lives inside #stage so one transform can rotate
+     the whole picture for a portrait screen. -->
+<div id="stage">
+  <div class="layer" id="layer-a"></div>
+  <div class="layer" id="layer-b"></div>
+
+  <div id="idle" class="overlay-center" hidden>
+    <div class="idle-mark">G</div>
+    <p id="idle-text"></p>
+  </div>
+
+  <div id="clock" class="chrome" hidden>
+    <div id="clock-time"></div>
+    <div id="clock-date"></div>
+  </div>
+
+  <div id="footer" class="chrome" hidden></div>
+
+  <div id="status" class="chrome" hidden></div>
+</div>
+<script src="/player.js"></script>
+</body>
+</html>

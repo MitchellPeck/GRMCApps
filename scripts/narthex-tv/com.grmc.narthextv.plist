@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  LaunchAgent that brings the narthex TV back up at login and keeps it up.
+
+  Install:
+    1. Edit ProgramArguments below: the real path to kiosk.sh and the real
+       player URL from Narthex TV -> Screens -> Copy link.
+    2. cp com.grmc.narthextv.plist ~/Library/LaunchAgents/
+    3. launchctl load -w ~/Library/LaunchAgents/com.grmc.narthextv.plist
+
+  Stop it with:
+    launchctl unload -w ~/Library/LaunchAgents/com.grmc.narthextv.plist
+
+  This is a LaunchAgent, not a LaunchDaemon, on purpose: it needs a logged-in
+  GUI session to have a screen to draw on. Set the Mac to log that account in
+  automatically, and turn display sleep off (System Settings -> Lock Screen ->
+  "Turn display off when inactive": Never).
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.grmc.narthextv</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/CHANGEME/GRMCApps/scripts/narthex-tv/kiosk.sh</string>
+    <string>https://tv.grmc.app/player?t=CHANGEME</string>
+  </array>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- If Chrome is quit, crashes, or is killed by a software update, bring it
+       straight back. The 10s throttle stops a fast crash loop from spinning. -->
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/narthex-tv.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/narthex-tv.err.log</string>
+</dict>
+</plist>

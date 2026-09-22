@@ -47,6 +47,7 @@ Cloudflare Tunnel, with no per-device certificate install.
 - Approvals:     https://approvals.grmc.app
 - Meeting Minutes: https://minutes.grmc.app
 - Expenses:        https://expenses.grmc.app
+- Narthex TV:      https://tv.grmc.app
 - Traefik dashboard (host-local only): http://localhost:8080
 
 ## Apps
@@ -117,6 +118,54 @@ between apps. Both are served to each app at `/assets/` (see *Shared UI* below).
   speakers, lower it if two people are being merged). Changing `WHISPER_MODEL`
   triggers a one-time model download into the `whisperdata` volume, so the
   first transcription after that change is slow.
+
+- **Narthex TV** (`tv.grmc.app`) — what plays on the announcement screen in the
+  narthex, and when. Upload **photos, videos and PowerPoints**, group them into
+  **playlists**, and put a playlist on the screen. There is no sound anywhere in
+  this app by design: the audio track is stripped from every video at upload.
+
+  **Scheduling** has three shapes. *Between two dates and times* plays for that
+  window and then gets off the screen. *From a date and time, until something
+  else is scheduled* is the standing content — it keeps playing indefinitely,
+  and is replaced only when a later open-ended entry starts. *Every week, on
+  chosen days, between two times* covers the Sunday-morning slot; it is written
+  in the app's timezone and follows the clock through daylight saving, so 08:00
+  stays 08:00. A timed entry temporarily borrows the screen from the standing
+  content and hands it back when it ends, and `priority` breaks a tie when two
+  overlap. When nothing at all applies, a **default playlist** (Settings) plays.
+  The **On now** tab says what is showing and why, and will answer the same
+  question for any future moment — you can check a Sunday morning before it
+  happens.
+
+  **Everything is converted once, at upload.** A PowerPoint (or Keynote export,
+  or ODP, or PDF) goes through headless LibreOffice to PDF and then to one
+  image per slide, each with its own on-screen duration. A video is probed with
+  ffmpeg and re-encoded to H.264/MP4 without audio unless it already is one.
+  A HEIC or TIFF becomes a JPEG. The TV therefore only ever shows a picture or
+  plays a plain MP4 — it never renders a document and never meets a codec it
+  does not know. Conversions run one at a time on a queue that survives a
+  restart, and the media grid shows each upload settling from *converting* to
+  ready on its own.
+
+  **The player** is one full-screen web page per screen, at
+  `tv.grmc.app/player?t=<token>`. It asks the server every ten seconds what to
+  show, keeps playing through a network outage, comes back on its own, and
+  reloads itself once a day. It is the one surface in the whole stack that sits
+  **outside** the hub's Google sign-in — a television cannot complete one — so
+  it is gated on a per-screen token instead, which is created and reissued under
+  **Screens**. That tab also shows each display's last check-in, which is the
+  first place to look when someone says the TV is stuck. See
+  `scripts/narthex-tv/README.md` for getting the picture onto the Blackmagic
+  output and keeping the kiosk up unattended.
+
+  **Configurable** without a rebuild: timezone, seconds per photo and per slide
+  (app-wide, per playlist, or per item), crossfade or cut, fit-or-fill,
+  background colour, an optional clock and footer line, portrait rotation, how
+  often the TV checks in, and what to show when nothing is scheduled.
+  **Permissions** are per-app on top of the hub's: upload, schedule (implies
+  upload), manage (anyone's media, plus screens) and admin (permissions and
+  settings only). Data lives in the `narthextv` database; the media bytes live
+  on the `narthextvdata` volume.
 
 - **Expenses** (`expenses.grmc.app`) — expense requests, approvals and records.
 
