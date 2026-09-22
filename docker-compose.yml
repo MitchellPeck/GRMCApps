@@ -268,6 +268,56 @@ services:
       - "traefik.http.services.expenses.loadbalancer.server.port=3000"
       - "com.centurylinklabs.watchtower.enable=true"
 
+  # The narthex announcement screen. Heavier than the other apps on purpose:
+  # this image carries LibreOffice, poppler and ffmpeg so a PowerPoint, a PDF
+  # and a ProRes clip all turn into something a browser can render, once, at
+  # upload time — rather than on the TV, forever.
+  narthex-tv:
+    build:
+      context: .
+      dockerfile: apps/narthex-tv/Dockerfile
+    image: ghcr.io/mitchellpeck/grmc-narthex-tv:latest
+    restart: unless-stopped
+    environment:
+      NARTHEXTV_DATABASE_URL: "postgres://${NARTHEXTV_DB_USER}:${NARTHEXTV_DB_PASSWORD}@postgres:5432/${NARTHEXTV_DB_NAME}"
+      NARTHEXTV_DB_USER: "${NARTHEXTV_DB_USER}"
+      NARTHEXTV_DB_PASSWORD: "${NARTHEXTV_DB_PASSWORD}"
+      NARTHEXTV_DB_NAME: "${NARTHEXTV_DB_NAME}"
+      NARTHEXTV_DATA_DIR: "/data"
+      NARTHEXTV_MAX_FILE_MB: "${NARTHEXTV_MAX_FILE_MB:-512}"
+      NARTHEXTV_MAX_FILES: "${NARTHEXTV_MAX_FILES:-20}"
+      NARTHEXTV_CONVERT_TIMEOUT_MS: "${NARTHEXTV_CONVERT_TIMEOUT_MS:-1200000}"
+      BASE_DOMAIN: "${BASE_DOMAIN}"
+    volumes:
+      - narthextvdata:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
+    networks: [hubnet]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.services.narthextv.loadbalancer.server.port=3000"
+      # The staff-facing app: gated by the hub like every other app.
+      - "traefik.http.routers.narthextv.rule=Host(`tv.${BASE_DOMAIN}`)"
+      - "traefik.http.routers.narthextv.entrypoints=websecure"
+      - "traefik.http.routers.narthextv.tls=true"
+      - "traefik.http.routers.narthextv.middlewares=hub-forward-auth@file"
+      - "traefik.http.routers.narthextv.service=narthextv"
+      # The player surface, on the SAME host but deliberately OUTSIDE
+      # forward-auth: a television cannot complete a Google sign-in, and a
+      # kiosk browser has nowhere to keep a session. It is gated instead on a
+      # per-screen token that the app itself checks on every request (see
+      # apps/narthex-tv/src/routes/player.ts). Nothing on these paths reveals
+      # anything beyond what that one screen is meant to display.
+      - "traefik.http.routers.narthextv-player.rule=Host(`tv.${BASE_DOMAIN}`) && (PathPrefix(`/player`) || PathPrefix(`/player.css`) || PathPrefix(`/player.js`) || PathPrefix(`/api/player`) || PathPrefix(`/assets/fonts`))"
+      - "traefik.http.routers.narthextv-player.entrypoints=websecure"
+      - "traefik.http.routers.narthextv-player.tls=true"
+      - "traefik.http.routers.narthextv-player.priority=100"
+      - "traefik.http.routers.narthextv-player.service=narthextv"
+      - "com.centurylinklabs.watchtower.enable=true"
+
 networks:
   hubnet:
 
@@ -276,3 +326,4 @@ volumes:
   letsencrypt:
   whisperdata:
   minutesdata:
+  narthextvdata:

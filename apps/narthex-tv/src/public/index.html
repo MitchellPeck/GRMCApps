@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GRMC Narthex TV</title>
+<link rel="stylesheet" href="/assets/grmc.css">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<header>
+  <div class="logo">
+    <div class="seal">G</div>
+    <div><h1>Narthex TV</h1><p>What's on the screen, and when</p></div>
+  </div>
+  <div class="hright"><span class="hlabel" id="me-label">&hellip;</span></div>
+</header>
+
+<div class="layout">
+  <div class="tabs">
+    <button class="tab active" data-tab="now">On now</button>
+    <button class="tab" data-tab="schedule">Schedule</button>
+    <button class="tab" data-tab="playlists">Playlists</button>
+    <button class="tab" data-tab="media">Media</button>
+    <button class="tab" data-tab="screens" data-needs="manage" hidden>Screens</button>
+    <button class="tab" data-tab="settings">Settings</button>
+  </div>
+
+  <div id="no-perms" class="card" hidden>
+    <div class="ct">No permissions yet</div>
+    <p class="muted" style="font-size:13px;margin:0">
+      Your account can open Narthex TV but hasn't been given any permissions in it yet.
+      Ask a Narthex TV administrator to let you upload or schedule.
+    </p>
+  </div>
+
+  <!-- ── ON NOW ─────────────────────────────────────────────────────────── -->
+  <div class="panel active" id="p-now">
+    <div class="card">
+      <div class="ct">On the narthex screen</div>
+      <div id="now-box" class="empty">Checking&hellip;</div>
+    </div>
+
+    <div class="card">
+      <div class="ct">What would be playing&hellip;</div>
+      <div class="grid2">
+        <div class="field">
+          <label for="preview-at">At this date and time</label>
+          <input type="datetime-local" id="preview-at">
+        </div>
+        <div class="field" style="align-self:end">
+          <button class="btn btn-secondary" id="preview-go" data-default="Check">Check</button>
+        </div>
+      </div>
+      <div class="hint">
+        Answers with exactly the same rules the TV uses, so you can check a
+        Sunday morning or a funeral slot before it happens.
+      </div>
+      <div id="preview-box"></div>
+    </div>
+
+    <div class="card">
+      <div class="ct">Preview the picture</div>
+      <p class="muted" style="font-size:13px;margin:0 0 12px">
+        A live view of what the TV is showing right now, at the same size and
+        timing. Pick a screen to preview.
+      </p>
+      <div class="btn-row" id="preview-screens"></div>
+      <div id="preview-frame-wrap" hidden>
+        <iframe id="preview-frame" class="tvframe" title="Screen preview"></iframe>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── SCHEDULE ───────────────────────────────────────────────────────── -->
+  <div class="panel" id="p-schedule">
+    <div id="schedule-msg"></div>
+
+    <div class="card" data-needs="schedule" hidden>
+      <div class="ct">Put a playlist on the screen</div>
+      <div class="field">
+        <label for="s-playlist">Playlist</label>
+        <select id="s-playlist"></select>
+      </div>
+      <div class="field">
+        <label for="s-mode">How long for</label>
+        <select id="s-mode">
+          <option value="until_next">From a date and time, until something else is scheduled</option>
+          <option value="window">Between two dates and times</option>
+          <option value="recurring">Every week, on chosen days, between two times</option>
+        </select>
+        <div class="hint" id="s-mode-hint"></div>
+      </div>
+
+      <div class="grid2" data-mode="until_next window">
+        <div class="field">
+          <label for="s-start">Starts</label>
+          <input type="datetime-local" id="s-start">
+        </div>
+        <div class="field" data-mode="window">
+          <label for="s-end">Ends</label>
+          <input type="datetime-local" id="s-end">
+        </div>
+      </div>
+
+      <div data-mode="recurring" hidden>
+        <div class="field">
+          <label>Days</label>
+          <div class="days" id="s-days"></div>
+          <div class="hint">Leave every day unticked to mean every day.</div>
+        </div>
+        <div class="grid2">
+          <div class="field">
+            <label for="s-start-time">From</label>
+            <input type="time" id="s-start-time" value="08:00">
+          </div>
+          <div class="field">
+            <label for="s-end-time">Until</label>
+            <input type="time" id="s-end-time" value="12:30">
+          </div>
+        </div>
+        <div class="grid2">
+          <div class="field">
+            <label for="s-from">First date <span class="muted">(optional)</span></label>
+            <input type="date" id="s-from">
+          </div>
+          <div class="field">
+            <label for="s-to">Last date <span class="muted">(optional)</span></label>
+            <input type="date" id="s-to">
+          </div>
+        </div>
+      </div>
+
+      <div class="grid2">
+        <div class="field">
+          <label for="s-label">Label <span class="muted">(optional)</span></label>
+          <input type="text" id="s-label" placeholder="Sunday morning" maxlength="120">
+        </div>
+        <div class="field">
+          <label for="s-priority">Priority</label>
+          <input type="number" id="s-priority" value="0" min="-100" max="100">
+          <div class="hint">Higher wins when two overlap. Leave at 0 unless you need an override.</div>
+        </div>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn btn-primary" id="s-save" data-default="Add to the schedule">Add to the schedule</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="ct">The schedule</div>
+      <div id="schedule-list" class="empty">Loading&hellip;</div>
+    </div>
+  </div>
+
+  <!-- ── PLAYLISTS ──────────────────────────────────────────────────────── -->
+  <div class="panel" id="p-playlists">
+    <div id="playlists-msg"></div>
+
+    <div class="card" data-needs="schedule" hidden>
+      <div class="ct">New playlist</div>
+      <div class="grid2">
+        <div class="field">
+          <label for="pl-name">Name</label>
+          <input type="text" id="pl-name" placeholder="Weekly announcements" maxlength="120">
+        </div>
+        <div class="field" style="align-self:end">
+          <button class="btn btn-primary" id="pl-create" data-default="Create">Create</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="ct">Playlists</div>
+      <div id="playlist-list" class="empty">Loading&hellip;</div>
+    </div>
+
+    <div class="card" id="playlist-editor" hidden>
+      <div class="ct" id="pe-title">Playlist</div>
+      <div id="pe-msg"></div>
+      <div id="pe-items" class="empty">No items yet.</div>
+
+      <div class="btn-row" data-needs="schedule" hidden>
+        <button class="btn btn-secondary" id="pe-add" data-default="Add media&hellip;">Add media&hellip;</button>
+      </div>
+
+      <div id="pe-picker" class="picker" hidden></div>
+
+      <details class="tuning">
+        <summary>How this playlist plays</summary>
+        <div class="grid2">
+          <div class="field">
+            <label for="pe-image-seconds">Seconds per photo</label>
+            <input type="number" id="pe-image-seconds" min="0" max="3600" placeholder="Use the app default">
+          </div>
+          <div class="field">
+            <label for="pe-slide-seconds">Seconds per slide</label>
+            <input type="number" id="pe-slide-seconds" min="0" max="3600" placeholder="Use the app default">
+          </div>
+        </div>
+        <div class="grid2">
+          <div class="field">
+            <label for="pe-fit">How media fills the screen</label>
+            <select id="pe-fit">
+              <option value="">Use the app default</option>
+              <option value="contain">Fit the whole thing on screen</option>
+              <option value="cover">Fill the screen, cropping the edges</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="pe-transition">Between items</label>
+            <select id="pe-transition">
+              <option value="">Use the app default</option>
+              <option value="fade">Crossfade</option>
+              <option value="none">Cut</option>
+            </select>
+          </div>
+        </div>
+        <div class="field">
+          <label for="pe-footer">Line along the bottom <span class="muted">(optional)</span></label>
+          <input type="text" id="pe-footer" maxlength="300" placeholder="Welcome to Grace Resurrection">
+        </div>
+        <label class="check"><input type="checkbox" id="pe-shuffle"> Shuffle the order</label>
+        <div class="btn-row">
+          <button class="btn btn-primary" id="pe-save" data-default="Save">Save</button>
+          <button class="btn btn-danger" id="pe-delete" data-default="Delete playlist" data-needs="manage" hidden>Delete playlist</button>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ── MEDIA ──────────────────────────────────────────────────────────── -->
+  <div class="panel" id="p-media">
+    <div id="media-msg"></div>
+
+    <div class="card" data-needs="upload" hidden>
+      <div class="ct">Add photos, videos or a PowerPoint</div>
+      <div class="drop" id="drop">
+        <p><strong>Drop files here</strong> or <button type="button" class="linkish" id="pick">choose files</button></p>
+        <p class="hint">
+          Photos (JPEG, PNG, HEIC&hellip;), videos (MP4, MOV, anything ffmpeg reads)
+          and presentations (PowerPoint, Keynote-exported, PDF). Each presentation
+          becomes one slide per page. Sound is always removed &mdash; this screen has none.
+        </p>
+      </div>
+      <input type="file" id="file" multiple hidden
+             accept="image/*,video/*,.pdf,.pptx,.ppt,.ppsx,.odp,.key">
+      <div id="upload-progress"></div>
+    </div>
+
+    <div class="card">
+      <div class="ct">Media library</div>
+      <div id="media-grid" class="empty">Loading&hellip;</div>
+    </div>
+  </div>
+
+  <!-- ── SCREENS ────────────────────────────────────────────────────────── -->
+  <div class="panel" id="p-screens">
+    <div id="screens-msg"></div>
+
+    <div class="card">
+      <div class="ct">Add a screen</div>
+      <div class="grid2">
+        <div class="field">
+          <label for="sc-name">Name</label>
+          <input type="text" id="sc-name" placeholder="Narthex" maxlength="80">
+        </div>
+        <div class="field">
+          <label for="sc-rotation">Rotation</label>
+          <select id="sc-rotation">
+            <option value="0">Normal (landscape)</option>
+            <option value="90">Rotated 90&deg;</option>
+            <option value="180">Upside down</option>
+            <option value="270">Rotated 270&deg;</option>
+          </select>
+        </div>
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-primary" id="sc-create" data-default="Add screen">Add screen</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="ct">Screens</div>
+      <div id="screen-list" class="empty">Loading&hellip;</div>
+      <div class="hint" style="margin-top:14px">
+        Open a screen's link on the Mac that drives the TV, full screen. Anyone
+        with the link can see what the TV shows, so keep it off a public page &mdash;
+        reissue it if it gets out.
+      </div>
+    </div>
+  </div>
+
+  <!-- ── SETTINGS ───────────────────────────────────────────────────────── -->
+  <div class="panel" id="p-settings">
+    <div id="settings-msg"></div>
+
+    <div class="card">
+      <div class="ct">How the screen behaves</div>
+      <div class="grid2">
+        <div class="field">
+          <label for="set-timezone">Timezone</label>
+          <input type="text" id="set-timezone" placeholder="America/Chicago">
+          <div class="hint">Recurring schedules are written in this zone.</div>
+        </div>
+        <div class="field">
+          <label for="set-default-playlist">When nothing is scheduled, play</label>
+          <select id="set-default-playlist"></select>
+        </div>
+      </div>
+      <div class="grid2">
+        <div class="field">
+          <label for="set-image-seconds">Seconds per photo</label>
+          <input type="number" id="set-image-seconds" min="1" max="3600">
+        </div>
+        <div class="field">
+          <label for="set-slide-seconds">Seconds per slide</label>
+          <input type="number" id="set-slide-seconds" min="1" max="3600">
+        </div>
+      </div>
+      <div class="grid2">
+        <div class="field">
+          <label for="set-fit">How media fills the screen</label>
+          <select id="set-fit">
+            <option value="contain">Fit the whole thing on screen</option>
+            <option value="cover">Fill the screen, cropping the edges</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="set-transition">Between items</label>
+          <select id="set-transition">
+            <option value="fade">Crossfade</option>
+            <option value="none">Cut</option>
+          </select>
+        </div>
+      </div>
+      <div class="grid2">
+        <div class="field">
+          <label for="set-transition-ms">Crossfade length (ms)</label>
+          <input type="number" id="set-transition-ms" min="0" max="5000" step="50">
+        </div>
+        <div class="field">
+          <label for="set-background">Background colour</label>
+          <input type="color" id="set-background">
+          <div class="hint">Shown around anything that doesn't fill the screen.</div>
+        </div>
+      </div>
+      <div class="grid2">
+        <div class="field">
+          <label for="set-clock">Clock</label>
+          <select id="set-clock">
+            <option value="off">Don't show one</option>
+            <option value="time">Time</option>
+            <option value="time_date">Time and date</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="set-clock-position">Clock corner</label>
+          <select id="set-clock-position">
+            <option value="bottom-right">Bottom right</option>
+            <option value="bottom-left">Bottom left</option>
+            <option value="top-right">Top right</option>
+            <option value="top-left">Top left</option>
+          </select>
+        </div>
+      </div>
+      <div class="field">
+        <label for="set-footer">Line along the bottom <span class="muted">(optional)</span></label>
+        <input type="text" id="set-footer" maxlength="300">
+      </div>
+      <div class="field">
+        <label for="set-idle">Shown when nothing at all is scheduled</label>
+        <input type="text" id="set-idle" maxlength="300" placeholder="Leave empty for a plain background">
+      </div>
+      <div class="grid2">
+        <div class="field">
+          <label for="set-poll">How often the TV checks in (seconds)</label>
+          <input type="number" id="set-poll" min="3" max="600">
+        </div>
+        <div class="field" style="align-self:end">
+          <label class="check"><input type="checkbox" id="set-loop"> Loop a playlist that holds a single video</label>
+        </div>
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-primary" id="set-save" data-default="Save settings" data-needs="admin" hidden>Save settings</button>
+      </div>
+      <div class="hint" id="set-readonly" hidden>
+        Only a Narthex TV administrator can change these.
+      </div>
+    </div>
+
+    <div class="card" data-needs="admin" hidden>
+      <div class="ct">When the screen is on</div>
+      <div class="field">
+        <label for="hours-mode">Operating hours</label>
+        <select id="hours-mode">
+          <option value="always">Always on &mdash; the screen never goes dark</option>
+          <option value="scheduled">Only during the hours below</option>
+        </select>
+        <div class="hint">
+          Outside these hours the screen shows nothing at all &mdash; true black, with
+          the video torn down rather than hidden. That alone costs nothing and works
+          with any television. Actually cutting the panel's power is the card below.
+        </div>
+      </div>
+
+      <div id="hours-state"></div>
+
+      <div id="hours-box" hidden>
+        <div id="hours-list" class="empty">No hours set yet.</div>
+        <div class="row3">
+          <div class="field">
+            <label for="hr-day">Day</label>
+            <select id="hr-day"></select>
+          </div>
+          <div class="field">
+            <label for="hr-from">From</label>
+            <input type="time" id="hr-from" value="08:00">
+          </div>
+          <div class="field">
+            <label for="hr-to">Until</label>
+            <input type="time" id="hr-to" value="17:00">
+          </div>
+        </div>
+        <div class="btn-row">
+          <button class="btn btn-secondary" id="hr-add" data-default="Add these hours">Add these hours</button>
+          <button class="btn btn-secondary" id="hr-seed" data-default="Fill in a typical week">Fill in a typical week</button>
+        </div>
+        <div class="hint">
+          Times are wall-clock in <strong id="hours-tz">the app timezone</strong> and follow
+          daylight saving. Add more than one row for a day to cover a morning and an
+          evening; rows that touch or overlap are treated as one stretch, so the
+          screen never blinks off between them. An <em>Until</em> earlier than
+          <em>From</em> means the window runs past midnight.
+        </div>
+      </div>
+    </div>
+
+    <div class="card" data-needs="admin" hidden>
+      <div class="ct">Turning the TV on and off</div>
+      <p class="muted" style="font-size:13px;margin:0 0 14px">
+        Optional, and separate from blanking the picture. At each boundary above,
+        the server can send one request on your network &mdash; to the television, a
+        smart plug, or a hub. Leave both at <em>Nothing</em> and the screen simply
+        goes black on time, which is the safe default.
+      </p>
+      <div id="power-on" class="power-editor"></div>
+      <div id="power-off" class="power-editor"></div>
+      <div class="btn-row">
+        <button class="btn btn-primary" id="power-save" data-default="Save power actions">Save power actions</button>
+        <button class="btn btn-secondary" id="power-test-on" data-default="Test turn on">Test turn on</button>
+        <button class="btn btn-secondary" id="power-test-off" data-default="Test turn off">Test turn off</button>
+      </div>
+      <div id="power-events"></div>
+      <div class="hint" style="margin-top:12px" id="power-hint"></div>
+    </div>
+
+    <div class="card" data-needs="admin" hidden>
+      <div class="ct">Who can do what</div>
+      <div class="grid2">
+        <div class="field">
+          <label for="perm-email">Add someone</label>
+          <select id="perm-email"></select>
+        </div>
+        <div class="field" style="align-self:end">
+          <button class="btn btn-secondary" id="perm-add" data-default="Add">Add</button>
+        </div>
+      </div>
+      <div id="perm-table" class="empty">Loading&hellip;</div>
+      <div class="hint" style="margin-top:12px">
+        <strong>Upload</strong> adds media. <strong>Schedule</strong> builds playlists
+        and puts them on the screen (and can upload). <strong>Manage</strong> edits
+        anyone's media and manages screens. <strong>Admin</strong> is this screen and
+        the settings above &mdash; nothing else.
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/assets/grmc-nav.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

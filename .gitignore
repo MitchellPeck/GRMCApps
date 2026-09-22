@@ -21,3 +21,7 @@ dist/
 
 # Generated: shared UI synced into served dirs (source of truth is shared/ui/)
 **/src/public/assets/
+
+# python bytecode
+__pycache__/
+*.pyc

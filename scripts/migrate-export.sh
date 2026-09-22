@@ -69,7 +69,7 @@ purge() {
 
   echo "This permanently deletes from THIS Mac ($(hostname)):"
   echo "  - every GRMCApps container and image"
-  echo "  - every ${PROJECT}_* volume — pgdata, minutesdata, letsencrypt, whisperdata (ALL app data)"
+  echo "  - every ${PROJECT}_* volume — pgdata, minutesdata, narthextvdata, letsencrypt, whisperdata (ALL app data)"
   echo "  - .env and secrets/ (tunnel credentials, GHCR token), and the docker CLI's GHCR login"
   echo "  - the auto-deploy launchd agent"
   for b in "${bundles[@]}"; do echo "  - the migration bundle $b"; done

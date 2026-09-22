@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Keeps the narthex playout running on the Mac with the UltraStudio attached.
+
+  Install:
+    1. Edit ProgramArguments below: the real path to playout.py, and the real
+       player URL from Narthex TV -> Screens -> Copy link.
+    2. Confirm the device name matches what ffmpeg reports:
+         ffmpegdecklink -sinks decklink
+    3. cp com.grmc.narthextv-playout.plist ~/Library/LaunchAgents/
+       launchctl load -w ~/Library/LaunchAgents/com.grmc.narthextv-playout.plist
+
+  Stop it with:
+    launchctl unload -w ~/Library/LaunchAgents/com.grmc.narthextv-playout.plist
+
+  A LaunchAgent rather than a LaunchDaemon: Blackmagic's Desktop Video driver
+  is reached through a logged-in user session. Set the Mac to log that account
+  in automatically so a power cut ends with the screen back up.
+
+  Unlike a browser kiosk this needs no display of its own and draws nothing on
+  screen, so the Mac can be headless and the account can stay locked.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.grmc.narthextv-playout</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/python3</string>
+    <string>/Users/CHANGEME/GRMCApps/scripts/narthex-tv/playout.py</string>
+    <string>--url</string>
+    <string>https://tv.grmc.app/player?t=CHANGEME</string>
+    <string>--device</string>
+    <string>UltraStudio Monitor 3G</string>
+    <string>--mode</string>
+    <string>1920x1080@30</string>
+    <string>--ffmpeg</string>
+    <string>/opt/homebrew/bin/ffmpegdecklink</string>
+  </array>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- If it exits for any reason, bring it straight back. The throttle stops a
+       fast crash loop (a device that is unplugged, say) from spinning. -->
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>15</integer>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/narthex-playout.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/narthex-playout.err.log</string>
+</dict>
+</plist>

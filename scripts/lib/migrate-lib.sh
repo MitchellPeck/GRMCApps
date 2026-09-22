@@ -11,10 +11,12 @@
 # suspended inside `if`/`||` contexts anyway).
 
 # Named volumes declared in docker-compose.yml (short names; the real volume is
-# <project>_<name>). pgdata + minutesdata are the irreplaceable data;
-# letsencrypt + whisperdata are regenerable but cheap to carry.
+# <project>_<name>). pgdata, minutesdata and narthextvdata are the
+# irreplaceable data (every app's database, meeting recordings, and the narthex
+# TV's media — uploads that exist nowhere else); letsencrypt + whisperdata are
+# regenerable but cheap to carry.
 # shellcheck disable=SC2034  # consumed by the scripts that source this file
-MIGRATE_VOLUMES=(pgdata minutesdata letsencrypt whisperdata)
+MIGRATE_VOLUMES=(pgdata minutesdata narthextvdata letsencrypt whisperdata)
 
 # Host-only files (gitignored, or — for cloudflared/config.yml — git-tracked but
 # locally edited to hold the real tunnel UUID). Paths relative to the repo root.

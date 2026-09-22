@@ -1,0 +1,140 @@
+/* The player is deliberately standalone: it does not load the shared GRMC
+   stylesheet or the apps switcher. Nothing on this page is interactive, and
+   nothing on it should ever be able to reflow the picture. */
+:root {
+  --bg: #092D3E;
+  --transition-ms: 600ms;
+  --font-ui: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-display: "Playfair Display", Georgia, serif;
+}
+
+@font-face {
+  font-family: "Inter"; font-style: normal; font-weight: 500; font-display: swap;
+  src: url("/assets/fonts/inter-500.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Playfair Display"; font-style: normal; font-weight: 600; font-display: swap;
+  src: url("/assets/fonts/playfair-600.woff2") format("woff2");
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  width: 100%; height: 100%;
+  background: var(--bg);
+  overflow: hidden;
+  /* A TV is not a touchscreen and has no mouse; hiding the cursor keeps a
+     stray pointer from sitting in the middle of the announcements forever. */
+  cursor: none;
+  font-family: var(--font-ui);
+  color: #fff;
+  -webkit-font-smoothing: antialiased;
+}
+
+#stage {
+  position: fixed;
+  top: 0; right: 0; bottom: 0; left: 0;
+  background: var(--bg);
+  transform-origin: center center;
+}
+
+.layer {
+  position: absolute;
+  top: 0; right: 0; bottom: 0; left: 0;
+  opacity: 0;
+  transition: opacity var(--transition-ms) ease-in-out;
+  will-change: opacity;
+}
+.layer.visible { opacity: 1; }
+#stage.no-transition .layer { transition: none; }
+
+.layer img, .layer video {
+  position: absolute;
+  top: 0; right: 0; bottom: 0; left: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  background: var(--bg);
+}
+.layer .fit-contain { object-fit: contain; }
+.layer .fit-cover   { object-fit: cover; }
+
+/* ── overlays ─────────────────────────────────────────────────────────────── */
+.chrome {
+  position: absolute;
+  z-index: 10;
+  font-size: 2.1vh;
+  line-height: 1.35;
+  letter-spacing: .01em;
+  color: rgba(255, 255, 255, .92);
+  text-shadow: 0 1px 6px rgba(0, 0, 0, .65);
+  pointer-events: none;
+}
+
+#clock { text-align: right; }
+#clock-time { font-size: 3.4vh; font-weight: 500; }
+#clock-date { font-size: 1.9vh; color: rgba(255, 255, 255, .78); }
+#clock.pos-top-left     { top: 3vh; left: 3vw; text-align: left; }
+#clock.pos-top-right    { top: 3vh; right: 3vw; }
+#clock.pos-bottom-left  { bottom: 6vh; left: 3vw; text-align: left; }
+#clock.pos-bottom-right { bottom: 6vh; right: 3vw; }
+
+#footer {
+  left: 0; right: 0; bottom: 0;
+  padding: 1.6vh 3vw;
+  background: linear-gradient(to top, rgba(9, 45, 62, .82), rgba(9, 45, 62, 0));
+  font-size: 2.3vh;
+  text-align: center;
+}
+
+/* Only ever shown when the screen has lost the server, so it is small and
+   unobtrusive — the announcements keep playing behind it. */
+#status {
+  top: 2vh; left: 2vw;
+  font-size: 1.5vh;
+  background: rgba(0, 0, 0, .45);
+  border-radius: 4px;
+  padding: .5vh 1vw;
+  color: #F09595;
+}
+
+.overlay-center {
+  position: absolute;
+  top: 0; right: 0; bottom: 0; left: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  /* flexbox `gap` is Chromium 84+; the margin below is what actually spaces
+     these on an older TV browser. */
+  gap: 3vh;
+  background: var(--bg);
+  text-align: center;
+  padding: 0 10vw;
+}
+.idle-mark {
+  width: 11vh; height: 11vh;
+  border-radius: 50%;
+  border: .35vh solid #D3B02B;
+  color: #D3B02B;
+  font-family: var(--font-display);
+  font-size: 5.5vh;
+  display: flex; align-items: center; justify-content: center;
+}
+#idle-text {
+  margin-top: 3vh;
+  font-size: 3vh;
+  color: rgba(255, 255, 255, .78);
+  max-width: 60ch;
+}
+
+/* Outside the narthex's opening hours. True black, above everything, and the
+   player tears down the <img>/<video> behind it so the panel is not decoding
+   frames nobody is there to watch. */
+#blackout {
+  position: absolute;
+  top: 0; right: 0; bottom: 0; left: 0;
+  z-index: 50;
+  background: #000;
+}
