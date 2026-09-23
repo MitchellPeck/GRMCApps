@@ -5,9 +5,21 @@ import { getPlaylist, listItems, PlaylistRow } from "./playlists";
 import { AppSettings, getDefaultPlaylistId, loadSettings } from "./settings";
 import { buildFrames, Plan, PlanItem, planRevision } from "./plan";
 import { resolvePower } from "./power";
+import { localDateKey } from "./tz";
 import { listWindows } from "./hours";
 
 export type PlanSource = "schedule" | "default" | "none";
+
+// pg hands back a `date` column as a Date at LOCAL midnight, so the key has to
+// come from its local parts rather than toISOString(), which would shift it a
+// day west of Greenwich.
+function dateKey(value: Date | string | null | undefined): string | null {
+  if (!value) return null;
+  if (typeof value === "string") return value.slice(0, 10);
+  return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(
+    value.getDate()
+  ).padStart(2, "0")}`;
+}
 
 export interface NowPlaying {
   resolution: Resolution;
@@ -75,6 +87,8 @@ export async function buildPlan(
         seconds: Number(row.seconds ?? 0),
         fit: row.fit ?? "",
         enabled: row.enabled,
+        showFrom: dateKey(row.show_from),
+        showUntil: dateKey(row.show_until),
       }))
     : [];
 
@@ -98,7 +112,8 @@ export async function buildPlan(
           shuffle: playlist.shuffle,
         },
         settings,
-        seed
+        seed,
+        localDateKey(opts.at, settings.timezone)
       )
     : [];
 

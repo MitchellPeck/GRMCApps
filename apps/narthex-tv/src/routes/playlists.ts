@@ -20,6 +20,14 @@ const seconds = (value: unknown): number | undefined => {
   return Math.min(3600, Math.max(0, Math.round(n)));
 };
 
+// '' clears the bound, a valid date sets it, anything else is ignored.
+const dateBound = (value: unknown): string | null | undefined => {
+  if (value === undefined) return undefined;
+  if (value === null || value === "") return null;
+  const v = String(value).trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : undefined;
+};
+
 const inheritable = (value: unknown, allowed: string[]): string | undefined => {
   if (value === undefined || value === null) return undefined;
   const v = String(value);
@@ -53,6 +61,12 @@ function itemView(row: PlaylistItemRow) {
     fit: row.fit,
     enabled: row.enabled,
     note: row.note,
+    showFrom: row.show_from instanceof Date
+      ? `${row.show_from.getFullYear()}-${String(row.show_from.getMonth() + 1).padStart(2, "0")}-${String(row.show_from.getDate()).padStart(2, "0")}`
+      : (row.show_from ?? null),
+    showUntil: row.show_until instanceof Date
+      ? `${row.show_until.getFullYear()}-${String(row.show_until.getMonth() + 1).padStart(2, "0")}-${String(row.show_until.getDate()).padStart(2, "0")}`
+      : (row.show_until ?? null),
     kind: row.kind,
     title: row.title,
     status: row.status,
@@ -161,6 +175,8 @@ export async function playlistRoutes(app: FastifyInstance): Promise<void> {
       fit: inheritable(b.fit, ["contain", "cover"]),
       enabled: typeof b.enabled === "boolean" ? b.enabled : undefined,
       note: typeof b.note === "string" ? b.note : undefined,
+      showFrom: dateBound(b.showFrom),
+      showUntil: dateBound(b.showUntil),
     });
     return { ok: true, items: (await listItems(pool, intParam(params.id))).map(itemView) };
   });

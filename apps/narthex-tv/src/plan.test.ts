@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildFrames, planRevision, PlanItem, PlaylistDefaults } from "./plan";
+import { buildFrames, itemAiring, planRevision, PlanItem, PlaylistDefaults } from "./plan";
 import { DEFAULT_SETTINGS } from "./settings";
 
 const playlist: PlaylistDefaults = {
@@ -9,12 +9,18 @@ const playlist: PlaylistDefaults = {
 };
 
 function item(
-  over: { seconds?: number; fit?: string; enabled?: boolean; media?: Partial<PlanItem["media"]> } = {}
+  over: {
+    seconds?: number; fit?: string; enabled?: boolean;
+    showFrom?: string | null; showUntil?: string | null;
+    media?: Partial<PlanItem["media"]>;
+  } = {}
 ): PlanItem {
   return {
     seconds: over.seconds ?? 0,
     fit: over.fit ?? "",
     enabled: over.enabled ?? true,
+    showFrom: over.showFrom ?? null,
+    showUntil: over.showUntil ?? null,
     media: {
       id: 1, kind: "image", title: "Item", status: "ready", pageCount: 0, durationMs: null,
       ...(over.media ?? {}),
@@ -127,4 +133,44 @@ test("the revision changes when anything the screen renders changes", () => {
     planRevision({ ...base, power: { on: true, changesAt: "2026-01-11T14:00:00.000Z" } }),
     first
   );
+});
+
+// ── date windows on an item ─────────────────────────────────────────────────
+
+test("an item outside its date window is not on the screen", () => {
+  const items = [
+    item({ media: { id: 1 } }),                                   // always
+    item({ showUntil: "2026-10-27", media: { id: 2 } }),          // retires
+    item({ showFrom: "2026-11-30", media: { id: 3 } }),           // not yet
+    item({ showFrom: "2026-10-01", showUntil: "2026-10-31", media: { id: 4 } }),
+  ];
+  const on = (today: string) =>
+    buildFrames(items, playlist, DEFAULT_SETTINGS, 0, today).map((f) => f.mediaId);
+
+  assert.deepEqual(on("2026-10-15"), [1, 2, 4]);
+  // The bounds are INCLUSIVE at both ends.
+  assert.deepEqual(on("2026-10-27"), [1, 2, 4]);
+  // 2 has expired; 4 is still inside its own window, which runs to the 31st.
+  assert.deepEqual(on("2026-10-28"), [1, 4]);
+  assert.deepEqual(on("2026-10-01"), [1, 2, 4]);
+  assert.deepEqual(on("2026-11-30"), [1, 3]);
+});
+
+test("with no date given, every item airs — the window is opt-in", () => {
+  const items = [item({ showUntil: "2020-01-01", media: { id: 9 } })];
+  assert.deepEqual(buildFrames(items, playlist, DEFAULT_SETTINGS).map((f) => f.mediaId), [9]);
+});
+
+test("itemAiring is inclusive at both ends and ignores absent bounds", () => {
+  const bounded = item({ showFrom: "2026-10-01", showUntil: "2026-10-31", media: {} });
+  assert.equal(itemAiring(bounded, "2026-09-30"), false);
+  assert.equal(itemAiring(bounded, "2026-10-01"), true);
+  assert.equal(itemAiring(bounded, "2026-10-31"), true);
+  assert.equal(itemAiring(bounded, "2026-11-01"), false);
+  assert.equal(itemAiring(item({ media: {} }), "1999-01-01"), true);
+});
+
+test("an expired item drops out of the plan entirely rather than showing blank", () => {
+  const items = [item({ showUntil: "2026-01-01", media: { id: 1 } })];
+  assert.deepEqual(buildFrames(items, playlist, DEFAULT_SETTINGS, 0, "2026-10-15"), []);
 });

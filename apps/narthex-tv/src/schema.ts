@@ -80,6 +80,12 @@ CREATE TABLE IF NOT EXISTS playlist_items (
 );
 CREATE INDEX IF NOT EXISTS playlist_items_playlist_idx ON playlist_items (playlist_id, idx);
 
+-- An item can retire itself. Without this a notice stays up until somebody
+-- remembers to take it down, which is how a narthex screen slowly fills with
+-- last month's news. Dates are inclusive and read in the app's timezone.
+ALTER TABLE playlist_items ADD COLUMN IF NOT EXISTS show_from  date;
+ALTER TABLE playlist_items ADD COLUMN IF NOT EXISTS show_until date;
+
 -- The two modes the narthex staff asked for, plus a recurring one for the
 -- weekly Sunday slot:
 --   window     - starts_at .. ends_at, then it is over

@@ -20,6 +20,22 @@ export interface PlanItem {
   /** Per-item override. '' = fall back. */
   fit: string;
   enabled: boolean;
+  /** Inclusive 'YYYY-MM-DD' bounds. null = no bound at that end. */
+  showFrom: string | null;
+  showUntil: string | null;
+}
+
+/**
+ * Is this item inside its own date window on the given local date?
+ *
+ * Compared as 'YYYY-MM-DD' strings, which sort lexicographically in the same
+ * order they sort chronologically — no timezone arithmetic, because the
+ * caller has already decided which local day it is.
+ */
+export function itemAiring(item: PlanItem, todayKey: string): boolean {
+  if (item.showFrom && todayKey < item.showFrom) return false;
+  if (item.showUntil && todayKey > item.showUntil) return false;
+  return true;
 }
 
 export interface PlaylistDefaults {
@@ -79,11 +95,18 @@ export function buildFrames(
   items: PlanItem[],
   playlist: PlaylistDefaults,
   settings: AppSettings,
-  seed = 0
+  seed = 0,
+  todayKey = ""
 ): Frame[] {
   // Anything still converting, or that failed to convert, is skipped rather
-  // than shown as a broken tile — the rest of the loop carries on.
-  const playable = items.filter((i) => i.enabled && i.media.status === "ready");
+  // than shown as a broken tile — the rest of the loop carries on. So is
+  // anything outside its own show-from/show-until window.
+  const playable = items.filter(
+    (i) =>
+      i.enabled &&
+      i.media.status === "ready" &&
+      (!todayKey || itemAiring(i, todayKey))
+  );
   const ordered = playlist.shuffle ? seededShuffle(playable, seed) : playable;
 
   const imageMs = (i: PlanItem) =>

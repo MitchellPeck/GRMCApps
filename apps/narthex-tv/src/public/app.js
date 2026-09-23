@@ -528,6 +528,38 @@
 
   var STATUS_TEXT = { pending: "converting…", processing: "converting…", failed: "failed" };
 
+  function todayKey() {
+    var d = new Date();
+    return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") +
+           "-" + String(d.getDate()).padStart(2, "0");
+  }
+
+  function daysBetween(a, b) {
+    return Math.round((Date.parse(b + "T00:00:00") - Date.parse(a + "T00:00:00")) / 86400000);
+  }
+
+  // What the date window means TODAY, said the way somebody scanning the list
+  // needs to hear it: not "show_until 2026-10-27" but "expires in 4 days".
+  function windowNote(item) {
+    var today = todayKey();
+    if (item.showFrom && today < item.showFrom) {
+      var until = daysBetween(today, item.showFrom);
+      return { text: "starts in " + until + " day" + (until === 1 ? "" : "s"), kind: "pill-info" };
+    }
+    if (item.showUntil && today > item.showUntil) {
+      return { text: "expired", kind: "pill-rejected" };
+    }
+    if (item.showUntil) {
+      var left = daysBetween(today, item.showUntil);
+      if (left === 0) return { text: "last day", kind: "pill-pending" };
+      return {
+        text: "expires in " + left + " day" + (left === 1 ? "" : "s"),
+        kind: left <= 3 ? "pill-pending" : "pill-ok"
+      };
+    }
+    return null;
+  }
+
   function itemMeta(item) {
     var bits = [];
     if (item.kind === "deck") bits.push(item.pageCount + " slide" + (item.pageCount === 1 ? "" : "s"));
@@ -549,7 +581,9 @@
     box.className = "";
 
     items.forEach(function (item, i) {
-      var row = el("div", "item-row" + (item.enabled ? "" : " is-off"));
+      var note = windowNote(item);
+      var offAir = Boolean(note && (note.text === "expired" || /^starts in/.test(note.text)));
+      var row = el("div", "item-row" + (item.enabled && !offAir ? "" : " is-off"));
 
       var shot = el("div", "item-shot");
       var img = el("img");
@@ -560,8 +594,16 @@
       row.appendChild(shot);
 
       var main = el("div", "item-main");
-      main.appendChild(el("div", "item-name", item.title));
+      var name = el("div", "item-name");
+      name.appendChild(document.createTextNode(item.title));
+      if (note) {
+        var pill = el("span", "pill " + note.kind, note.text);
+        pill.style.marginLeft = "8px";
+        name.appendChild(pill);
+      }
+      main.appendChild(name);
       main.appendChild(el("div", "item-meta", itemMeta(item)));
+      if (can("schedule")) main.appendChild(itemDates(item));
       row.appendChild(main);
 
       if (can("schedule")) {
@@ -609,6 +651,33 @@
       }
       box.appendChild(row);
     });
+  }
+
+  function itemDates(item) {
+    var wrap = el("div", "item-dates");
+    ["showFrom", "showUntil"].forEach(function (field) {
+      var label = el("label", null, field === "showFrom" ? "from" : "until");
+      var input = el("input");
+      input.type = "date";
+      input.value = item[field] || "";
+      input.title = field === "showFrom"
+        ? "Do not show this before this date. Leave empty to start immediately."
+        : "Stop showing this after this date. Leave empty to run indefinitely.";
+      input.addEventListener("change", async function () {
+        var body = {};
+        body[field] = input.value || null;
+        try {
+          var data = await api("PATCH",
+            "/api/playlists/" + openPlaylist.playlist.id + "/items/" + item.id, body);
+          openPlaylist.items = data.items;
+          renderItems();
+          loadNow();
+        } catch (e) { msg("pe-msg", e.message, "err"); }
+      });
+      label.appendChild(input);
+      wrap.appendChild(label);
+    });
+    return wrap;
   }
 
   async function move(index, delta) {

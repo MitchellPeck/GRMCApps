@@ -26,6 +26,8 @@ export interface PlaylistItemRow {
   fit: string;
   enabled: boolean;
   note: string;
+  show_from: Date | string | null;
+  show_until: Date | string | null;
   // joined from media
   kind: MediaKind;
   title: string;
@@ -113,6 +115,7 @@ export async function deletePlaylist(pool: Pool, id: number): Promise<boolean> {
 export async function listItems(pool: Pool, playlistId: number): Promise<PlaylistItemRow[]> {
   const r = await pool.query<PlaylistItemRow>(
     `SELECT i.id, i.playlist_id, i.media_id, i.idx, i.seconds, i.fit, i.enabled, i.note,
+            i.show_from, i.show_until,
             m.kind, m.title, m.status, m.page_count, m.duration_ms, m.file_name
        FROM playlist_items i JOIN media m ON m.id = i.media_id
       WHERE i.playlist_id = $1
@@ -149,17 +152,29 @@ export interface ItemPatch {
   fit?: string;
   enabled?: boolean;
   note?: string;
+  // undefined leaves the bound alone; null clears it.
+  showFrom?: string | null;
+  showUntil?: string | null;
 }
 
 export async function updateItem(pool: Pool, itemId: number, p: ItemPatch): Promise<void> {
   await pool.query(
     `UPDATE playlist_items SET
-       seconds = COALESCE($2, seconds),
-       fit     = COALESCE($3, fit),
-       enabled = COALESCE($4, enabled),
-       note    = COALESCE($5, note)
+       seconds    = COALESCE($2, seconds),
+       fit        = COALESCE($3, fit),
+       enabled    = COALESCE($4, enabled),
+       note       = COALESCE($5, note),
+       -- The date bounds need an explicit "was this sent?" flag, because
+       -- COALESCE cannot tell "clear this" from "leave it alone".
+       show_from  = CASE WHEN $6::boolean THEN $7::date ELSE show_from END,
+       show_until = CASE WHEN $8::boolean THEN $9::date ELSE show_until END
      WHERE id = $1`,
-    [itemId, p.seconds ?? null, p.fit ?? null, p.enabled ?? null, p.note?.slice(0, 300) ?? null]
+    [
+      itemId, p.seconds ?? null, p.fit ?? null, p.enabled ?? null,
+      p.note?.slice(0, 300) ?? null,
+      p.showFrom !== undefined, p.showFrom ?? null,
+      p.showUntil !== undefined, p.showUntil ?? null,
+    ]
   );
 }
 
