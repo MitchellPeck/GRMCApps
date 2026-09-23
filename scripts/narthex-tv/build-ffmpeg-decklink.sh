@@ -344,8 +344,33 @@ BIN="$PREFIX/bin/ffmpeg-decklink"
 echo
 echo "Installed: $BIN"
 echo
-echo "Check the card is visible:"
-echo "    $BIN -sinks decklink"
+
+# The SDK we just built against is headers only. Talking to the hardware needs
+# Blackmagic's Desktop Video DRIVER, which is a separate download, and without
+# it the first thing anyone tries fails with "Could not create DeckLink
+# iterator" — which does not obviously mean "install the driver".
+if ! "$BIN" -hide_banner -sinks decklink >/dev/null 2>&1; then
+  cat <<MSG
+The card is not reachable yet. Most likely the Desktop Video DRIVER is not
+installed - that is a separate download from the SDK, which was only headers:
+
+    https://www.blackmagicdesign.com/support   (search "Desktop Video")
+
+After installing it you must also approve the system extension in
+System Settings > Privacy & Security, then reboot. "Blackmagic Desktop Video
+Setup" should then list the device.
+
+Note this build requires the driver to be ${PRETTY:-12.x} or newer, since that
+is the SDK it was compiled against.
+
+Then check again with:
+    $BIN -sinks decklink
+MSG
+else
+  echo "The card is visible:"
+  "$BIN" -hide_banner -sinks decklink 2>&1 | sed 's/^/    /'
+fi
+
 echo
 echo "Then point playout.py at it:"
 echo "    ./playout.py --url '<player link>' --ffmpeg '$BIN'"
