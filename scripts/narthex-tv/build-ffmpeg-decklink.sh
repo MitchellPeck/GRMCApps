@@ -25,9 +25,13 @@
 #   1. Download a 12.x "Blackmagic DeckLink SDK" from
 #        https://www.blackmagicdesign.com/support
 #      (search "Desktop Video SDK"; the download is behind a name/email form,
-#      so it cannot be scripted). Unzip it anywhere.
+#      so it cannot be scripted).
 #
-#   2. ./build-ffmpeg-decklink.sh ~/Downloads/Blackmagic_DeckLink_SDK_12.4.2
+#   2. Point this at the .zip, or at the folder if you already unpacked it:
+#        ./build-ffmpeg-decklink.sh ~/Downloads/Blackmagic_DeckLink_SDK_12.9.zip
+#        ./build-ffmpeg-decklink.sh "~/Downloads/Blackmagic DeckLink SDK 12.9"
+#      Note the folder INSIDE the zip is named differently from the zip, and
+#      has spaces in it — which is why the zip is the easier thing to pass.
 #
 # Installs to ~/.local/bin/ffmpeg-decklink unless PREFIX says otherwise.
 set -euo pipefail
@@ -53,6 +57,25 @@ if [[ $# -gt 1 && -d "$*" ]]; then
   echo >&2
 fi
 
+# Blackmagic ships a .zip, and the folder inside it is named differently from
+# the zip itself — Blackmagic_DeckLink_SDK_12.9.zip unpacks to "Blackmagic
+# DeckLink SDK 12.9", spaces and all. Take either, so nobody has to know that.
+SDK_ZIP=""
+if [[ -f "$SDK_ROOT" ]]; then
+  SDK_ZIP="$SDK_ROOT"
+elif [[ ! -d "$SDK_ROOT" && -f "${SDK_ROOT%.zip}.zip" ]]; then
+  # They named the zip without its extension, which is what Finder shows.
+  SDK_ZIP="${SDK_ROOT%.zip}.zip"
+fi
+if [[ -n "$SDK_ZIP" ]]; then
+  command -v unzip >/dev/null || { echo "unzip is needed to read $SDK_ZIP" >&2; exit 69; }
+  echo "Unpacking ${SDK_ZIP}..."
+  rm -rf "$WORK/sdk"
+  mkdir -p "$WORK/sdk"
+  unzip -q "$SDK_ZIP" -d "$WORK/sdk"
+  SDK_ROOT="$WORK/sdk"
+fi
+
 if [[ ! -d "$SDK_ROOT" ]]; then
   {
     echo "No such folder: $SDK_ROOT"
@@ -60,8 +83,9 @@ if [[ ! -d "$SDK_ROOT" ]]; then
     echo "If the path has spaces in it, quote it:"
     echo "    $0 \"\$HOME/Downloads/Blackmagic DeckLink SDK 12.9\""
     echo
-    echo "Unzipped SDKs I can see:"
-    find "$HOME/Downloads" "$HOME/Desktop" -maxdepth 2 -type d -iname '*decklink*' 2>/dev/null \
+    echo "DeckLink SDKs I can see (a .zip is fine, no need to unpack it):"
+    find "$HOME/Downloads" "$HOME/Desktop" -maxdepth 2 \
+         \( -type d -o -iname '*.zip' \) -iname '*decklink*' 2>/dev/null \
       | sed 's/^/    /' || true
   } >&2
   exit 66
@@ -75,9 +99,22 @@ for candidate in "$SDK_ROOT/Mac/include" "$SDK_ROOT/include" "$SDK_ROOT"; do
   if [[ -f "$candidate/DeckLinkAPI.h" ]]; then INCLUDE="$candidate"; break; fi
 done
 if [[ -z "$INCLUDE" ]]; then
-  FOUND="$(find "$SDK_ROOT" -name DeckLinkAPI.h -print -quit 2>/dev/null || true)"
+  # Ask for Mac explicitly first. The SDK carries Mac, Linux and Win header
+  # sets side by side, and a bare find returns whichever the filesystem lists
+  # first — which really does come back Linux, and would build against the
+  # wrong platform's headers without ever saying so.
+  FOUND="$(find "$SDK_ROOT" -path '*/Mac/include/DeckLinkAPI.h' -print -quit 2>/dev/null || true)"
+  if [[ -z "$FOUND" ]]; then
+    FOUND="$(find "$SDK_ROOT" -name DeckLinkAPI.h -print -quit 2>/dev/null || true)"
+  fi
   [[ -n "$FOUND" ]] && INCLUDE="$(dirname "$FOUND")"
 fi
+case "$INCLUDE" in
+  */Linux/*|*/Win/*)
+    echo "Refusing to build against $INCLUDE - those are not the Mac headers." >&2
+    exit 66
+    ;;
+esac
 if [[ -z "$INCLUDE" ]]; then
   {
     echo "Found $SDK_ROOT, but there is no DeckLinkAPI.h anywhere under it."
@@ -108,7 +145,7 @@ if [[ -f "$VERSION_HEADER" ]]; then
     if (( API_NUM >= 0x0E000000 )); then
       cat >&2 <<MSG
 
-SDK $PRETTY is too new. FFmpeg's decklink capture code does not compile
+SDK ${PRETTY} is too new. FFmpeg's decklink capture code does not compile
 against 14.x or later — you will get exactly the failure this script exists
 to avoid:
 
@@ -122,7 +159,7 @@ headers need to be old.
 MSG
       exit 65
     elif (( API_NUM > 0x0C090000 )); then
-      echo "warning: SDK $PRETTY is newer than the 12.9 that is known to build;" >&2
+      echo "warning: SDK ${PRETTY} is newer than the 12.9 that is known to build;" >&2
       echo "         if it fails the same way, drop back to 12.4.2." >&2
     fi
   fi
@@ -141,7 +178,7 @@ mkdir -p "$WORK"
 cd "$WORK"
 
 if [[ ! -d FFmpeg ]]; then
-  echo "Fetching FFmpeg $FFMPEG_TAG…"
+  echo "Fetching FFmpeg ${FFMPEG_TAG}..."
   git clone --depth 1 --branch "$FFMPEG_TAG" https://github.com/FFmpeg/FFmpeg.git
 fi
 cd FFmpeg
@@ -149,7 +186,7 @@ cd FFmpeg
 # Stock FFmpeg with no external libraries is everything this needs: it DECODES
 # H.264, MJPEG and PNG natively, scales and pads natively, and writes rawvideo.
 # Nothing is encoded to a compressed format at playout, so no x264, no GPL.
-echo "Configuring…"
+echo "Configuring..."
 ./configure \
   --prefix="$PREFIX" \
   --enable-decklink \
@@ -160,7 +197,7 @@ echo "Configuring…"
   --disable-ffplay \
   --progs-suffix=-decklink
 
-echo "Building (this takes a while)…"
+echo "Building (this takes a while)..."
 make -j"$(sysctl -n hw.ncpu 2>/dev/null || nproc)"
 make install
 
