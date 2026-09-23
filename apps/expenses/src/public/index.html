@@ -61,13 +61,13 @@
         <div class="ct">Import from receipts</div>
         <div id="import-msg"></div>
         <p class="hint" style="margin:-6px 0 12px">
-          Add one or more receipt PDFs. Each is read separately for accuracy, and they run in
-          parallel. Receipts that are scans or images are handled too.
+          Add one or more receipts — PDFs or photos. Each is read separately for accuracy, and
+          they run in parallel. On a phone you can take a picture of the receipt directly.
         </p>
         <div class="btn-row" style="margin-top:0">
           <label class="btn btn-gold" style="cursor:pointer">
-            Add PDFs
-            <input type="file" id="f-receipts" accept="application/pdf" multiple hidden>
+            Upload files
+            <input type="file" id="f-receipts" accept="application/pdf,image/*" multiple hidden>
           </label>
           <button class="btn btn-primary" id="btn-extract" data-default="Extract &amp; fill form">Extract &amp; fill form</button>
           <button class="btn" id="btn-add-item">Add item manually</button>

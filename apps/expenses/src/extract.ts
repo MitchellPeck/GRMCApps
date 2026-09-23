@@ -59,8 +59,15 @@ This document has at least one purchased product line item somewhere in it — f
 Document: ${name}`;
 }
 
+// Image types the model reads directly. HEIC is not among them — the browser
+// re-encodes phone photos to JPEG before upload wherever it can decode them.
+export const IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"] as const;
+export type ImageType = (typeof IMAGE_TYPES)[number];
+export const EXTRACTABLE_TYPES = new Set<string>(["application/pdf", ...IMAGE_TYPES]);
+
 export interface UploadedDoc {
   name: string;
+  mimeType: string;
   buffer: Buffer;
 }
 
@@ -104,6 +111,20 @@ async function extractOne(
 ): Promise<DocResult> {
   const started = Date.now();
   try {
+    if (doc.mimeType !== "application/pdf") {
+      return await callExtraction(client, doc, "image", [
+        {
+          type: "image",
+          source: {
+            type: "base64",
+            media_type: doc.mimeType as ImageType,
+            data: doc.buffer.toString("base64"),
+          },
+        },
+        { type: "text", text: docPrompt(doc.name) },
+      ], log);
+    }
+
     const markdown = await toMarkdown(doc.buffer, doc.name, log);
 
     // Markdown when the page actually carries text; the original PDF when it
@@ -123,25 +144,7 @@ async function extractOne(
         ];
 
     const route = content.some((c) => c.type === "document") ? "pdf-fallback" : "markdown";
-    log.info({ doc: doc.name, route, bytes: doc.buffer.length }, "extraction call starting");
-
-    const callStarted = Date.now();
-    const res = await client.messages.parse({
-      model: MODEL,
-      max_tokens: 16000,
-      messages: [{ role: "user", content }],
-      output_config: { format: zodOutputFormat(DocSchema) },
-    });
-    log.info(
-      { doc: doc.name, route, ms: since(callStarted), usage: res.usage },
-      "extraction call returned"
-    );
-
-    if (!res.parsed_output) {
-      log.warn({ doc: doc.name, stopReason: res.stop_reason }, "extraction returned unparsable output");
-      return { doc: doc.name, ok: false };
-    }
-    return { doc: doc.name, ok: true, result: res.parsed_output };
+    return await callExtraction(client, doc, route, content, log);
   } catch (err) {
     // Logged, not swallowed. A bare `catch {}` here made every failure —
     // timeout, auth, rate limit, oversized document — indistinguishable from
@@ -152,6 +155,34 @@ async function extractOne(
     );
     return { doc: doc.name, ok: false };
   }
+}
+
+async function callExtraction(
+  client: Anthropic,
+  doc: UploadedDoc,
+  route: string,
+  content: Anthropic.ContentBlockParam[],
+  log: ExtractLog
+): Promise<DocResult> {
+  log.info({ doc: doc.name, route, bytes: doc.buffer.length }, "extraction call starting");
+
+  const callStarted = Date.now();
+  const res = await client.messages.parse({
+    model: MODEL,
+    max_tokens: 16000,
+    messages: [{ role: "user", content }],
+    output_config: { format: zodOutputFormat(DocSchema) },
+  });
+  log.info(
+    { doc: doc.name, route, ms: since(callStarted), usage: res.usage },
+    "extraction call returned"
+  );
+
+  if (!res.parsed_output) {
+    log.warn({ doc: doc.name, stopReason: res.stop_reason }, "extraction returned unparsable output");
+    return { doc: doc.name, ok: false };
+  }
+  return { doc: doc.name, ok: true, result: res.parsed_output };
 }
 
 function codeListText(tree: ChargeCodeNode[]): string {
