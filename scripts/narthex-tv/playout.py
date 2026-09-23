@@ -166,6 +166,27 @@ def plan_changed(old, new):
     return False, False
 
 
+def which_ffmpeg(name):
+    """
+    Resolve the ffmpeg to use, and say something useful if it is not there —
+    the alternative is a FileNotFoundError from deep inside the playback loop
+    once the card is already open.
+    """
+    path = os.path.expanduser(name)
+    if os.path.isabs(path) or path.startswith("."):
+        if not os.access(path, os.X_OK):
+            raise SystemExit(
+                f"No ffmpeg at {path}.\n"
+                "Build one with:  ./build-ffmpeg-decklink.sh <path to a 12.x DeckLink SDK>\n"
+                "or point --ffmpeg at an existing build with --enable-decklink."
+            )
+        return path
+    found = shutil.which(path)
+    if not found:
+        raise SystemExit(f"{name} is not on PATH. See build-ffmpeg-decklink.sh.")
+    return found
+
+
 # ── the running program ─────────────────────────────────────────────────────
 
 class Playout:
@@ -173,7 +194,7 @@ class Playout:
         self.origin, self.token = split_player_url(args.url)
         self.width, self.height, self.fps = parse_mode(args.mode)
         self.device = args.device
-        self.ffmpeg = args.ffmpeg
+        self.ffmpeg = which_ffmpeg(args.ffmpeg)
         self.cache_dir = os.path.expanduser(args.cache)
         self.background = args.background
         self.verbose = args.verbose
@@ -379,8 +400,9 @@ def main(argv=None):
                         help="exactly as `ffmpeg -sinks decklink` prints it")
     parser.add_argument("--mode", default="1920x1080@30",
                         help="must be a mode the device supports, e.g. 1920x1080@30")
-    parser.add_argument("--ffmpeg", default="ffmpegdecklink",
-                        help="the ffmpeg built with --enable-decklink")
+    parser.add_argument("--ffmpeg", default="~/.local/bin/ffmpeg-decklink",
+                        help="the ffmpeg built with --enable-decklink "
+                             "(build-ffmpeg-decklink.sh puts it here)")
     parser.add_argument("--cache", default="~/Library/Caches/GRMC/narthex-tv",
                         help="where fetched media is kept")
     parser.add_argument("--background", default="black",
@@ -388,7 +410,11 @@ def main(argv=None):
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args(argv)
 
-    playout = Playout(args)
+    try:
+        playout = Playout(args)
+    except ValueError as exc:
+        # A mistyped URL or mode is a typo, not a crash — say so in one line.
+        raise SystemExit(str(exc))
     signal.signal(signal.SIGTERM, playout.stop)
     signal.signal(signal.SIGINT, playout.stop)
     playout.run()
