@@ -33,6 +33,18 @@ app.register(settingsRoutes);
 app.register(playerRoutes);
 app.register(powerRoutes);
 
+// The TV runs unattended for months and reloads itself once a day. If it
+// caches its own HTML, CSS or JS, a fix can never reach it without somebody
+// walking over with a keyboard — so these always revalidate. Media under
+// /api/player/media keeps its long cache: those bytes never change, because a
+// new upload gets a new id.
+const ALWAYS_REVALIDATE = /^\/(player|player\.css|player\.js|index\.html|app\.css|app\.js)(\?|$)/;
+app.addHook("onSend", async (req, reply) => {
+  if (ALWAYS_REVALIDATE.test(req.raw.url ?? "")) {
+    reply.header("cache-control", "no-cache");
+  }
+});
+
 app.get("/healthz", async () => ({ ok: true, queue: queue.size() }));
 
 async function start(): Promise<void> {

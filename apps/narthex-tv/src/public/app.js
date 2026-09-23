@@ -251,7 +251,10 @@
     screens.forEach(function (screen) {
       box.appendChild(button(screen.name, "btn-sm", function () {
         $("preview-frame-wrap").hidden = false;
-        $("preview-frame").src = "/player?t=" + encodeURIComponent(screen.token);
+        // Cache-bust: a preview showing a stale player.css or player.js is
+        // worse than useless, because it misrepresents what the TV is doing.
+        $("preview-frame").src = "/player?t=" + encodeURIComponent(screen.token) +
+          "&v=" + Date.now();
       }));
     });
     box.appendChild(button("Stop preview", "btn-sm", function () {
