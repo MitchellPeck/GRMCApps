@@ -37,12 +37,47 @@ The Mac feeds the UltraStudio directly. No browser, no OBS, no GUI app, and
 nothing to log in to.
 
 ```sh
-brew tap amiaopensource/amiaos && brew install ffmpegdecklink
-ffmpegdecklink -sinks decklink          # confirm the device name
+# 1. Build ffmpeg with DeckLink output. NOT `brew install ffmpegdecklink` —
+#    see "Getting an ffmpeg that builds" below.
+./build-ffmpeg-decklink.sh ~/Downloads/Blackmagic_DeckLink_SDK_12.4.2
 
+# 2. Confirm the card is visible. Note -sinks, not -sources: it is an output.
+~/.local/bin/ffmpeg-decklink -sinks decklink
+
+# 3. Run it.
 ./playout.py --url 'https://tv.grmc.app/player?t=<token>' \
-             --device 'UltraStudio Monitor 3G' --mode 1920x1080@30
+             --device 'UltraStudio Monitor 3G' --mode 1920x1080@30 \
+             --ffmpeg ~/.local/bin/ffmpeg-decklink
 ```
+
+#### Getting an ffmpeg that builds
+
+`brew install amiaopensource/amiaos/ffmpegdecklink` **fails** as of September
+2026, with:
+
+```
+no member named 'GetBytes' in 'IDeckLinkVideoInputFrame'
+no member named 'SetVideoInputFrameMemoryAllocator' in 'IDeckLinkInput'
+```
+
+Blackmagic removed both after DeckLink SDK 12.4 — `GetBytes` moved to
+`IDeckLinkVideoBuffer`, the input allocator was deleted — and FFmpeg still
+calls them unguarded. Two things follow:
+
+- **A newer FFmpeg does not help.** Master has the same unguarded calls.
+- **Every one of those errors is in `decklink_dec.cpp`, the capture path**,
+  which this app never touches: we only ever output. But `--enable-decklink`
+  builds capture and playout together, so it takes the whole build down.
+
+So the SDK has to be an old one. `build-ffmpeg-decklink.sh` does the build
+given a 12.x SDK, and refuses up front if handed a 14.x or later rather than
+letting you find out fifteen minutes in. The SDK is needed only for headers at
+build time — the Desktop Video **driver** on the Mac stays current.
+
+Download a 12.x SDK (12.4.2 is known good) from
+<https://www.blackmagicdesign.com/support>, searching for *Desktop Video SDK*.
+The download sits behind a name/email form, which is the one step that cannot
+be scripted.
 
 **How it works, and why.** `ffmpeg -f decklink` *closes the device when its
 input ends*, so one ffmpeg per slide would drop the signal every few seconds
@@ -81,8 +116,8 @@ python3 -m unittest discover -s scripts/narthex-tv -p 'test_*.py'
 ```
 
 **Troubleshooting.** `--mode` must be a mode the device actually supports —
-`ffmpegdecklink -f decklink -list_formats 1 -i 'UltraStudio Monitor 3G'` lists
-them. The pixel format is always `uyvy422`; the audio rate is always 48 kHz. If
+`ffmpeg-decklink -f decklink -list_formats 1 -i 'UltraStudio Monitor 3G'`
+lists them. The pixel format is always `uyvy422`; the audio rate is always 48 kHz. If
 ffmpeg refuses the mode, add `-format_code` to the outer command in
 `start_outer()`. Run with `-v` to see every command it builds.
 
