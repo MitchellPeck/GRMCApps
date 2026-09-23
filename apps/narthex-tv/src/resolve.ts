@@ -114,7 +114,7 @@ export async function buildPlan(
     sourceKey: `${power.on ? "awake" : "dark"}:${source}:${resolution.entry?.id ?? 0}:${
       playlist?.id ?? 0
     }:${resolution.startedAt ? resolution.startedAt.toISOString() : ""}`,
-    playlistId: playlist?.id ?? null,
+    playlistId: playlist ? Number(playlist.id) : null,
     playlistName: playlist?.name ?? "",
     entryId: resolution.entry?.id ?? null,
     entryLabel: resolution.entry?.label ?? "",

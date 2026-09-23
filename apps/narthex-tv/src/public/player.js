@@ -36,6 +36,7 @@
   var clearStamp = 0;      // invalidates a pending "wipe the old layer" timer
   var lastHeartbeat = 0;
   var dark = false;          // outside the narthex's opening hours
+  var currentMs = null;      // how long the frame on screen gets, once it IS on screen
 
   var DEFAULT_POLL_MS = 10000;
   var RELOAD_AFTER_MS = 24 * 60 * 60 * 1000;  // shed any browser leak once a day
@@ -304,8 +305,24 @@
     // Belt and braces: show it anyway if neither load nor error ever fires.
     setTimeout(function () { if (layers[front] !== back) swap(back); }, 4000);
 
-    if (frame.ms !== null && frame.ms !== undefined) {
-      advanceTimer = setTimeout(advance, Math.max(500, frame.ms));
+    // The frame's time on screen is started by swap(), NOT here. Counting from
+    // the moment we begin loading means anything slower to arrive than its own
+    // duration is replaced before it is ever shown — and because the front
+    // layer never receives content, the screen stays on the background for
+    // ever. A one-second clip fetched over HTTPS does exactly that.
+    currentMs = (frame.ms === null || frame.ms === undefined)
+      ? null
+      : Math.max(500, frame.ms);
+
+    // A clip that never starts playing must not wedge the loop either: it has
+    // no duration to time out on and its "ended" will never fire.
+    if (frame.kind === "video" && currentMs === null) {
+      var myStamp = back.dataset.stamp;
+      var started = false;
+      el.addEventListener("playing", function () { started = true; }, { once: true });
+      setTimeout(function () {
+        if (!started && back.dataset.stamp === myStamp) advance();
+      }, 15000);
     }
     preloadNext();
   }
@@ -323,6 +340,10 @@
     back.classList.add("visible");
     frontEl.classList.remove("visible");
     front = 1 - front;
+
+    // It is on screen now, so now its time starts.
+    clearAdvance();
+    if (currentMs !== null) advanceTimer = setTimeout(advance, currentMs);
 
     // Free the old element only after the crossfade, and only if nothing has
     // been rendered into that layer since — the stamp is what tells us.
