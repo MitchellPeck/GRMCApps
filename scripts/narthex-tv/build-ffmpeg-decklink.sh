@@ -131,6 +131,29 @@ if [[ -z "$INCLUDE" ]]; then
 fi
 echo "SDK headers: $INCLUDE"
 
+# FFmpeg's configure WORD-SPLITS --extra-cflags when it builds compile
+# commands, so "-I/…/Blackmagic DeckLink SDK 12.9/Mac/include" arrives at
+# clang as four separate arguments and it complains about 'DeckLink' and 'SDK'
+# not existing. No quoting on this side survives that, so copy the headers
+# somewhere without spaces and point at the copy.
+case "$WORK" in
+  *" "*)
+    echo "The build directory must not contain spaces: $WORK" >&2
+    echo "Set WORK=/some/path/without/spaces and try again." >&2
+    exit 78
+    ;;
+esac
+if [[ "$INCLUDE" == *" "* ]]; then
+  STAGED="${WORK}/sdk-include"
+  rm -rf "$STAGED"
+  mkdir -p "$STAGED"
+  cp -R "$INCLUDE/." "$STAGED/"
+  INCLUDE="$STAGED"
+  echo "staged to:   $INCLUDE  (the original path has spaces in it)"
+fi
+
+mkdir -p "$WORK"
+
 # ── refuse an SDK that is already known not to compile ──────────────────────
 # Far better to say so now than fifteen minutes into a build.
 VERSION_HEADER="$INCLUDE/DeckLinkAPIVersion.h"
