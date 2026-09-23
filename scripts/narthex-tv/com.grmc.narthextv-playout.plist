@@ -5,8 +5,10 @@
   Install:
     1. Edit ProgramArguments below: the real path to playout.py, and the real
        player URL from Narthex TV -> Screens -> Copy link.
-    2. Confirm the device name matches what ffmpeg reports:
-         ffmpegdecklink -sinks decklink
+    2. Build ffmpeg first — Homebrew's ffmpegdecklink does not compile against
+       a current DeckLink SDK (see build-ffmpeg-decklink.sh), then confirm the
+       device name matches what it reports:
+         ~/.local/bin/ffmpeg-decklink -sinks decklink
     3. cp com.grmc.narthextv-playout.plist ~/Library/LaunchAgents/
        launchctl load -w ~/Library/LaunchAgents/com.grmc.narthextv-playout.plist
 
@@ -36,7 +38,7 @@
     <string>--mode</string>
     <string>1920x1080@30</string>
     <string>--ffmpeg</string>
-    <string>/opt/homebrew/bin/ffmpegdecklink</string>
+    <string>/Users/CHANGEME/.local/bin/ffmpeg-decklink</string>
   </array>
 
   <key>RunAtLoad</key>
