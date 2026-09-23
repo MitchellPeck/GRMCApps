@@ -42,6 +42,31 @@ if [[ -z "$SDK_ROOT" ]]; then
   exit 64
 fi
 
+# Blackmagic's zip extracts to a folder with SPACES in the name ("Blackmagic
+# DeckLink SDK 12.9"), so an unquoted path arrives here as several arguments
+# and we would otherwise only see the first word of it.
+if [[ $# -gt 1 && -d "$*" ]]; then
+  SDK_ROOT="$*"
+  echo "note: read those $# arguments as one path with spaces:" >&2
+  echo "      $SDK_ROOT" >&2
+  echo "      (quote it next time: \"$SDK_ROOT\")" >&2
+  echo >&2
+fi
+
+if [[ ! -d "$SDK_ROOT" ]]; then
+  {
+    echo "No such folder: $SDK_ROOT"
+    echo
+    echo "If the path has spaces in it, quote it:"
+    echo "    $0 \"\$HOME/Downloads/Blackmagic DeckLink SDK 12.9\""
+    echo
+    echo "Unzipped SDKs I can see:"
+    find "$HOME/Downloads" "$HOME/Desktop" -maxdepth 2 -type d -iname '*decklink*' 2>/dev/null \
+      | sed 's/^/    /' || true
+  } >&2
+  exit 66
+fi
+
 # ── locate the headers ──────────────────────────────────────────────────────
 # Blackmagic has shipped these at a few different depths over the years, so
 # look rather than assume.
@@ -50,11 +75,19 @@ for candidate in "$SDK_ROOT/Mac/include" "$SDK_ROOT/include" "$SDK_ROOT"; do
   if [[ -f "$candidate/DeckLinkAPI.h" ]]; then INCLUDE="$candidate"; break; fi
 done
 if [[ -z "$INCLUDE" ]]; then
-  INCLUDE="$(dirname "$(find "$SDK_ROOT" -name DeckLinkAPI.h -print -quit 2>/dev/null || true)")"
+  FOUND="$(find "$SDK_ROOT" -name DeckLinkAPI.h -print -quit 2>/dev/null || true)"
+  [[ -n "$FOUND" ]] && INCLUDE="$(dirname "$FOUND")"
 fi
-if [[ ! -f "$INCLUDE/DeckLinkAPI.h" ]]; then
-  echo "Couldn't find DeckLinkAPI.h under $SDK_ROOT" >&2
-  echo "Point this at the unzipped SDK folder (the one containing Mac/include)." >&2
+if [[ -z "$INCLUDE" ]]; then
+  {
+    echo "Found $SDK_ROOT, but there is no DeckLinkAPI.h anywhere under it."
+    echo
+    echo "It contains:"
+    ls -1 "$SDK_ROOT" 2>/dev/null | head -20 | sed 's/^/    /'
+    echo
+    echo "Expected a Mac/include folder. Did the zip extract completely, and is"
+    echo "this the SDK rather than the Desktop Video installer?"
+  } >&2
   exit 66
 fi
 echo "SDK headers: $INCLUDE"
