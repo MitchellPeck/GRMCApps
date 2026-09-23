@@ -146,3 +146,28 @@ html, body {
   z-index: 50;
   background: #000;
 }
+
+/* ── emergency takeover ───────────────────────────────────────────────────── */
+/* z-index above #blackout (50), because an emergency outranks the operating
+   hours. Sized in vh so it is legible from the far side of a narthex. */
+#takeover {
+  z-index: 60;
+  background: #7a1d1d;
+  gap: 0;
+}
+#takeover.calm { background: var(--bg); }
+#takeover h1 {
+  font-family: var(--font-display);
+  font-size: 11vh;
+  line-height: 1.05;
+  font-weight: 600;
+  color: #fff;
+  margin: 0;
+}
+#takeover p {
+  font-size: 4.6vh;
+  line-height: 1.4;
+  color: rgba(255, 255, 255, .92);
+  margin: 4vh 0 0;
+  max-width: 24ch;
+}

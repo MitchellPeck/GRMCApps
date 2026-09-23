@@ -30,6 +30,13 @@
   <!-- Outside opening hours. Last in the stacking order on purpose: whatever
        goes wrong elsewhere, this still covers it. -->
   <div id="blackout" hidden></div>
+
+  <!-- Above everything, including the blackout: an emergency message must be
+       visible even outside the narthex's opening hours. -->
+  <div id="takeover" class="overlay-center" hidden>
+    <h1 id="takeover-headline"></h1>
+    <p id="takeover-body"></p>
+  </div>
 </div>
 <script src="/player.js"></script>
 </body>

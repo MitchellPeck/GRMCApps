@@ -115,6 +115,7 @@ test("the revision changes when anything the screen renders changes", () => {
       footerText: "", rotation: 0, pollSeconds: 10, idleMessage: "", loopSingleVideo: true,
     },
     power: { on: true, changesAt: null },
+    takeover: { active: false, headline: "", body: "", urgent: true },
     frames: buildFrames([item({ media: {} })], playlist, DEFAULT_SETTINGS),
   };
   const first = planRevision(base);
@@ -126,6 +127,11 @@ test("the revision changes when anything the screen renders changes", () => {
   );
   // The playlist NAME is cosmetic for the admin UI and is not hashed.
   assert.equal(planRevision({ ...base, playlistName: "B" }), first);
+  // An emergency message must reach the TV, and clearing it must too.
+  assert.notEqual(
+    planRevision({ ...base, takeover: { active: true, headline: "Evacuate", body: "", urgent: true } }),
+    first
+  );
   // Going dark outside opening hours must reach the TV.
   assert.notEqual(planRevision({ ...base, power: { on: false, changesAt: null } }), first);
   // ...but the countdown to the next boundary moves every second and must not.

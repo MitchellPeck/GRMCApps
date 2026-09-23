@@ -138,11 +138,35 @@
       pendingPlan = null;
       // The power state is part of sourceKey, so a boundary always lands here
       // rather than waiting out the current slide: 21:00 means 21:00.
-      if (isDark(next)) enterBlackout(); else { leaveBlackout(); advance(); }
+      if (applyTakeover(next)) {
+        dark = false;   // the emergency owns the screen; hours do not apply
+      } else if (isDark(next)) {
+        enterBlackout();
+      } else {
+        leaveBlackout();
+        advance();
+      }
     } else {
       pendingPlan = next;
       applyDisplay(next.display);
     }
+  }
+
+  // Above everything: it outranks the schedule, the idle screen and the
+  // blackout. Returns true while it owns the screen.
+  function applyTakeover(p) {
+    var t = p && p.takeover;
+    var box = $("takeover");
+    if (!t || !t.active) { box.hidden = true; return false; }
+    $("takeover-headline").textContent = t.headline || "";
+    $("takeover-body").textContent = t.body || "";
+    box.className = "overlay-center" + (t.urgent ? "" : " calm");
+    box.hidden = false;
+    clearAdvance();
+    layers.forEach(function (l) { l.classList.remove("visible"); l.innerHTML = ""; });
+    $("idle").hidden = true;
+    $("blackout").hidden = true;
+    return true;
   }
 
   function isDark(p) {
@@ -376,7 +400,9 @@
   function heartbeat() {
     if (!token || Date.now() - lastHeartbeat < HEARTBEAT_MS) return;
     lastHeartbeat = Date.now();
-    var playing = dark ? "(outside opening hours)" : (plan ? (plan.playlistName || "") : "");
+    var playing = (plan && plan.takeover && plan.takeover.active)
+      ? "(EMERGENCY MESSAGE)"
+      : dark ? "(outside opening hours)" : (plan ? (plan.playlistName || "") : "");
     fetch(apiUrl("/api/player/heartbeat"), {
       method: "POST",
       headers: { "content-type": "application/json" },

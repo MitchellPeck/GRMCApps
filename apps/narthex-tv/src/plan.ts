@@ -176,6 +176,13 @@ export interface PlanPower {
   changesAt: string | null;
 }
 
+export interface PlanTakeover {
+  active: boolean;
+  headline: string;
+  body: string;
+  urgent: boolean;
+}
+
 export interface Plan {
   revision: string;
   /** Changes whenever a different schedule entry takes the screen. */
@@ -189,6 +196,7 @@ export interface Plan {
   changesAt: string | null;
   display: PlanDisplay;
   power: PlanPower;
+  takeover: PlanTakeover;
   frames: Frame[];
 }
 
@@ -203,6 +211,7 @@ export function planRevision(plan: Omit<Plan, "revision" | "serverTime" | "chang
     // `on` only: `changesAt` is a moving timestamp and would churn the
     // revision on every poll.
     power: plan.power.on,
+    takeover: plan.takeover,
     frames: plan.frames,
   });
   return createHash("sha1").update(material).digest("hex").slice(0, 16);

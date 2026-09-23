@@ -204,11 +204,60 @@
     }
   }
 
+  function renderTakeover(t) {
+    var box = $("takeover-banner");
+    box.innerHTML = "";
+    if (!t || !t.active) return;
+    var alert = el("div", "alert alert-err");
+    alert.style.display = "flex";
+    alert.style.alignItems = "center";
+    alert.style.gap = "12px";
+    var text = el("div");
+    text.style.flex = "1";
+    text.appendChild(el("strong", null, "On screen now: " + t.headline));
+    if (t.body) text.appendChild(el("div", null, t.body));
+    if (t.startedBy) {
+      text.appendChild(el("div", "hint", "Put up by " + t.startedBy +
+        (t.startedAt ? " " + fmtWhen(t.startedAt) : "")));
+    }
+    alert.appendChild(text);
+    if (can("schedule")) {
+      alert.appendChild(button("Clear it", "btn btn-secondary", async function () {
+        try {
+          await api("DELETE", "/api/takeover");
+          loadNow();
+        } catch (e) { msg("schedule-msg", e.message, "err"); }
+      }));
+    }
+    box.appendChild(alert);
+  }
+
+  $("to-start").addEventListener("click", async function () {
+    var headline = $("to-headline").value.trim();
+    var body = $("to-body").value.trim();
+    if (!headline && !body) { alert("Give the message something to say."); return; }
+    if (!confirm("This replaces everything on the narthex screen immediately. Continue?")) return;
+    busy("to-start", true);
+    try {
+      await api("POST", "/api/takeover", { headline: headline, body: body, urgent: $("to-urgent").checked });
+      $("to-headline").value = "";
+      $("to-body").value = "";
+      loadNow();
+    } catch (e) {
+      msg("schedule-msg", e.message, "err");
+    } finally {
+      busy("to-start", false);
+    }
+  });
+
   async function loadNow() {
     try {
       var data = await api("GET", "/api/schedule/now");
       timezone = data.timezone || timezone;
       describeNow(data, $("now-box"));
+      try {
+        renderTakeover((await api("GET", "/api/takeover")).takeover);
+      } catch (e) { /* the card is an extra; never let it break "on now" */ }
     } catch (e) {
       $("now-box").className = "empty";
       $("now-box").textContent = e.message;

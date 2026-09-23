@@ -8,6 +8,8 @@ import {
 } from "../hours";
 import { getPowerActionRaw, loadSettings, setPowerActionRaw } from "../settings";
 import { parseAction, realDeps, runAction, serializeAction } from "../power-actions";
+import { clearTakeover, getTakeover, startTakeover } from "../takeover";
+import { getIdentity } from "../identity";
 
 const intParam = (value: unknown): number => {
   const n = Number(value);
@@ -116,5 +118,35 @@ export async function powerRoutes(app: FastifyInstance): Promise<void> {
     const result = await runAction(parsed.action, realDeps);
     await recordPowerEvent(pool, `test-${when}`, result.ok, result.detail);
     return { ok: result.ok, detail: result.detail, events: await listPowerEvents(pool, 10) };
+  });
+}
+
+export async function takeoverRoutes(app: FastifyInstance): Promise<void> {
+  app.get("/api/takeover", async () => ({ ok: true, takeover: await getTakeover(pool) }));
+
+  // "schedule", not "admin": the person who needs to put EVACUATE on the
+  // screen is whoever is in the building, not whoever administers the app.
+  app.post("/api/takeover", { preHandler: requirePermission("schedule") }, async (req, reply) => {
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const headline = String(b.headline ?? "").trim();
+    const body = String(b.body ?? "").trim();
+    if (!headline && !body) {
+      return reply.code(400).send({ ok: false, error: "Give the message something to say." });
+    }
+    const id = getIdentity(req);
+    const takeover = await startTakeover(
+      pool,
+      { headline, body, urgent: b.urgent !== false },
+      id.name || id.email
+    );
+    await recordPowerEvent(pool, "takeover-on", true, `${takeover.headline} — by ${takeover.startedBy}`);
+    return { ok: true, takeover };
+  });
+
+  app.delete("/api/takeover", { preHandler: requirePermission("schedule") }, async (req) => {
+    await clearTakeover(pool);
+    const id = getIdentity(req);
+    await recordPowerEvent(pool, "takeover-off", true, `cleared by ${id.name || id.email}`);
+    return { ok: true, takeover: await getTakeover(pool) };
   });
 }

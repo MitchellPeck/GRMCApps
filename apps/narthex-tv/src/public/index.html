@@ -36,6 +36,29 @@
 
   <!-- ── ON NOW ─────────────────────────────────────────────────────────── -->
   <div class="panel active" id="p-now">
+    <div id="takeover-banner"></div>
+
+    <div class="card" data-needs="schedule" hidden>
+      <div class="ct">Put a message on the screen now</div>
+      <p class="muted" style="font-size:13px;margin:0 0 14px">
+        Goes up immediately, over whatever is scheduled, and stays until you clear
+        it &mdash; even outside the narthex's opening hours. For a lockdown, severe
+        weather, or a service that has moved.
+      </p>
+      <div class="field">
+        <label for="to-headline">Headline</label>
+        <input type="text" id="to-headline" maxlength="120" placeholder="Service moved to the chapel">
+      </div>
+      <div class="field">
+        <label for="to-body">Detail <span class="muted">(optional)</span></label>
+        <input type="text" id="to-body" maxlength="400" placeholder="Follow the signs through the north doors.">
+      </div>
+      <label class="check"><input type="checkbox" id="to-urgent" checked> Show it in red</label>
+      <div class="btn-row">
+        <button class="btn btn-danger" id="to-start" data-default="Put it on the screen">Put it on the screen</button>
+      </div>
+    </div>
+
     <div class="card">
       <div class="ct">On the narthex screen</div>
       <div id="now-box" class="empty">Checking&hellip;</div>

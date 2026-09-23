@@ -7,6 +7,7 @@ import { buildFrames, Plan, PlanItem, planRevision } from "./plan";
 import { resolvePower } from "./power";
 import { localDateKey } from "./tz";
 import { listWindows } from "./hours";
+import { getTakeover } from "./takeover";
 
 export type PlanSource = "schedule" | "default" | "none";
 
@@ -73,6 +74,7 @@ export async function buildPlan(
   opts: { at: Date; rotation: number }
 ): Promise<Plan> {
   const { resolution, playlist, source, settings, power } = await resolveNow(pool, opts.at);
+  const takeover = await getTakeover(pool);
 
   const items: PlanItem[] = playlist
     ? (await listItems(pool, playlist.id)).map((row) => ({
@@ -126,7 +128,9 @@ export async function buildPlan(
     // sourceKey changes the moment a different entry (or the fallback) takes
     // over, which is how the player knows to cut immediately instead of waiting
     // for the current slide to finish.
-    sourceKey: `${power.on ? "awake" : "dark"}:${source}:${resolution.entry?.id ?? 0}:${
+    // The takeover is in the sourceKey so it cuts in at once rather than
+    // waiting out the current slide, and out again the moment it is cleared.
+    sourceKey: `${takeover.active ? "TAKEOVER:" + takeover.startedAt : ""}${power.on ? "awake" : "dark"}:${source}:${resolution.entry?.id ?? 0}:${
       playlist?.id ?? 0
     }:${resolution.startedAt ? resolution.startedAt.toISOString() : ""}`,
     playlistId: playlist ? Number(playlist.id) : null,
@@ -146,8 +150,16 @@ export async function buildPlan(
       idleMessage: settings.idleMessage,
       loopSingleVideo: settings.videoLoopSingle,
     },
+    takeover: {
+      active: takeover.active,
+      headline: takeover.headline,
+      body: takeover.body,
+      urgent: takeover.urgent,
+    },
     power: {
-      on: power.on,
+      // A takeover overrides the operating hours outright: a dark screen is no
+      // use to somebody being told to evacuate.
+      on: power.on || takeover.active,
       changesAt: power.changesAt ? power.changesAt.toISOString() : null,
     },
     frames,
