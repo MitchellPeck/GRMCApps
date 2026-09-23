@@ -176,21 +176,69 @@ mkdir -p "$WORK"
 # / C compiler test failed", which does not say what to do about it; on macOS
 # it is nearly always Command Line Tools that have gone stale against the OS.
 printf 'int main(void){return 0;}\n' > "${WORK}/cc-test.c"
-if ! "$CC" "${WORK}/cc-test.c" -o "${WORK}/cc-test" 2>"${WORK}/cc-test.log"; then
-  {
-    echo "${CC} cannot build a trivial C program, so FFmpeg has no chance:"
-    echo
-    sed 's/^/    /' "${WORK}/cc-test.log"
-    echo
-    echo "On macOS this is almost always stale Command Line Tools. Reinstall:"
-    echo "    sudo rm -rf /Library/Developer/CommandLineTools"
-    echo "    sudo xcode-select --install"
-    echo
-    echo "then run this script again. Current toolchain:"
-    echo "    xcode-select -p   -> $(xcode-select -p 2>/dev/null || echo \"not available\")"
-    echo "    sdk path          -> $(xcrun --show-sdk-path 2>/dev/null || echo \"not available\")"
-  } >&2
-  exit 70
+
+# Can the toolchain link at all, and against which SDK?
+cc_links() {
+  local sysroot="${1:-}"
+  if [[ -n "$sysroot" ]]; then
+    "$CC" -isysroot "$sysroot" "${WORK}/cc-test.c" -o "${WORK}/cc-test" 2>"${WORK}/cc-test.log"
+  else
+    "$CC" "${WORK}/cc-test.c" -o "${WORK}/cc-test" 2>"${WORK}/cc-test.log"
+  fi
+}
+
+if ! cc_links ""; then
+  FIRST_ERROR="$(cat "${WORK}/cc-test.log")"
+
+  # A Mac can end up with an SDK NEWER than the linker that has to read it,
+  # which fails as "tapi error: malformed file / unknown architecture". An
+  # older SDK installed alongside it usually links fine, so try them oldest
+  # first rather than sending someone off to reinstall Xcode.
+  WORKING_SDK=""
+  for sdk in $(ls -d \
+        /Library/Developer/CommandLineTools/SDKs/MacOSX*.sdk \
+        /Applications/Xcode*.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX*.sdk \
+        2>/dev/null | sort -V); do
+    [[ -d "$sdk" ]] || continue
+    if cc_links "$sdk"; then WORKING_SDK="$sdk"; break; fi
+  done
+
+  if [[ -n "$WORKING_SDK" ]]; then
+    echo "note: the default SDK cannot link, but ${WORKING_SDK} can — using that." >&2
+    echo >&2
+    export SDKROOT="$WORKING_SDK"
+  else
+    {
+      echo "${CC} cannot build a trivial C program, so FFmpeg has no chance:"
+      echo
+      echo "${FIRST_ERROR}" | sed 's/^/    /'
+      echo
+      if grep -q "tapi error\|unknown architecture" <<<"${FIRST_ERROR}"; then
+        echo "That particular error means the SDK is NEWER than the linker that"
+        echo "has to read it, and no other installed SDK links either. Installing"
+        echo "the Command Line Tools matching this macOS is the fix:"
+        echo "    https://developer.apple.com/download/all/  (search: Command Line Tools)"
+        echo "A full Xcode also carries its own SDKs; if one is installed, try:"
+        echo "    sudo xcode-select -s /Applications/Xcode.app/Contents/Developer"
+      else
+        echo "On macOS this is usually stale Command Line Tools. Reinstall:"
+        echo "    sudo rm -rf /Library/Developer/CommandLineTools"
+        echo "    sudo xcode-select --install"
+      fi
+      echo
+      echo "Current toolchain:"
+      echo "    macOS             -> $(sw_vers -productVersion 2>/dev/null || echo "not macOS")"
+      echo "    xcode-select -p   -> $(xcode-select -p 2>/dev/null || echo "not available")"
+      echo "    sdk path          -> $(xcrun --show-sdk-path 2>/dev/null || echo "not available")"
+      echo "    SDKs installed    ->"
+      ls -d /Library/Developer/CommandLineTools/SDKs/MacOSX*.sdk 2>/dev/null | sed 's/^/        /' \
+        || echo "        none found"
+      echo
+      echo "You can also point this at a specific one yourself:"
+      echo "    SDKROOT=/path/to/MacOSX15.sdk $0 <sdk>"
+    } >&2
+    exit 70
+  fi
 fi
 rm -f "${WORK}/cc-test" "${WORK}/cc-test.c" "${WORK}/cc-test.log"
 
