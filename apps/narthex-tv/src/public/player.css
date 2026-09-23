@@ -19,6 +19,14 @@
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
+/* The `hidden` attribute is honoured only by the UA stylesheet's
+   [hidden]{display:none}, and ANY author rule outranks the UA sheet. So a
+   class that sets `display` silently defeats it — which is what
+   .overlay-center{display:flex} did to #idle, leaving a full-screen navy panel
+   painted over the media at z-index 5 (and under the clock at 10, which is why
+   the clock still showed). Stated once here, for every element. */
+[hidden] { display: none !important; }
+
 html, body {
   width: 100%; height: 100%;
   background: var(--bg);

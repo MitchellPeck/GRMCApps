@@ -126,3 +126,11 @@
 .events div { padding: 4px 0; border-top: 1px solid var(--rule); color: var(--muted); }
 .events div:first-child { border-top: none; }
 .events .bad { color: var(--rej-fg); }
+
+/* The `hidden` attribute is honoured only by the UA stylesheet's
+   [hidden]{display:none}, and ANY author rule outranks the UA sheet. So a
+   class that sets `display` silently defeats it — which is what
+   .overlay-center{display:flex} did to #idle, leaving a full-screen navy panel
+   painted over the media at z-index 5 (and under the clock at 10, which is why
+   the clock still showed). Stated once here, for every element. */
+[hidden] { display: none !important; }
