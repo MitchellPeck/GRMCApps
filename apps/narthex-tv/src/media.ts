@@ -22,13 +22,15 @@ export interface MediaRow {
   poster_path: string;
   uploaded_by_email: string;
   uploaded_by_name: string;
+  notice_id: number | null;
   created_at: string;
   updated_at: string;
 }
 
 const COLUMNS = `id, kind, title, file_name, mime_type, byte_size, status, error,
                  width, height, duration_ms, page_count, original_path, play_path,
-                 poster_path, uploaded_by_email, uploaded_by_name, created_at, updated_at`;
+                 poster_path, uploaded_by_email, uploaded_by_name, notice_id,
+                 created_at, updated_at`;
 
 /** Every artefact for one upload lives under one directory, so deleting the
  *  row and deleting the bytes are the same one-line operation. */
@@ -46,12 +48,13 @@ export async function createMedia(
     byteSize: number;
     uploadedByEmail: string;
     uploadedByName: string;
+    noticeId?: number | null;
   }
 ): Promise<MediaRow> {
   const r = await pool.query<MediaRow>(
     `INSERT INTO media (kind, title, file_name, mime_type, byte_size,
-                        uploaded_by_email, uploaded_by_name)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
+                        uploaded_by_email, uploaded_by_name, notice_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      RETURNING ${COLUMNS}`,
     [
       fields.kind,
@@ -61,6 +64,7 @@ export async function createMedia(
       fields.byteSize,
       fields.uploadedByEmail,
       fields.uploadedByName,
+      fields.noticeId ?? null,
     ]
   );
   return r.rows[0];

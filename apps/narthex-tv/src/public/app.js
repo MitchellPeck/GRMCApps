@@ -951,6 +951,120 @@
     }
   }
 
+  // ── announcements ───────────────────────────────────────────────────────
+  var notices = [];
+  var editingNotice = null;
+
+  function noticeFields() {
+    return {
+      headline: $("no-headline").value.trim(),
+      body: $("no-body").value.trim(),
+      footnote: $("no-footnote").value.trim(),
+      theme: $("no-theme").value
+    };
+  }
+
+  function resetNoticeForm() {
+    editingNotice = null;
+    $("no-headline").value = "";
+    $("no-body").value = "";
+    $("no-footnote").value = "";
+    $("no-theme").value = "navy";
+    $("no-save").setAttribute("data-default", "Make the slide");
+    $("no-save").textContent = "Make the slide";
+    $("no-cancel").hidden = true;
+  }
+
+  $("no-cancel").addEventListener("click", resetNoticeForm);
+
+  $("no-save").addEventListener("click", async function () {
+    var body = noticeFields();
+    if (!body.headline && !body.body) {
+      msg("notice-msg", "Give the notice something to say.", "err");
+      return;
+    }
+    busy("no-save", true, "Drawing\u2026");
+    try {
+      if (editingNotice) await api("PATCH", "/api/notices/" + editingNotice, body);
+      else await api("POST", "/api/notices", body);
+      resetNoticeForm();
+      msg("notice-msg", "Drawing the slide \u2014 it'll appear in the media library in a moment.", "ok");
+      await loadNotices();
+      await loadMedia();
+    } catch (e) {
+      msg("notice-msg", e.message, "err");
+    } finally {
+      busy("no-save", false);
+    }
+  });
+
+  function renderNotices() {
+    var box = $("notice-list");
+    box.innerHTML = "";
+    if (!notices.length) {
+      box.className = "empty";
+      box.textContent = "No announcements yet.";
+      return;
+    }
+    box.className = "";
+    notices.forEach(function (n) {
+      var row = el("div", "notice-row");
+
+      var shot = el("div", "notice-shot");
+      if (n.mediaId && n.status === "ready") {
+        var img = el("img");
+        img.src = "/api/media/" + n.mediaId + "/poster";
+        img.alt = "";
+        img.addEventListener("error", function () { img.remove(); });
+        shot.appendChild(img);
+      }
+      row.appendChild(shot);
+
+      var main = el("div", "notice-main");
+      main.appendChild(el("div", "notice-head", n.headline || n.body));
+      var sub = n.status === "ready" ? n.theme
+        : n.status === "failed" ? "failed: " + n.error
+        : "drawing\u2026";
+      main.appendChild(el("div", "notice-sub", sub + (n.createdBy ? " \u00b7 " + n.createdBy : "")));
+      row.appendChild(main);
+
+      var actions = el("div", "row-actions");
+      actions.appendChild(button("Edit", "btn-sm", function () {
+        editingNotice = n.id;
+        $("no-headline").value = n.headline;
+        $("no-body").value = n.body;
+        $("no-footnote").value = n.footnote;
+        $("no-theme").value = n.theme;
+        $("no-save").setAttribute("data-default", "Save and redraw");
+        $("no-save").textContent = "Save and redraw";
+        $("no-cancel").hidden = false;
+        $("no-headline").focus();
+      }));
+      actions.appendChild(button("Delete", "btn-sm", async function () {
+        if (!confirm("Delete this announcement? It is removed from any playlist using it.")) return;
+        try {
+          await api("DELETE", "/api/notices/" + n.id);
+          await loadNotices();
+          await loadMedia();
+          loadPlaylists();
+        } catch (e) { msg("notice-msg", e.message, "err"); }
+      }));
+      row.appendChild(actions);
+      box.appendChild(row);
+    });
+  }
+
+  async function loadNotices() {
+    if (!can("upload")) return;
+    var data = await api("GET", "/api/notices");
+    notices = data.notices || [];
+    renderNotices();
+    if (notices.some(function (n) { return n.status === "pending" || n.status === "processing"; })) {
+      clearTimeout(loadNotices.timer);
+      loadNotices.timer = setTimeout(function () { loadNotices(); loadMedia(); }, 3000);
+    }
+  }
+
   // ── import from Approvals ───────────────────────────────────────────────
   $("appr-open").addEventListener("click", async function () {
     var box = $("appr-list");
@@ -1571,6 +1685,7 @@
     await loadScreens().catch(function (e) { msg("screens-msg", e.message, "err"); });
     await loadPermissions().catch(function () { /* not an admin */ });
     await loadHours().catch(function (e) { msg("settings-msg", e.message, "err"); });
+    await loadNotices().catch(function (e) { msg("notice-msg", e.message, "err"); });
     await loadPeople();
     loadNow();
 

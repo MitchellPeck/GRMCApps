@@ -128,6 +128,14 @@
 .power-editor .pe-head { font-size: 13px; font-weight: 600; color: var(--navy); margin-bottom: 10px; }
 .power-editor textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; min-height: 64px; }
 
+.notice-row { display: flex; gap: 10px; align-items: center; padding: 9px 0; border-top: 1px solid var(--rule); }
+.notice-row:first-child { border-top: none; }
+.notice-shot { width: 74px; height: 42px; border-radius: 3px; background: var(--navy); flex-shrink: 0; overflow: hidden; }
+.notice-shot img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.notice-main { flex: 1; min-width: 0; }
+.notice-head { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.notice-sub { font-size: 11px; color: var(--hint); }
+
 .events { font-size: 12px; margin-top: 12px; }
 .events div { padding: 4px 0; border-top: 1px solid var(--rule); color: var(--muted); }
 .events div:first-child { border-top: none; }

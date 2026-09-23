@@ -259,6 +259,45 @@
     <div id="media-msg"></div>
 
     <div class="card" data-needs="upload" hidden>
+      <div class="ct">Write an announcement</div>
+      <p class="muted" style="font-size:13px;margin:0 0 14px">
+        A slide composed here, in the church's own typefaces &mdash; no PowerPoint
+        needed. Edit it later and it redraws in place, so every playlist it is
+        already in keeps working.
+      </p>
+      <div class="field">
+        <label for="no-headline">Headline</label>
+        <input type="text" id="no-headline" maxlength="200" placeholder="Trunk or Treat">
+      </div>
+      <div class="field">
+        <label for="no-body">Detail <span class="muted">(optional)</span></label>
+        <textarea id="no-body" rows="3" maxlength="800"
+                  placeholder="Sunday 26th October, 5pm, in the back lot."></textarea>
+      </div>
+      <div class="grid2">
+        <div class="field">
+          <label for="no-footnote">Footer line <span class="muted">(optional)</span></label>
+          <input type="text" id="no-footnote" maxlength="120" placeholder="All welcome">
+        </div>
+        <div class="field">
+          <label for="no-theme">Colours</label>
+          <select id="no-theme">
+            <option value="navy">Navy &amp; gold</option>
+            <option value="gold">Gold</option>
+            <option value="paper">Paper</option>
+            <option value="plain">Plain black</option>
+          </select>
+        </div>
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-primary" id="no-save" data-default="Make the slide">Make the slide</button>
+        <button class="btn btn-secondary" id="no-cancel" data-default="Cancel" hidden>Cancel</button>
+      </div>
+      <div id="notice-msg"></div>
+      <div id="notice-list" class="empty" style="margin-top:14px">No announcements yet.</div>
+    </div>
+
+    <div class="card" data-needs="upload" hidden>
       <div class="ct">Add photos, videos or a PowerPoint</div>
       <div class="drop" id="drop">
         <p><strong>Drop files here</strong> or <button type="button" class="linkish" id="pick">choose files</button></p>

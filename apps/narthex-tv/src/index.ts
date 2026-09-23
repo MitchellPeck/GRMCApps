@@ -15,6 +15,7 @@ import { screenRoutes } from "./routes/screens";
 import { settingsRoutes } from "./routes/settings";
 import { playerRoutes } from "./routes/player";
 import { powerRoutes, takeoverRoutes } from "./routes/power";
+import { noticeRoutes } from "./routes/notices";
 import { startPowerRunner } from "./power-runner";
 
 const app = Fastify({ logger: true, bodyLimit: 2 * 1024 * 1024 });
@@ -33,6 +34,7 @@ app.register(settingsRoutes);
 app.register(playerRoutes);
 app.register(powerRoutes);
 app.register(takeoverRoutes);
+app.register(noticeRoutes);
 
 // The TV runs unattended for months and reloads itself once a day. If it
 // caches its own HTML, CSS or JS, a fix can never reach it without somebody

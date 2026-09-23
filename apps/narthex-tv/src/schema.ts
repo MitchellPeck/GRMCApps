@@ -150,4 +150,23 @@ CREATE TABLE IF NOT EXISTS power_events (
   fired_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS power_events_fired_idx ON power_events (fired_at DESC);
+
+-- An announcement composed in the app rather than in PowerPoint. The rendered
+-- JPEG lives in the media table like any upload, so playlists, schedules and
+-- the player need know nothing about notices at all; editing one re-renders
+-- in place, keeping every playlist that already points at it.
+CREATE TABLE IF NOT EXISTS notices (
+  id         bigserial PRIMARY KEY,
+  headline   text NOT NULL DEFAULT '',
+  body       text NOT NULL DEFAULT '',
+  footnote   text NOT NULL DEFAULT '',
+  theme      text NOT NULL DEFAULT 'navy',
+  created_by text NOT NULL DEFAULT '',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+ALTER TABLE media ADD COLUMN IF NOT EXISTS notice_id bigint
+  REFERENCES notices(id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS media_notice_idx ON media (notice_id);
 `;

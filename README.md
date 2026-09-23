@@ -169,6 +169,30 @@ between apps. Both are served to each app at `/assets/` (see *Shared UI* below).
   mid-item rather than waiting for a re-render. See
   `scripts/narthex-tv/README.md` for both paths and the per-set caveats.
 
+  **Announcements without PowerPoint.** Write a slide in the app — headline,
+  detail, footer line, one of four colourways drawn from the church's own
+  palette — and it is rasterised server-side into the same JPEG an upload
+  becomes. Editing one redraws it **in place**, so every playlist already using
+  it keeps working. It has to be rendered on the server rather than by the
+  player, because the narthex screen is driven through a Blackmagic card by
+  `playout.py`, which decodes pictures and video and cannot render HTML.
+
+  **Import from Approvals.** A graphic already signed off in the Approvals app
+  can be pulled straight onto the screen over the internal network, with the
+  signed-in user's identity forwarded so Approvals applies its own rules — no
+  exporting, re-uploading, or reaching into another app's database.
+
+  **Retiring itself.** Each playlist item takes an optional inclusive
+  show-from / show-until date, judged in the app's timezone, so a notice comes
+  down the day after the event instead of waiting for somebody to remember. The
+  editor says what that means today — "expires in 4 days", "last day".
+
+  **Emergency takeover.** One message, on the screen immediately, over
+  everything scheduled and over the operating hours — a dark screen is no use
+  to somebody being told to evacuate. Drawn by the player as text rather than
+  going through the conversion queue, so it cannot be held up by it, and
+  clearing it puts the schedule straight back.
+
   **Operating hours.** The screen does not have to be on all day. Settings takes
   a weekly grid of windows in the app's timezone; outside them the player shows
   true black and tears the media down rather than decoding frames nobody is

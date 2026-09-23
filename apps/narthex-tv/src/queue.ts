@@ -6,6 +6,8 @@ import {
 } from "./media";
 import { isBrowserImage, needsTranscode } from "./ingest";
 import * as convert from "./convert";
+import { renderNotice } from "./render-notice";
+import { NoticeText } from "./notices";
 
 export interface QueueTask {
   label: string;
@@ -71,6 +73,7 @@ export function createQueue(log: (message: string) => void): Queue {
 }
 
 export interface ProcessDeps {
+  renderNotice(text: NoticeText, dir: string, opts: { theme: string }): Promise<{ path: string; width: number; height: number }>;
   probe(path: string): Promise<convert.Probe>;
   transcodeVideo(src: string, dst: string): Promise<void>;
   extractPoster(src: string, dst: string): Promise<void>;
@@ -81,6 +84,7 @@ export interface ProcessDeps {
 }
 
 export const realDeps: ProcessDeps = {
+  renderNotice,
   probe: convert.probe,
   transcodeVideo: convert.transcodeVideo,
   extractPoster: convert.extractPoster,
@@ -105,13 +109,34 @@ export interface ProcessStore {
  * Every side effect is injected so the state machine is testable with no
  * filesystem, no database and no LibreOffice.
  */
+export interface NoticeSource {
+  text: NoticeText;
+  theme: string;
+}
+
 export async function processMedia(
   media: MediaRow,
   dir: string,
   store: ProcessStore,
-  deps: ProcessDeps
+  deps: ProcessDeps,
+  notice?: NoticeSource | null
 ): Promise<void> {
   await store.setStatus(media.id, "processing");
+
+  // A notice has no uploaded file: it is drawn from its own text, so editing
+  // it re-renders in place and every playlist pointing at it keeps working.
+  if (notice) {
+    const drawn = await deps.renderNotice(notice.text, dir, { theme: notice.theme });
+    await store.setPaths(media.id, {
+      playPath: drawn.path,
+      posterPath: drawn.path,
+      width: drawn.width,
+      height: drawn.height,
+    });
+    await store.setStatus(media.id, "ready");
+    return;
+  }
+
   const original = media.original_path;
   if (!original) throw new Error("The uploaded file is missing.");
 
@@ -186,12 +211,15 @@ export function enqueueMedia(
   queue: Queue,
   pool: Pool,
   media: MediaRow,
-  deps: ProcessDeps = realDeps
+  deps: ProcessDeps = realDeps,
+  notice?: NoticeSource | null
 ): void {
   const store = storeFor(pool);
   queue.enqueue({
-    label: `convert media ${media.id} (${media.file_name})`,
-    run: () => processMedia(media, mediaDir(media.id), store, deps),
+    label: notice
+      ? `draw notice for media ${media.id}`
+      : `convert media ${media.id} (${media.file_name})`,
+    run: () => processMedia(media, mediaDir(media.id), store, deps, notice),
     fail: (message) => setMediaStatus(pool, media.id, "failed", message),
   });
 }

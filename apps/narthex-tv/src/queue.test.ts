@@ -9,7 +9,7 @@ function media(over: Partial<MediaRow>): MediaRow {
     byte_size: 10, status: "pending", error: "", width: null, height: null,
     duration_ms: null, page_count: 0, original_path: "/data/media/1/original-x.jpg",
     play_path: "", poster_path: "", uploaded_by_email: "", uploaded_by_name: "",
-    created_at: "", updated_at: "", ...over,
+    created_at: "", updated_at: "", notice_id: null, ...over,
   } as MediaRow;
 }
 
@@ -37,6 +37,7 @@ function recorder(): Recorder {
 function deps(over: Partial<ProcessDeps> = {}): ProcessDeps {
   const calls: string[] = [];
   const base: ProcessDeps = {
+    async renderNotice() { calls.push("notice"); return { path: "/d/play.jpg", width: 1920, height: 1080 }; },
     async probe() { return { durationMs: 45_000, width: 1920, height: 1080, codec: "h264", hasVideo: true }; },
     async transcodeVideo() { calls.push("transcode"); },
     async extractPoster() { calls.push("poster"); },
@@ -186,4 +187,43 @@ test("a failing job is recorded and the queue carries on", async () => {
   await queue.idle();
   assert.deepEqual(failed, ["soffice exploded"]);
   assert.deepEqual(done, ["good"]);
+});
+
+test("a notice is drawn from its text, with no uploaded file to convert", async () => {
+  const r = recorder();
+  const d = deps();
+  let drawnWith: unknown = null;
+  d.renderNotice = async (text, dir, opts) => {
+    drawnWith = { text, dir, opts };
+    return { path: "/data/media/9/play.jpg", width: 1920, height: 1080 };
+  };
+  await processMedia(
+    // No original_path at all: this would fail as an upload.
+    media({ id: 9, kind: "image", original_path: "", notice_id: 3 }),
+    "/data/media/9", r.store, d,
+    { text: { headline: "Trunk or Treat", body: "Sunday 5pm", footnote: "" }, theme: "navy" }
+  );
+
+  assert.deepEqual(drawnWith, {
+    text: { headline: "Trunk or Treat", body: "Sunday 5pm", footnote: "" },
+    dir: "/data/media/9",
+    opts: { theme: "navy" },
+  });
+  assert.equal(r.paths[0].playPath, "/data/media/9/play.jpg");
+  // The rendered slide is its own thumbnail; there is nothing else to make one from.
+  assert.equal(r.paths[0].posterPath, "/data/media/9/play.jpg");
+  assert.deepEqual(r.statuses.map((s) => s.status), ["processing", "ready"]);
+});
+
+test("a notice that cannot be drawn fails loudly rather than showing blank", async () => {
+  const r = recorder();
+  const d = deps();
+  d.renderNotice = async () => { throw new Error("No usable fonts in the image"); };
+  await assert.rejects(
+    () => processMedia(
+      media({ id: 9, original_path: "", notice_id: 3 }), "/d", r.store, d,
+      { text: { headline: "x", body: "", footnote: "" }, theme: "navy" }
+    ),
+    /fonts/i
+  );
 });
