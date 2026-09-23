@@ -166,14 +166,47 @@
   $("f_payment").addEventListener("change", applyKindPayment);
 
   // ── upload queue ─────────────────────────────────────────────────────────
-  $("f-receipts").addEventListener("change", function (ev) {
-    Array.from(ev.target.files || []).forEach(function (f) {
-      var key = f.name + "::" + f.size;
-      if (!queued.some(function (q) { return q.key === key; })) queued.push({ key: key, file: f });
-    });
+  // No `capture` attribute: with accept="application/pdf,image/*" phones offer
+  // their own camera / photo library / files sheet, desktops a file picker.
+  $("f-receipts").addEventListener("change", async function (ev) {
+    var files = Array.from(ev.target.files || []);
     ev.target.value = "";
+    for (var i = 0; i < files.length; i++) {
+      var f = files[i];
+      var key = f.name + "::" + f.size;
+      if (queued.some(function (q) { return q.key === key; })) continue;
+      queued.push({ key: key, file: await shrinkImage(f) });
+    }
     renderQueue();
   });
+
+  // Phone photos are 3–10 MB and often HEIC. The model takes images up to
+  // 5 MB in JPEG/PNG/WebP/GIF, so re-encode anything the browser can decode
+  // as a JPEG capped at 2400px on the long edge — plenty for receipt text.
+  // If the browser can't decode it (HEIC on desktop Chrome), send it as is.
+  var MAX_EDGE = 2400;
+  async function shrinkImage(file) {
+    if (!/^image\//.test(file.type) || file.type === "image/gif") return file;
+    try {
+      var bmp = await createImageBitmap(file, { imageOrientation: "from-image" });
+      var scale = Math.min(1, MAX_EDGE / Math.max(bmp.width, bmp.height));
+      if (scale === 1 && file.size < 4 * 1024 * 1024 && /jpeg|png|webp/.test(file.type)) {
+        bmp.close();
+        return file;
+      }
+      var canvas = document.createElement("canvas");
+      canvas.width = Math.round(bmp.width * scale);
+      canvas.height = Math.round(bmp.height * scale);
+      canvas.getContext("2d").drawImage(bmp, 0, 0, canvas.width, canvas.height);
+      bmp.close();
+      var blob = await new Promise(function (res) { canvas.toBlob(res, "image/jpeg", 0.85); });
+      if (!blob) return file;
+      var name = file.name.replace(/\.[^.]+$/, "") + ".jpg";
+      return new File([blob], name, { type: "image/jpeg", lastModified: file.lastModified });
+    } catch (e) {
+      return file;
+    }
+  }
 
   function renderQueue() {
     var wrap = $("file-queue");
@@ -198,7 +231,7 @@
 
   // ── extraction ───────────────────────────────────────────────────────────
   $("btn-extract").addEventListener("click", async function () {
-    if (!queued.length) { msg("import-msg", "Add at least one PDF first.", "warn"); return; }
+    if (!queued.length) { msg("import-msg", "Add at least one receipt first.", "warn"); return; }
     busy("btn-extract", true, "Reading " + queued.length + " file" + (queued.length > 1 ? "s" : "") + "…");
     msg("import-msg", "");
     try {
@@ -248,7 +281,7 @@
   function renderItems() {
     var wrap = $("items-wrap");
     if (!items.length) {
-      wrap.innerHTML = '<div class="empty">No items yet — add PDFs and extract, or add an item manually.</div>';
+      wrap.innerHTML = '<div class="empty">No items yet — add receipts and extract, or add an item manually.</div>';
       return;
     }
     wrap.innerHTML = "";
