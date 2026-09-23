@@ -1,6 +1,6 @@
 import { FastifyInstance } from "fastify";
 import { pool } from "../db";
-import { MISSING_KEY_ERROR, UploadedDoc, extractDocuments } from "../extract";
+import { EXTRACTABLE_TYPES, MISSING_KEY_ERROR, UploadedDoc, extractDocuments } from "../extract";
 
 export const MAX_FILES = 10;
 export const MAX_FILE_BYTES = 15 * 1024 * 1024;
@@ -17,11 +17,12 @@ export async function extractRoutes(app: FastifyInstance): Promise<void> {
     try {
       for await (const part of req.parts()) {
         if (part.type !== "file") continue;
-        const name = part.filename || "receipt.pdf";
+        const name = part.filename || "receipt";
 
-        // Anything that isn't a PDF is named back rather than silently ignored,
-        // so an accidental screenshot upload explains itself.
-        if (part.mimetype !== "application/pdf") {
+        // Anything unreadable is named back rather than silently ignored, so
+        // an unsupported upload (a HEIC the browser couldn't convert, a Word
+        // doc) explains itself.
+        if (!EXTRACTABLE_TYPES.has(part.mimetype)) {
           rejected.push(name);
           await part.toBuffer().catch(() => undefined);
           continue;
@@ -31,7 +32,7 @@ export async function extractRoutes(app: FastifyInstance): Promise<void> {
           await part.toBuffer().catch(() => undefined);
           continue;
         }
-        docs.push({ name, buffer: await part.toBuffer() });
+        docs.push({ name, mimeType: part.mimetype, buffer: await part.toBuffer() });
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : "";
@@ -48,7 +49,9 @@ export async function extractRoutes(app: FastifyInstance): Promise<void> {
     if (!docs.length) {
       return reply.code(400).send({
         ok: false,
-        error: rejected.length ? `Not a PDF: ${rejected.join(", ")}` : "Add at least one PDF first.",
+        error: rejected.length
+          ? `Unsupported file (use PDF, JPEG, PNG or WebP): ${rejected.join(", ")}`
+          : "Add at least one receipt first.",
       });
     }
 
