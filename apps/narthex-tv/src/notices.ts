@@ -105,12 +105,19 @@ export interface NoticeLayout {
   lines: LaidOutLine[];
   /** A rule between the headline and the body, when there is both. */
   rule: { y: number; colour: string } | null;
+  /** Where a logo goes, when one was asked for. Centred horizontally. */
+  logo: { y: number; height: number } | null;
 }
 
 export interface LayoutOptions {
   width?: number;
   height?: number;
   theme?: string;
+  /**
+   * Reserve a box above the text for a logo, as a fraction of the canvas
+   * height. The idle screen uses this; a notice does not.
+   */
+  logoFraction?: number;
 }
 
 /**
@@ -124,6 +131,10 @@ export function layoutNotice(text: NoticeText, opts: LayoutOptions = {}): Notice
   const colours = themeFor(opts.theme ?? "navy");
   const margin = Math.round(width * 0.09);
   const usable = width - margin * 2;
+  const logoHeight = opts.logoFraction
+    ? Math.round(height * Math.min(0.45, Math.max(0.05, opts.logoFraction)))
+    : 0;
+  const logoGap = logoHeight ? Math.round(height * 0.045) : 0;
 
   // Long headlines step down a size rather than wrapping to four lines.
   const headlineRaw = String(text.headline ?? "").trim();
@@ -145,6 +156,7 @@ export function layoutNotice(text: NoticeText, opts: LayoutOptions = {}): Notice
   const ruleGap = headLines.length && bodyLines.length ? Math.round(bodySize * 1.5) : 0;
 
   const blockHeight =
+    logoHeight + logoGap +
     headLines.length * headLead +
     ruleGap +
     bodyLines.length * bodyLead +
@@ -152,6 +164,12 @@ export function layoutNotice(text: NoticeText, opts: LayoutOptions = {}): Notice
 
   let y = Math.max(margin, Math.round((height - blockHeight) / 2));
   const lines: LaidOutLine[] = [];
+
+  let logo: NoticeLayout["logo"] = null;
+  if (logoHeight) {
+    logo = { y, height: logoHeight };
+    y += logoHeight + logoGap;
+  }
 
   for (const line of headLines) {
     lines.push({ text: line, y, fontSize: headSize, colour: colours.headline, serif: true });
@@ -177,7 +195,7 @@ export function layoutNotice(text: NoticeText, opts: LayoutOptions = {}): Notice
     }
   }
 
-  return { width, height, background: colours.background, lines, rule };
+  return { width, height, background: colours.background, lines, rule, logo };
 }
 
 export type NoticeValidation = { ok: true } | { ok: false; error: string };

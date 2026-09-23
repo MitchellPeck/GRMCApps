@@ -71,6 +71,27 @@ export function buildFilter(
   return parts.length ? parts.join(",") : "null";
 }
 
+/**
+ * The whole graph when a logo is involved: scale it into its reserved box,
+ * keeping its aspect ratio, then lay it over the text.
+ *
+ * Two inputs, so this is a -filter_complex rather than a -vf.
+ */
+export function buildLogoFilter(
+  layout: NoticeLayout,
+  linePaths: string[],
+  fonts: { serif: string; sans: string }
+): string {
+  const box = layout.logo!;
+  const maxWidth = Math.round(layout.width * 0.5);
+  return [
+    `[0:v]${buildFilter(layout, linePaths, fonts)}[bg]`,
+    // decrease-only: a small logo is never blown up into a blur.
+    `[1:v]scale=${maxWidth}:${box.height}:force_original_aspect_ratio=decrease[logo]`,
+    `[bg][logo]overlay=x=(W-w)/2:y=${box.y}`,
+  ].join(";");
+}
+
 export interface RenderedNotice {
   path: string;
   width: number;
@@ -84,7 +105,7 @@ export interface RenderedNotice {
 export async function renderNotice(
   text: NoticeText,
   dir: string,
-  opts: LayoutOptions = {}
+  opts: LayoutOptions & { logoPath?: string; outputName?: string } = {}
 ): Promise<RenderedNotice> {
   const fonts = fontsAvailable();
   if (!fonts.serif || !fonts.sans) {
@@ -107,20 +128,20 @@ export async function renderNotice(
     linePaths.push(path);
   }
 
-  const out = join(dir, "play.jpg");
-  await run(
-    "ffmpeg",
-    [
-      "-y",
-      "-f", "lavfi",
-      "-i", `color=c=${layout.background}:s=${layout.width}x${layout.height}`,
-      "-vf", buildFilter(layout, linePaths, { serif: fonts.serif, sans: fonts.sans }),
-      "-frames:v", "1",
-      "-q:v", "2",
-      out,
-    ],
-    120_000
-  );
+  const out = join(dir, opts.outputName ?? "play.jpg");
+  const useLogo = Boolean(layout.logo && opts.logoPath && existsSync(opts.logoPath));
+  const faces = { serif: fonts.serif, sans: fonts.sans };
+
+  const args = ["-y", "-f", "lavfi",
+    "-i", `color=c=${layout.background}:s=${layout.width}x${layout.height}`];
+  if (useLogo) {
+    args.push("-i", opts.logoPath!,
+      "-filter_complex", buildLogoFilter(layout, linePaths, faces));
+  } else {
+    args.push("-vf", buildFilter(layout, linePaths, faces));
+  }
+  args.push("-frames:v", "1", "-q:v", "2", out);
+  await run("ffmpeg", args, 120_000);
 
   await rm(lineDir, { recursive: true, force: true });
   return { path: out, width: layout.width, height: layout.height };

@@ -1530,6 +1530,70 @@
     renderPowerEvents();
   }
 
+  // ── the idle screen ─────────────────────────────────────────────────────
+  var idle = null;
+
+  function fillIdle() {
+    if (!idle) return;
+    $("idle-headline").value = idle.headline || "";
+    $("idle-message").value = idle.message || "";
+    $("idle-theme").value = idle.theme || "navy";
+    $("idle-mark").checked = Boolean(idle.showMark);
+
+    var sel = $("idle-logo");
+    sel.innerHTML = "";
+    var none = el("option", null, "No logo");
+    none.value = "0";
+    sel.appendChild(none);
+    mediaList
+      .filter(function (m) { return m.kind === "image" && m.status === "ready"; })
+      .forEach(function (m) {
+        var o = el("option", null, m.title);
+        o.value = m.id;
+        sel.appendChild(o);
+      });
+    sel.value = String(idle.logoMediaId || 0);
+    showIdlePreview();
+  }
+
+  // The rendered slide is served to screens only, so the preview borrows the
+  // logo itself rather than pretending to be the finished picture.
+  function showIdlePreview() {
+    var wrap = $("idle-preview-wrap");
+    if (!idle || !idle.logoMediaId) { wrap.hidden = true; return; }
+    $("idle-preview").src = "/api/media/" + idle.logoMediaId + "/file";
+    $("idle-preview").style.objectFit = "contain";
+    $("idle-preview").style.background = "#092D3E";
+    wrap.hidden = false;
+  }
+
+  $("idle-save").addEventListener("click", async function () {
+    busy("idle-save", true);
+    try {
+      var data = await api("PUT", "/api/idle", {
+        headline: $("idle-headline").value,
+        message: $("idle-message").value,
+        theme: $("idle-theme").value,
+        logoMediaId: Number($("idle-logo").value) || 0,
+        showMark: $("idle-mark").checked
+      });
+      idle = data.idle;
+      fillIdle();
+      msg("idle-msg", "Saved. The screen redraws it within a poll or two.", "ok");
+      loadNow();
+    } catch (e) {
+      msg("idle-msg", e.message, "err");
+    } finally {
+      busy("idle-save", false);
+    }
+  });
+
+  async function loadIdleSettings() {
+    if (!can("admin")) return;
+    idle = (await api("GET", "/api/idle")).idle;
+    fillIdle();
+  }
+
   // ── permissions ──────────────────────────────────────────────────────────
   var FLAGS = [
     ["canUpload", "Upload"],
@@ -1686,6 +1750,7 @@
     await loadPermissions().catch(function () { /* not an admin */ });
     await loadHours().catch(function (e) { msg("settings-msg", e.message, "err"); });
     await loadNotices().catch(function (e) { msg("notice-msg", e.message, "err"); });
+    await loadIdleSettings().catch(function (e) { msg("idle-msg", e.message, "err"); });
     await loadPeople();
     loadNow();
 

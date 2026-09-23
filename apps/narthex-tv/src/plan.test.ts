@@ -112,7 +112,8 @@ test("the revision changes when anything the screen renders changes", () => {
     display: {
       background: "#000", transition: "fade" as const, transitionMs: 600,
       clock: "off" as const, clockPosition: "bottom-right" as const,
-      footerText: "", rotation: 0, pollSeconds: 10, idleMessage: "", loopSingleVideo: true,
+      footerText: "", rotation: 0, pollSeconds: 10, idleMessage: "",
+      idleHeadline: "", idleShowMark: true, loopSingleVideo: true,
     },
     power: { on: true, changesAt: null },
     takeover: { active: false, headline: "", body: "", urgent: true },

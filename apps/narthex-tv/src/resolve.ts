@@ -8,6 +8,7 @@ import { resolvePower } from "./power";
 import { localDateKey } from "./tz";
 import { listWindows } from "./hours";
 import { getTakeover, takeoverImageName } from "./takeover";
+import { ensureIdleSlide, loadIdle } from "./idle";
 
 export type PlanSource = "schedule" | "default" | "none";
 
@@ -138,6 +139,26 @@ export async function buildPlan(
         }]
       : [];
 
+  // Nothing to show: fall back to the configured idle screen, rendered, so
+  // the wall shows it too. playout.py cannot draw text — an idle screen that
+  // lived only in the browser would leave the actual screen black.
+  const idle = await loadIdle(pool);
+  let idleFrames: Frame[] = [];
+  if (!takeover.active && frames.length === 0 && power.on) {
+    const slide = await ensureIdleSlide(pool);
+    if (slide) {
+      idleFrames = [{
+        kind: "image" as const,
+        url: `/api/player/idle/${slide.name}`,
+        ms: 60_000,
+        fit: "contain" as const,
+        mediaId: 0,
+        page: 0,
+        title: "Idle screen",
+      }];
+    }
+  }
+
   const transition =
     playlist && (playlist.transition === "none" || playlist.transition === "fade")
       ? playlist.transition
@@ -166,7 +187,9 @@ export async function buildPlan(
       footerText: playlist?.footer_text || settings.footerText,
       rotation: opts.rotation,
       pollSeconds: settings.pollSeconds,
-      idleMessage: settings.idleMessage,
+      idleMessage: idle.message || settings.idleMessage,
+      idleHeadline: idle.headline,
+      idleShowMark: idle.showMark && !idle.logoMediaId,
       loopSingleVideo: settings.videoLoopSingle,
     },
     takeover: {
@@ -184,7 +207,7 @@ export async function buildPlan(
     // An active takeover with no rendered slide yields NO frames on purpose:
     // black is better than leaving the normal loop running during an
     // emergency, and the browser player still shows the text.
-    frames: takeover.active ? takeoverFrames : frames,
+    frames: takeover.active ? takeoverFrames : (frames.length ? frames : idleFrames),
   };
 
   return {

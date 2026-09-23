@@ -4,6 +4,7 @@ import { pool } from "../db";
 import { findByToken, recordHeartbeat, ScreenRow } from "../screens";
 import { buildPlan } from "../resolve";
 import { getTakeover, takeoverImageName } from "../takeover";
+import { ensureIdleSlide } from "../idle";
 import { getMedia, getPagePath } from "../media";
 import { contentTypeFor } from "../ingest";
 import { sendFile } from "../files";
@@ -80,6 +81,18 @@ export async function playerRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(404).send({ ok: false, error: "That message has been replaced." });
     }
     return sendFile(req, reply, takeover.imagePath, "image/jpeg", 60);
+  });
+
+  // The idle screen. Named after its own configuration, so changing it
+  // produces a different URL and no screen serves the previous one from cache.
+  app.get("/api/player/idle/:name", async (req, reply) => {
+    const screen = await requireScreen(req, reply);
+    if (!screen) return reply;
+    const slide = await ensureIdleSlide(pool);
+    if (!slide || slide.name !== (req.params as { name: string }).name) {
+      return reply.code(404).send({ ok: false, error: "That idle screen is out of date." });
+    }
+    return sendFile(req, reply, slide.path, "image/jpeg", 300);
   });
 
   app.get("/api/player/media/:id/file", async (req, reply) => {

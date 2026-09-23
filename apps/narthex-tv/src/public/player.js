@@ -245,6 +245,12 @@
     frames = [];
     index = -1;
     layers.forEach(function (l) { l.classList.remove("visible"); l.innerHTML = ""; });
+    var display = (plan && plan.display) || {};
+    $("idle-headline").textContent = display.idleHeadline || "";
+    $("idle-headline").hidden = !display.idleHeadline;
+    // The seal is the LAST resort: hidden once anything else is configured, so
+    // a church that is not Grace Resurrection never sees somebody else's mark.
+    $("idle-mark").hidden = display.idleShowMark === false;
     $("idle-text").textContent = text || "";
     $("idle").hidden = false;
   }

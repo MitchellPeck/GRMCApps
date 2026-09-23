@@ -130,6 +130,13 @@ html, body {
   font-size: 5.5vh;
   display: flex; align-items: center; justify-content: center;
 }
+#idle-headline {
+  margin-top: 3vh;
+  font-family: var(--font-display);
+  font-size: 5.5vh;
+  font-weight: 600;
+  color: #fff;
+}
 #idle-text {
   margin-top: 3vh;
   font-size: 3vh;

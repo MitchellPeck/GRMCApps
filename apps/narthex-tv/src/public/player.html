@@ -13,8 +13,12 @@
   <div class="layer" id="layer-a"></div>
   <div class="layer" id="layer-b"></div>
 
+  <!-- Only the fallback now: the real idle screen is rendered by the server
+       and arrives as an ordinary frame, so the Blackmagic path shows it too.
+       This is what is left if the render failed or the network is down. -->
   <div id="idle" class="overlay-center" hidden>
-    <div class="idle-mark">G</div>
+    <div class="idle-mark" id="idle-mark">G</div>
+    <h2 id="idle-headline"></h2>
     <p id="idle-text"></p>
   </div>
 

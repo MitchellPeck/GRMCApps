@@ -193,6 +193,13 @@ between apps. Both are served to each app at `/assets/` (see *Shared UI* below).
   going through the conversion queue, so it cannot be held up by it, and
   clearing it puts the schedule straight back.
 
+  **The idle screen is yours.** What the wall shows when nothing at all is
+  scheduled — headline, message, a logo picked from the media library, and a
+  colourway — instead of a hard-coded seal. Rendered on the server like the
+  announcements, so it reaches a screen driven through the Blackmagic card and
+  not only a browser. The built-in GRMC mark is now only what the player falls
+  back to when it cannot reach the server at all.
+
   **Operating hours.** The screen does not have to be on all day. Settings takes
   a weekly grid of windows in the app's timezone; outside them the player shows
   true black and tears the media down rather than decoding frames nobody is

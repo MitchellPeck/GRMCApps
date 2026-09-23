@@ -167,6 +167,9 @@ export interface PlanDisplay {
   rotation: number;
   pollSeconds: number;
   idleMessage: string;
+  /** For the player's offline fallback only; the real idle screen is a frame. */
+  idleHeadline: string;
+  idleShowMark: boolean;
   loopSingleVideo: boolean;
 }
 

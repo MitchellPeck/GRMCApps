@@ -444,6 +444,7 @@
       <div class="field">
         <label for="set-idle">Shown when nothing at all is scheduled</label>
         <input type="text" id="set-idle" maxlength="300" placeholder="Leave empty for a plain background">
+        <div class="hint">Superseded by the idle screen below if you set one up there.</div>
       </div>
       <div class="grid2">
         <div class="field">
@@ -459,6 +460,50 @@
       </div>
       <div class="hint" id="set-readonly" hidden>
         Only a Narthex TV administrator can change these.
+      </div>
+    </div>
+
+    <div class="card" data-needs="admin" hidden>
+      <div class="ct">The idle screen</div>
+      <p class="muted" style="font-size:13px;margin:0 0 14px">
+        What the wall shows when nothing at all is scheduled and there is no
+        default playlist. Rendered on the server, so it reaches a screen driven
+        through the Blackmagic card as well as one in a browser.
+      </p>
+      <div class="grid2">
+        <div class="field">
+          <label for="idle-headline">Headline</label>
+          <input type="text" id="idle-headline" maxlength="120" placeholder="Grace Resurrection">
+        </div>
+        <div class="field">
+          <label for="idle-theme">Colours</label>
+          <select id="idle-theme">
+            <option value="navy">Navy &amp; gold</option>
+            <option value="gold">Gold</option>
+            <option value="paper">Paper</option>
+            <option value="plain">Plain black</option>
+          </select>
+        </div>
+      </div>
+      <div class="field">
+        <label for="idle-message">Message <span class="muted">(optional)</span></label>
+        <input type="text" id="idle-message" maxlength="300" placeholder="You are welcome here">
+      </div>
+      <div class="field">
+        <label for="idle-logo">Logo</label>
+        <select id="idle-logo"></select>
+        <div class="hint">
+          Any picture from the media library. Upload it under Media first; a PNG
+          with a transparent background sits best on the colour.
+        </div>
+      </div>
+      <label class="check"><input type="checkbox" id="idle-mark"> Show the GRMC seal when there is no logo</label>
+      <div class="btn-row">
+        <button class="btn btn-primary" id="idle-save" data-default="Save idle screen">Save idle screen</button>
+      </div>
+      <div id="idle-msg"></div>
+      <div id="idle-preview-wrap" hidden>
+        <img id="idle-preview" class="tvframe" alt="Idle screen preview">
       </div>
     </div>
 

@@ -11,6 +11,8 @@ import {
 import {
   listPermissionRows, removePermissionRow, upsertPermissionRow,
 } from "../app-users";
+import { DEFAULT_IDLE, loadIdle, saveIdle } from "../idle";
+import { THEMES } from "../notices";
 
 const num = (value: unknown): number | undefined => {
   if (value === undefined || value === null || value === "") return undefined;
@@ -30,6 +32,46 @@ export async function settingsRoutes(app: FastifyInstance): Promise<void> {
     defaults: DEFAULT_SETTINGS,
     defaultPlaylistId: await getDefaultPlaylistId(pool),
   }));
+
+  // ── the idle screen ──────────────────────────────────────────────────────
+  app.get("/api/idle", async () => ({
+    ok: true,
+    idle: await loadIdle(pool),
+    defaults: DEFAULT_IDLE,
+    themes: Object.keys(THEMES).filter((t) => t !== "urgent"),
+  }));
+
+  app.put("/api/idle", { preHandler: requirePermission("admin") }, async (req, reply) => {
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const patch: Parameters<typeof saveIdle>[1] = {};
+    if (typeof b.headline === "string") patch.headline = b.headline;
+    if (typeof b.message === "string") patch.message = b.message;
+    if (typeof b.showMark === "boolean") patch.showMark = b.showMark;
+    if (b.theme !== undefined) {
+      const theme = String(b.theme);
+      if (!Object.keys(THEMES).includes(theme)) {
+        return reply.code(400).send({ ok: false, error: "That isn't a colourway I know." });
+      }
+      patch.theme = theme;
+    }
+    if (b.logoMediaId !== undefined) {
+      const id = Number(b.logoMediaId);
+      if (id) {
+        const exists = await pool.query(
+          "SELECT 1 FROM media WHERE id = $1 AND kind = 'image' AND status = 'ready'", [id]
+        );
+        if (!exists.rowCount) {
+          return reply.code(400).send({
+            ok: false,
+            error: "Pick a picture from the media library that has finished converting.",
+          });
+        }
+      }
+      patch.logoMediaId = id > 0 ? id : 0;
+    }
+    await saveIdle(pool, patch);
+    return { ok: true, idle: await loadIdle(pool) };
+  });
 
   app.put("/api/settings", { preHandler: requirePermission("admin") }, async (req, reply) => {
     const b = (req.body ?? {}) as Record<string, unknown>;
