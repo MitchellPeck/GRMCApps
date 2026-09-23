@@ -39,6 +39,7 @@ set -euo pipefail
 SDK_ROOT="${1:-}"
 PREFIX="${PREFIX:-$HOME/.local}"
 FFMPEG_TAG="${FFMPEG_TAG:-n7.1}"
+CC="${CC:-clang}"
 WORK="${WORK:-${TMPDIR:-/tmp}/narthex-ffmpeg-build}"
 
 if [[ -z "$SDK_ROOT" ]]; then
@@ -168,13 +169,38 @@ fi
 # ── build ───────────────────────────────────────────────────────────────────
 command -v git >/dev/null || { echo "git is required." >&2; exit 69; }
 
+mkdir -p "$WORK"
+
+# Check the toolchain before cloning 18 MB and burning two minutes on it.
+# FFmpeg's own failure for this is "gcc is unable to create an executable file
+# / C compiler test failed", which does not say what to do about it; on macOS
+# it is nearly always Command Line Tools that have gone stale against the OS.
+printf 'int main(void){return 0;}\n' > "${WORK}/cc-test.c"
+if ! "$CC" "${WORK}/cc-test.c" -o "${WORK}/cc-test" 2>"${WORK}/cc-test.log"; then
+  {
+    echo "${CC} cannot build a trivial C program, so FFmpeg has no chance:"
+    echo
+    sed 's/^/    /' "${WORK}/cc-test.log"
+    echo
+    echo "On macOS this is almost always stale Command Line Tools. Reinstall:"
+    echo "    sudo rm -rf /Library/Developer/CommandLineTools"
+    echo "    sudo xcode-select --install"
+    echo
+    echo "then run this script again. Current toolchain:"
+    echo "    xcode-select -p   -> $(xcode-select -p 2>/dev/null || echo \"not available\")"
+    echo "    sdk path          -> $(xcrun --show-sdk-path 2>/dev/null || echo \"not available\")"
+  } >&2
+  exit 70
+fi
+rm -f "${WORK}/cc-test" "${WORK}/cc-test.c" "${WORK}/cc-test.log"
+
 # FFmpeg needs nasm to assemble its x86 SIMD. Apple Silicon is aarch64, so the
 # check never runs there; an Intel Mac needs it installed.
 if [[ "$(uname -m)" != "arm64" ]] && ! command -v nasm >/dev/null; then
   echo "nasm is required on Intel Macs: brew install nasm" >&2
   exit 69
 fi
-mkdir -p "$WORK"
+
 cd "$WORK"
 
 if [[ ! -d FFmpeg ]]; then
@@ -189,6 +215,7 @@ cd FFmpeg
 echo "Configuring..."
 ./configure \
   --prefix="$PREFIX" \
+  --cc="$CC" \
   --enable-decklink \
   --extra-cflags="-I$INCLUDE" \
   --extra-cxxflags="-I$INCLUDE" \
