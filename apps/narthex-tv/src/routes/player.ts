@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { pool } from "../db";
 import { findByToken, recordHeartbeat, ScreenRow } from "../screens";
 import { buildPlan } from "../resolve";
+import { getTakeover, takeoverImageName } from "../takeover";
 import { getMedia, getPagePath } from "../media";
 import { contentTypeFor } from "../ingest";
 import { sendFile } from "../files";
@@ -63,6 +64,22 @@ export async function playerRoutes(app: FastifyInstance): Promise<void> {
       playing: String(b.playing ?? ""),
     });
     return { ok: true, serverTime: new Date().toISOString() };
+  });
+
+  // The emergency message, rasterised. Named after the moment it went up so a
+  // new one is never served from a client's cache of the last one.
+  app.get("/api/player/takeover/:name", async (req, reply) => {
+    const screen = await requireScreen(req, reply);
+    if (!screen) return reply;
+    const takeover = await getTakeover(pool);
+    if (!takeover.active || !takeover.imagePath || !takeover.startedAt) {
+      return reply.code(404).send({ ok: false, error: "No message is up." });
+    }
+    const name = (req.params as { name: string }).name;
+    if (name !== takeoverImageName(takeover.startedAt)) {
+      return reply.code(404).send({ ok: false, error: "That message has been replaced." });
+    }
+    return sendFile(req, reply, takeover.imagePath, "image/jpeg", 60);
   });
 
   app.get("/api/player/media/:id/file", async (req, reply) => {

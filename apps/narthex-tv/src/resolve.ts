@@ -3,11 +3,11 @@ import { Resolution, resolveSchedule } from "./schedule";
 import { listEntries } from "./schedule-repo";
 import { getPlaylist, listItems, PlaylistRow } from "./playlists";
 import { AppSettings, getDefaultPlaylistId, loadSettings } from "./settings";
-import { buildFrames, Plan, PlanItem, planRevision } from "./plan";
+import { buildFrames, Frame, Plan, PlanItem, planRevision } from "./plan";
 import { resolvePower } from "./power";
 import { localDateKey } from "./tz";
 import { listWindows } from "./hours";
-import { getTakeover } from "./takeover";
+import { getTakeover, takeoverImageName } from "./takeover";
 
 export type PlanSource = "schedule" | "default" | "none";
 
@@ -119,6 +119,25 @@ export async function buildPlan(
       )
     : [];
 
+  // playout.py, which feeds the narthex screen through the Blackmagic card,
+  // only decodes pictures and video — it cannot draw text. So during a
+  // takeover the plan's frames ARE the takeover, rendered. Without this the
+  // emergency shows in a browser and the actual screen carries on with last
+  // week's announcements. The browser player ignores frames while a takeover
+  // is up and draws the text itself, which scales better.
+  const takeoverFrames: Frame[] =
+    takeover.active && takeover.imagePath && takeover.startedAt
+      ? [{
+          kind: "image" as const,
+          url: `/api/player/takeover/${takeoverImageName(takeover.startedAt)}`,
+          ms: 30_000,
+          fit: "contain" as const,
+          mediaId: 0,
+          page: 0,
+          title: takeover.headline || "Emergency message",
+        }]
+      : [];
+
   const transition =
     playlist && (playlist.transition === "none" || playlist.transition === "fade")
       ? playlist.transition
@@ -162,7 +181,10 @@ export async function buildPlan(
       on: power.on || takeover.active,
       changesAt: power.changesAt ? power.changesAt.toISOString() : null,
     },
-    frames,
+    // An active takeover with no rendered slide yields NO frames on purpose:
+    // black is better than leaving the normal loop running during an
+    // emergency, and the browser player still shows the text.
+    frames: takeover.active ? takeoverFrames : frames,
   };
 
   return {

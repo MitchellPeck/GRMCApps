@@ -202,6 +202,7 @@ class Playout:
         self.frame_size = frame_bytes(self.width, self.height)
         self.plan = None
         self.plan_lock = threading.Lock()
+        self.last_heartbeat = 0.0
         self.interrupt = threading.Event()   # cut the current item short
         self.stopping = threading.Event()
         self.outer = None
@@ -210,6 +211,10 @@ class Playout:
 
     def log(self, message):
         print(f"[narthex-playout] {message}", flush=True)
+
+    @staticmethod
+    def takeover_active(plan):
+        return bool(plan and plan.get("takeover", {}).get("active"))
 
     def debug(self, message):
         if self.verbose:
@@ -248,6 +253,33 @@ class Playout:
         with urllib.request.urlopen(url, timeout=15) as response:
             return json.loads(response.read().decode("utf-8"))
 
+    def heartbeat(self, plan):
+        """
+        Tell the app this screen is alive and what it is showing.
+
+        The Screens tab is the first place anybody looks when somebody says the
+        TV is stuck, and without this it reports a screen driven through the
+        card as never seen — which is worse than no information, because it
+        looks like a fault.
+        """
+        if time.time() - self.last_heartbeat < 60:
+            return
+        self.last_heartbeat = time.time()
+        playing = "(EMERGENCY MESSAGE)" if self.takeover_active(plan) else (
+            "(outside opening hours)" if not plan.get("power", {}).get("on", True)
+            else plan.get("playlistName") or ""
+        )
+        body = json.dumps({"revision": plan.get("revision", ""), "playing": playing}).encode()
+        url = f"{self.origin}/api/player/heartbeat?" + urllib.parse.urlencode({"t": self.token})
+        request = urllib.request.Request(
+            url, data=body, headers={"content-type": "application/json"}, method="POST"
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=10):
+                pass
+        except (urllib.error.URLError, OSError):
+            pass   # the screen does not care whether this lands
+
     def poll_forever(self):
         while not self.stopping.is_set():
             try:
@@ -259,10 +291,18 @@ class Playout:
                         rebuild, at_once = plan_changed(old, new)
                         self.plan = new
                     if rebuild:
+                        # An emergency is the one thing here worth a line in
+                        # the log at normal verbosity.
+                        if self.takeover_active(new) and not self.takeover_active(old):
+                            self.log("EMERGENCY MESSAGE on screen: "
+                                     + str(new.get("takeover", {}).get("headline", "")))
+                        elif self.takeover_active(old) and not self.takeover_active(new):
+                            self.log("emergency message cleared")
                         self.debug(f"plan {new.get('revision')} "
                                    f"({'cut now' if at_once else 'at next item'})")
                         if at_once:
                             self.interrupt.set()
+                    self.heartbeat(new)
             except (urllib.error.URLError, OSError, ValueError, json.JSONDecodeError) as exc:
                 # Keep playing the last plan from cache. A narthex screen that
                 # goes black because the server hiccuped is the worse failure.
@@ -347,6 +387,12 @@ class Playout:
             plan = self.plan
         if not plan:
             return [None]
+        # An emergency takeover needs no special case here: the server puts the
+        # rendered message in `frames` and forces `power.on`, because this
+        # program decodes pictures and video and cannot draw text. If the
+        # render failed the frame list is empty and the screen goes black,
+        # which is the right answer during an evacuation — better than leaving
+        # last week's announcements up.
         if not plan.get("power", {}).get("on", True):
             # Outside the narthex's opening hours. Black in short pieces so a
             # change is picked up quickly rather than at the end of a long one.

@@ -1,5 +1,6 @@
 import { Pool } from "pg";
 import { resolvePower } from "./power";
+import { getTakeover } from "./takeover";
 import { listWindows, recordPowerEvent } from "./hours";
 import { getPowerActionRaw, getSetting, loadSettings, setSetting } from "./settings";
 import { ActionDeps, parseAction, realDeps, runAction } from "./power-actions";
@@ -27,7 +28,12 @@ export async function tickPower(pool: Pool, deps: RunnerDeps): Promise<void> {
   const settings = await loadSettings(pool);
   const windows = await listWindows(pool);
   const state = resolvePower(settings.hoursMode, windows, deps.now(), settings.timezone);
-  const want = state.on ? "on" : "off";
+
+  // An emergency has to reach a panel whose power was cut at the end of
+  // opening hours. Forcing the PLAN awake is not enough — if the off action
+  // physically switched the television off, the message goes to a dark screen.
+  const takeover = await getTakeover(pool);
+  const want = state.on || takeover.active ? "on" : "off";
 
   const previous = await getSetting(pool, LAST_STATE_KEY);
   if (previous === want) return;

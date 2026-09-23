@@ -253,3 +253,44 @@ class FrameSelection(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TakeoverHandling(unittest.TestCase):
+    """An emergency needs no special case in the frame loop — the server puts
+    the rendered message in `frames` and forces power.on — but it must not be
+    hidden by the operating hours, and it must be reported."""
+
+    def make(self, plan):
+        args = types.SimpleNamespace(
+            url="https://tv.grmc.app/player?t=tok", device="Fake", mode="4x4@30",
+            ffmpeg="true", cache=tempfile.mkdtemp(), background="black", verbose=False,
+        )
+        instance = playout.Playout(args)
+        instance.plan = plan
+        return instance
+
+    def test_an_emergency_outside_hours_is_still_shown(self):
+        frame = {"kind": "image", "url": "/api/player/takeover/123.jpg", "ms": 30000}
+        # The server forces power.on for a takeover; this asserts we honour it
+        # rather than blacking the screen out on the hours.
+        instance = self.make({
+            "power": {"on": True},
+            "takeover": {"active": True, "headline": "EVACUATE"},
+            "frames": [frame],
+        })
+        self.assertEqual(instance.frames_now(), [frame])
+
+    def test_an_emergency_that_failed_to_render_goes_black_not_stale(self):
+        # Better a black screen during an evacuation than last week's notices.
+        instance = self.make({
+            "power": {"on": True},
+            "takeover": {"active": True, "headline": "EVACUATE"},
+            "frames": [],
+        })
+        self.assertEqual(instance.frames_now(), [None])
+
+    def test_takeover_active_reads_the_plan_defensively(self):
+        self.assertFalse(playout.Playout.takeover_active(None))
+        self.assertFalse(playout.Playout.takeover_active({}))
+        self.assertFalse(playout.Playout.takeover_active({"takeover": {"active": False}}))
+        self.assertTrue(playout.Playout.takeover_active({"takeover": {"active": True}}))

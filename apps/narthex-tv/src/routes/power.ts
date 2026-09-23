@@ -10,6 +10,8 @@ import { getPowerActionRaw, loadSettings, setPowerActionRaw } from "../settings"
 import { parseAction, realDeps, runAction, serializeAction } from "../power-actions";
 import { clearTakeover, getTakeover, startTakeover } from "../takeover";
 import { getIdentity } from "../identity";
+import { tickPower } from "../power-runner";
+import { realDeps as powerDeps } from "../power-actions";
 
 const intParam = (value: unknown): number => {
   const n = Number(value);
@@ -140,6 +142,13 @@ export async function takeoverRoutes(app: FastifyInstance): Promise<void> {
       id.name || id.email
     );
     await recordPowerEvent(pool, "takeover-on", true, `${takeover.headline} — by ${takeover.startedBy}`);
+    // Now, not on the next 30-second tick: if the panel was switched off at
+    // the end of opening hours it has to come back on for this.
+    await tickPower(pool, {
+      now: () => new Date(),
+      actions: powerDeps,
+      log: (m) => app.log.info(m),
+    }).catch((e) => app.log.error(e));
     return { ok: true, takeover };
   });
 
@@ -147,6 +156,12 @@ export async function takeoverRoutes(app: FastifyInstance): Promise<void> {
     await clearTakeover(pool);
     const id = getIdentity(req);
     await recordPowerEvent(pool, "takeover-off", true, `cleared by ${id.name || id.email}`);
+    // And back off again straight away if we are outside opening hours.
+    await tickPower(pool, {
+      now: () => new Date(),
+      actions: powerDeps,
+      log: (m) => app.log.info(m),
+    }).catch((e) => app.log.error(e));
     return { ok: true, takeover: await getTakeover(pool) };
   });
 }

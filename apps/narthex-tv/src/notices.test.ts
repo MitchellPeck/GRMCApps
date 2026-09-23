@@ -30,6 +30,13 @@ test("columnsFor never returns something unusable", () => {
   assert.equal(columnsFor(100, 900, false), 8);
 });
 
+test("the urgent theme matches what the browser player draws", () => {
+  // The two clients showing the same emergency must not look like different
+  // systems: #takeover in player.css is #7a1d1d on white.
+  assert.equal(THEMES.urgent.background, "0x7A1D1D");
+  assert.equal(THEMES.urgent.headline, "0xFFFFFF");
+});
+
 test("an unknown theme falls back instead of rendering an invisible slide", () => {
   assert.deepEqual(themeFor("chartreuse"), THEMES.navy);
   assert.deepEqual(themeFor(""), THEMES.navy);

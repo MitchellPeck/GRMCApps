@@ -16,7 +16,7 @@ export interface NoticeText {
   footnote: string;
 }
 
-export type NoticeTheme = "navy" | "gold" | "paper" | "plain";
+export type NoticeTheme = "navy" | "gold" | "paper" | "plain" | "urgent";
 
 export interface ThemeColours {
   background: string;
@@ -33,6 +33,9 @@ export const THEMES: Record<NoticeTheme, ThemeColours> = {
   gold:  { background: "0xD3B02B", headline: "0x092D3E", body: "0x14202A", footnote: "0x092D3E", rule: "0x092D3E" },
   paper: { background: "0xF7F3E9", headline: "0x092D3E", body: "0x23303A", footnote: "0x9A7D20", rule: "0xD3B02B" },
   plain: { background: "0x000000", headline: "0xFFFFFF", body: "0xE6E6E6", footnote: "0xBBBBBB", rule: "0x666666" },
+  // Emergency takeover. Matches #takeover in player.css so the two clients
+  // showing the same message do not look like different systems.
+  urgent: { background: "0x7A1D1D", headline: "0xFFFFFF", body: "0xF2E4E4", footnote: "0xF2E4E4", rule: "0xFFFFFF" },
 };
 
 export function themeFor(name: string): ThemeColours {
