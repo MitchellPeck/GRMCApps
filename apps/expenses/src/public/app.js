@@ -514,7 +514,16 @@
     row("Sub-charge code", displayCode(d.subChargeCode));
     row("Vendor", d.vendor);
     row("Purchased by", d.purchasedBy);
-    row("Charged to which card", d.card);
+    if (d.paymentMethod === "reimbursement") {
+      row("Payment", "Reimbursement to " + (d.purchasedBy || "purchaser") + " (personal funds)");
+      if (d.reimbursedAt) {
+        row("Reimbursed", fmtDate(d.reimbursedAt) +
+            (d.reimbursementReference ? " · " + d.reimbursementReference : ""));
+      }
+    } else {
+      row("Payment", "Church card");
+      row("Charged to which card", d.card);
+    }
     row("Submitted by", d.submittedBy);
     row("Approved by", d.approvedBy);
 
@@ -579,6 +588,7 @@
       chargeCode: $("f_chargeCode").value,
       subChargeCode: $("f_subChargeCode").value,
       purchasedBy: $("f_purchasedBy").value,
+      paymentMethod: $("f_payment").value,
       card: ($("f_card").selectedOptions[0] || {}).text || "",
       submittedBy: $("f_submittedBy").value,
       approvedBy: ($("f_approver").selectedOptions[0] || {}).text || ""
@@ -911,6 +921,8 @@
         date: r.request_date, amount: r.amount, reason: r.reason, vendor: r.vendor,
         chargeCode: r.charge_code, subChargeCode: r.sub_charge_code,
         purchasedBy: r.purchased_by, card: r.card_label || r.card,
+        paymentMethod: r.payment_method, reimbursedAt: r.reimbursed_at,
+        reimbursementReference: r.reimbursement_reference,
         submittedBy: r.submitted_by, approvedBy: r.approved_by
       }, d.items);
     });
