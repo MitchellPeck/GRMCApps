@@ -40,6 +40,7 @@ SDK_ROOT="${1:-}"
 PREFIX="${PREFIX:-$HOME/.local}"
 FFMPEG_TAG="${FFMPEG_TAG:-n7.1}"
 CC="${CC:-clang}"
+SYSROOT_FLAGS=""
 WORK="${WORK:-${TMPDIR:-/tmp}/narthex-ffmpeg-build}"
 
 if [[ -z "$SDK_ROOT" ]]; then
@@ -194,19 +195,47 @@ if ! cc_links ""; then
   # which fails as "tapi error: malformed file / unknown architecture". An
   # older SDK installed alongside it usually links fine, so try them oldest
   # first rather than sending someone off to reinstall Xcode.
-  WORKING_SDK=""
-  for sdk in $(ls -d \
-        /Library/Developer/CommandLineTools/SDKs/MacOSX*.sdk \
-        /Applications/Xcode*.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX*.sdk \
-        2>/dev/null | sort -V); do
+  # Order matters. MacOSX.sdk is a symlink to whichever is newest, which on
+  # this kind of machine is the broken one, so resolve it and sort properly:
+  # the SDK matching the running macOS first, then older ones newest-first,
+  # and anything NEWER than the OS last of all.
+  OS_MAJOR="$(sw_vers -productVersion 2>/dev/null | cut -d. -f1)"
+  OS_MAJOR="${OS_MAJOR:-0}"
+  SDK_EXACT=""; SDK_OLDER=""; SDK_NEWER=""; SEEN=""
+  for sdk in /Library/Developer/CommandLineTools/SDKs/MacOSX*.sdk \
+             /Applications/Xcode*.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX*.sdk; do
     [[ -d "$sdk" ]] || continue
-    if cc_links "$sdk"; then WORKING_SDK="$sdk"; break; fi
+    real="$(cd "$sdk" && pwd -P)"
+    case " ${SEEN} " in *" ${real} "*) continue ;; esac
+    SEEN="${SEEN} ${real}"
+    ver="$(basename "$real")"; ver="${ver#MacOSX}"; ver="${ver%.sdk}"
+    major="${ver%%.*}"
+    if [[ "$major" == "$OS_MAJOR" ]]; then
+      SDK_EXACT="${SDK_EXACT}${ver}|${real}"$'\n'
+    elif [[ "$major" =~ ^[0-9]+$ ]] && (( major < OS_MAJOR )); then
+      SDK_OLDER="${SDK_OLDER}${ver}|${real}"$'\n'
+    else
+      SDK_NEWER="${SDK_NEWER}${ver}|${real}"$'\n'
+    fi
   done
 
+  WORKING_SDK=""
+  ORDERED="$( { printf '%s' "$SDK_EXACT" | sort -t'|' -k1,1Vr
+                printf '%s' "$SDK_OLDER" | sort -t'|' -k1,1Vr
+                printf '%s' "$SDK_NEWER" | sort -t'|' -k1,1V; } | grep -v '^$' || true)"
+  while IFS='|' read -r ver sdk; do
+    [[ -n "${sdk:-}" ]] || continue
+    if cc_links "$sdk"; then WORKING_SDK="$sdk"; break; fi
+  done <<< "$ORDERED"
+
   if [[ -n "$WORKING_SDK" ]]; then
-    echo "note: the default SDK cannot link, but ${WORKING_SDK} can — using that." >&2
+    echo "note: the default SDK cannot link, but ${WORKING_SDK} can - using that." >&2
     echo >&2
     export SDKROOT="$WORKING_SDK"
+    # SDKROOT alone is not enough: configure runs its own compiler test and it
+    # failed there even after the preflight passed. Pass -isysroot explicitly
+    # on every flag set instead of relying on the environment.
+    SYSROOT_FLAGS="-isysroot ${WORKING_SDK}"
   else
     {
       echo "${CC} cannot build a trivial C program, so FFmpeg has no chance:"
@@ -261,16 +290,28 @@ cd FFmpeg
 # H.264, MJPEG and PNG natively, scales and pads natively, and writes rawvideo.
 # Nothing is encoded to a compressed format at playout, so no x264, no GPL.
 echo "Configuring..."
-./configure \
+if ! ./configure \
   --prefix="$PREFIX" \
   --cc="$CC" \
   --enable-decklink \
-  --extra-cflags="-I$INCLUDE" \
-  --extra-cxxflags="-I$INCLUDE" \
+  --extra-cflags="-I$INCLUDE ${SYSROOT_FLAGS}" \
+  --extra-cxxflags="-I$INCLUDE ${SYSROOT_FLAGS}" \
+  --extra-ldflags="${SYSROOT_FLAGS}" \
   --disable-doc \
   --disable-htmlpages --disable-manpages --disable-podpages --disable-txtpages \
   --disable-ffplay \
   --progs-suffix=-decklink
+then
+  # "See ffbuild/config.log" is useless to anyone standing at a terminal, and
+  # the real reason is always in the last few lines of it.
+  {
+    echo
+    echo "configure failed. The end of ffbuild/config.log, which says why:"
+    echo
+    tail -40 ffbuild/config.log 2>/dev/null | sed 's/^/    /' || echo "    (no config.log)"
+  } >&2
+  exit 71
+fi
 
 echo "Building (this takes a while)..."
 make -j"$(sysctl -n hw.ncpu 2>/dev/null || nproc)"
