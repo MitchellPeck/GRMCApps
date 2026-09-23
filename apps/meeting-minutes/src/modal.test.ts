@@ -269,3 +269,60 @@ test("leaving a meeting cancels a pending resummarize", { skip }, async () => {
   await new Promise((r) => setTimeout(r, 120));
   assert.ok(!calls.some((c) => /summarize/.test(c.path)), "no summarize after navigating away");
 });
+
+// A sleeping screen suspends the page and the MediaRecorder with it, so a
+// running recording must hold a Screen Wake Lock, re-take it when the tab
+// comes back (browsers drop it on hide), and let it go when recording stops.
+test("recording holds a screen wake lock and releases it on stop", { skip }, async () => {
+  const { w, doc } = boot();
+  const requests: string[] = [];
+  let released = 0;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let current: any = null;
+  Object.defineProperty(w.navigator, "wakeLock", {
+    configurable: true,
+    value: {
+      request(type: string) {
+        requests.push(type);
+        const listeners: Array<() => void> = [];
+        const lock = {
+          addEventListener(_: string, fn: () => void) { listeners.push(fn); },
+          release() { released++; listeners.forEach((fn) => fn()); return Promise.resolve(); },
+          drop() { listeners.forEach((fn) => fn()); },
+        };
+        current = lock;
+        return Promise.resolve(lock);
+      },
+    },
+  });
+  let visibility = "visible";
+  Object.defineProperty(doc, "visibilityState", { configurable: true, get: () => visibility });
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+
+  w.eval("renderDetail()");
+  w.eval(`
+    meetingRec = { meetingId: 42, recordingId: 7, title: 'April Board Meeting', topic: '',
+                   mr: { state: 'inactive' }, stream: { getTracks: function(){ return []; } },
+                   t0: performance.now(), chain: Promise.resolve(), failedChunk: null, timer: null };
+    syncWakeLock(); syncWakeLock();
+  `);
+  await tick();
+  assert.deepEqual(requests, ["screen"], "one lock, not one per call");
+
+  // Tab hidden: the browser drops the lock. Coming back must re-take it.
+  visibility = "hidden"; current.drop();
+  doc.dispatchEvent(new w.Event("visibilitychange"));
+  await tick();
+  assert.equal(requests.length, 1, "no request while hidden");
+  visibility = "visible";
+  doc.dispatchEvent(new w.Event("visibilitychange"));
+  await tick();
+  assert.equal(requests.length, 2);
+
+  w.eval("finalizeMeetingRecording()");
+  await tick();
+  assert.equal(released, 1, "stopping releases the lock");
+  doc.dispatchEvent(new w.Event("visibilitychange"));
+  await tick();
+  assert.equal(requests.length, 2, "no lock once recording has stopped");
+});

@@ -1042,6 +1042,32 @@ function pickMime(){
   return '';
 }
 
+// ── Keep the screen awake while recording ───────────────────────────────────
+// A laptop or tablet that sleeps mid-meeting suspends the page and with it the
+// MediaRecorder. Hold a Screen Wake Lock while either recorder runs. Browsers
+// drop the lock whenever the tab is hidden, so re-request it on return.
+var wakeLock=null, wakeLockPending=false;
+
+function recordingInProgress(){ return !!(activeRec || meetingRec); }
+
+function syncWakeLock(){
+  if(recordingInProgress()){
+    if(wakeLock || wakeLockPending || !navigator.wakeLock || document.visibilityState!=='visible') return;
+    wakeLockPending=true;
+    navigator.wakeLock.request('screen').then(function(l){
+      wakeLockPending=false;
+      wakeLock=l;
+      l.addEventListener('release', function(){ if(wakeLock===l) wakeLock=null; });
+      // Recording may have stopped while the request was in flight.
+      if(!recordingInProgress()) syncWakeLock();
+    })['catch'](function(){ wakeLockPending=false; });
+  } else if(wakeLock){
+    var l=wakeLock; wakeLock=null;
+    try { l.release()['catch'](function(){}); } catch(e){}
+  }
+}
+document.addEventListener('visibilitychange', syncWakeLock);
+
 function toggleRecording(it, btn){
   if(activeRec && activeRec.it.id===it.id){ stopRecording(); return; }
   if(activeRec){ stopRecording(); }
@@ -1074,6 +1100,7 @@ function toggleRecording(it, btn){
       };
       activeRec={ it:it, btn:btn, mr:mr, stream:stream, chunks:chunks };
       mr.start();
+      syncWakeLock();
       btn.innerHTML='<span class="rec-dot"></span> Stop &amp; transcribe';
       rs.innerHTML='<span class="rec-dot"></span> Recording…';
     })
@@ -1083,6 +1110,7 @@ function toggleRecording(it, btn){
 function stopRecording(){
   if(!activeRec) return;
   var r=activeRec; activeRec=null;
+  syncWakeLock();
   if(r.btn) r.btn.innerHTML='● Record';
   try { if(r.mr.state!=='inactive') r.mr.stop(); } catch(e){
     try { r.stream.getTracks().forEach(function(t){ t.stop(); }); } catch(e2){}
@@ -1333,6 +1361,7 @@ function toggleMeetingRecording(){
           mr.ondataavailable=function(e){ if(e.data && e.data.size) uploadMeetingChunk(e.data); };
           mr.onstop=function(){ finalizeMeetingRecording(); };
           mr.start(20000);
+          syncWakeLock();
           state.meeting.recording_status='recording';
           meetingRec.timer=setInterval(renderMeetingRecUi, 1000);
           window.onbeforeunload=function(){ return 'A meeting recording is running.'; };
@@ -1355,6 +1384,7 @@ function stopMeetingRecording(){
 function finalizeMeetingRecording(){
   var rec=meetingRec; if(!rec) return;
   meetingRec=null;
+  syncWakeLock();
   window.onbeforeunload=null;
   if(rec.timer) clearInterval(rec.timer);
   try { rec.stream.getTracks().forEach(function(t){ t.stop(); }); } catch(e){}
