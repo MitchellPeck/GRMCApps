@@ -284,6 +284,10 @@ services:
       NARTHEXTV_DB_PASSWORD: "${NARTHEXTV_DB_PASSWORD}"
       NARTHEXTV_DB_NAME: "${NARTHEXTV_DB_NAME}"
       NARTHEXTV_DATA_DIR: "/data"
+      # Graphics already signed off in Approvals can be imported straight onto
+      # the screen. Over the internal network with the user's identity
+      # forwarded, never by reaching into the approvals database.
+      APPROVALS_URL: "http://approvals:3000"
       NARTHEXTV_MAX_FILE_MB: "${NARTHEXTV_MAX_FILE_MB:-512}"
       NARTHEXTV_MAX_FILES: "${NARTHEXTV_MAX_FILES:-20}"
       NARTHEXTV_CONVERT_TIMEOUT_MS: "${NARTHEXTV_CONVERT_TIMEOUT_MS:-1200000}"

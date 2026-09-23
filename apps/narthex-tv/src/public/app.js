@@ -951,6 +951,56 @@
     }
   }
 
+  // ── import from Approvals ───────────────────────────────────────────────
+  $("appr-open").addEventListener("click", async function () {
+    var box = $("appr-list");
+    if (!box.hidden) { box.hidden = true; return; }
+    box.hidden = false;
+    box.innerHTML = "";
+    box.appendChild(el("div", "empty", "Asking the Approvals app\u2026"));
+    try {
+      var data = await api("GET", "/api/approvals");
+      renderApprovals(data.images || []);
+    } catch (e) {
+      box.innerHTML = "";
+      box.appendChild(el("div", "alert alert-err", e.message));
+    }
+  });
+
+  function renderApprovals(images) {
+    var box = $("appr-list");
+    box.innerHTML = "";
+    if (!images.length) {
+      box.appendChild(el("div", "empty", "Nothing is approved in the Approvals app yet."));
+      return;
+    }
+    images.forEach(function (img) {
+      var row = el("div", "row");
+      var main = el("div", "row-main");
+      main.appendChild(el("div", "row-title", img.title));
+      main.appendChild(el("div", "row-sub", "Version " + img.currentVersion + " \u00b7 approved"));
+      row.appendChild(main);
+
+      var actions = el("div", "row-actions");
+      var add = button("Add to media", "btn-sm btn-sm-gold", async function () {
+        add.disabled = true;
+        add.textContent = "Adding\u2026";
+        try {
+          await api("POST", "/api/media/from-approval", { approvalId: img.id, title: img.title });
+          add.textContent = "Added";
+          await loadMedia();
+        } catch (e) {
+          add.disabled = false;
+          add.textContent = "Add to media";
+          msg("media-msg", e.message, "err");
+        }
+      });
+      actions.appendChild(add);
+      row.appendChild(actions);
+      box.appendChild(row);
+    });
+  }
+
   $("pick").addEventListener("click", function () { $("file").click(); });
   $("file").addEventListener("change", function () {
     upload($("file").files);

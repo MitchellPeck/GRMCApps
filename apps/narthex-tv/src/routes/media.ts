@@ -15,6 +15,10 @@ import {
 import { contentTypeFor, detectKind, safeFileName, titleFromFileName } from "../ingest";
 import { sendFile } from "../files";
 import { config } from "../config";
+import {
+  fileNameForApproval, getApprovedImageBytes, listApprovedImages,
+} from "../approvals-client";
+import { writeFile } from "node:fs/promises";
 
 const intParam = (value: unknown): number => {
   const n = Number(value);
@@ -165,6 +169,75 @@ export async function mediaRoutes(app: FastifyInstance): Promise<void> {
       }
       await deleteMedia(pool, id);
       return { ok: true };
+    }
+  );
+
+  // ── import from the Approvals app ────────────────────────────────────────
+  // A graphic that has already been through sign-off should not need
+  // re-exporting and re-uploading to reach the screen.
+
+  app.get("/api/approvals", { preHandler: requirePermission("upload") }, async (req, reply) => {
+    try {
+      return { ok: true, images: await listApprovedImages(getIdentity(req)) };
+    } catch (e) {
+      // Approvals being down must not look like a bug in this app.
+      return reply.code(502).send({
+        ok: false,
+        error: `Couldn't reach the Approvals app: ${e instanceof Error ? e.message : String(e)}`,
+      });
+    }
+  });
+
+  app.post(
+    "/api/media/from-approval",
+    { preHandler: requirePermission("upload") },
+    async (req, reply) => {
+      const body = req.body as { approvalId?: unknown; title?: unknown };
+      const approvalId = intParam(body?.approvalId);
+      if (!approvalId) return reply.code(400).send({ ok: false, error: "Pick a graphic." });
+
+      const identity = getIdentity(req);
+      const title = String(body?.title ?? "").trim() || `Approved graphic ${approvalId}`;
+
+      let fetched;
+      try {
+        fetched = await getApprovedImageBytes(identity, approvalId);
+      } catch (e) {
+        return reply.code(502).send({
+          ok: false,
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+
+      const fileName = fileNameForApproval(title, fetched.contentType);
+      const row = await createMedia(pool, {
+        kind: "image",
+        title,
+        fileName,
+        mimeType: fetched.contentType,
+        byteSize: fetched.bytes.length,
+        uploadedByEmail: identity.email,
+        uploadedByName: identity.name,
+      });
+
+      const dir = mediaDir(Number(row.id));
+      const target = join(dir, `original-${fileName}`);
+      try {
+        await mkdir(dir, { recursive: true });
+        await writeFile(target, fetched.bytes);
+        await setMediaPaths(pool, Number(row.id), { originalPath: target });
+        const stored = await getMedia(pool, Number(row.id));
+        // Straight onto the same queue as an upload: whatever Approvals holds
+        // still has to be normalised before the player will touch it.
+        if (stored) enqueueMedia(queue, pool, stored);
+        return { ok: true, media: mediaView(stored) };
+      } catch (e) {
+        await deleteMedia(pool, Number(row.id)).catch(() => {});
+        return reply.code(500).send({
+          ok: false,
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
     }
   );
 
