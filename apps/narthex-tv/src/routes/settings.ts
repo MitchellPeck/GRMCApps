@@ -3,7 +3,7 @@ import { pool } from "../db";
 import { requirePermission } from "../guard";
 import {
   AppSettings, DEFAULT_SETTINGS, getDefaultPlaylistId, isValidTimeZone, loadSettings,
-  saveSettings, setDefaultPlaylistId,
+  saveSettings, setDefaultPlaylistId, validateSettings,
 } from "../settings";
 import {
   checkPermissionChange, effectivePermissions, PermissionRow,
@@ -75,51 +75,15 @@ export async function settingsRoutes(app: FastifyInstance): Promise<void> {
 
   app.put("/api/settings", { preHandler: requirePermission("admin") }, async (req, reply) => {
     const b = (req.body ?? {}) as Record<string, unknown>;
-    const patch: Partial<AppSettings> = {};
 
-    if (b.timezone !== undefined) {
-      const tz = String(b.timezone).trim();
-      if (!isValidTimeZone(tz)) {
-        return reply.code(400).send({ ok: false, error: `"${tz}" isn't a timezone I know.` });
-      }
-      patch.timezone = tz;
-    }
-    const imageSeconds = num(b.imageSeconds);
-    if (imageSeconds !== undefined) patch.imageSeconds = Math.min(3600, Math.max(1, imageSeconds));
-    const slideSeconds = num(b.slideSeconds);
-    if (slideSeconds !== undefined) patch.slideSeconds = Math.min(3600, Math.max(1, slideSeconds));
-    const transitionMs = num(b.transitionMs);
-    if (transitionMs !== undefined) patch.transitionMs = Math.min(5000, Math.max(0, transitionMs));
-    const pollSeconds = num(b.pollSeconds);
-    if (pollSeconds !== undefined) patch.pollSeconds = Math.min(600, Math.max(3, pollSeconds));
-
-    const transition = pick(b.transition, ["none", "fade"] as const);
-    if (transition) patch.transition = transition;
-    const fit = pick(b.fit, ["contain", "cover"] as const);
-    if (fit) patch.fit = fit;
-    const clock = pick(b.clock, ["off", "time", "time_date"] as const);
-    if (clock) patch.clock = clock;
-    const clockPosition = pick(
-      b.clockPosition,
-      ["top-left", "top-right", "bottom-left", "bottom-right"] as const
-    );
-    if (clockPosition) patch.clockPosition = clockPosition;
-
-    if (b.background !== undefined) {
-      const value = String(b.background).trim();
-      if (!/^#[0-9a-fA-F]{3,8}$/.test(value)) {
-        return reply.code(400).send({ ok: false, error: "The background needs to be a hex colour." });
-      }
-      patch.background = value;
-    }
-    if (typeof b.footerText === "string") patch.footerText = b.footerText.slice(0, 300);
-    if (typeof b.idleMessage === "string") patch.idleMessage = b.idleMessage.slice(0, 300);
-    if (typeof b.videoLoopSingle === "boolean") patch.videoLoopSingle = b.videoLoopSingle;
-
-    await saveSettings(pool, patch);
+    // One table of validators, checked exhaustively by the compiler, rather
+    // than a hand-written if per field that can quietly miss one.
+    const checked = validateSettings(b);
+    if (!checked.ok) return reply.code(400).send({ ok: false, error: checked.error });
+    await saveSettings(pool, checked.value);
 
     if (b.defaultPlaylistId !== undefined) {
-      const id = num(b.defaultPlaylistId);
+      const id = Number(b.defaultPlaylistId);
       if (!id) {
         await setDefaultPlaylistId(pool, null);
       } else {

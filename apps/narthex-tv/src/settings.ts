@@ -55,6 +55,94 @@ const KEYS: Record<keyof AppSettings, string> = {
   hoursMode: "hours_mode",
 };
 
+export type SettingResult<T> = { ok: true; value: T } | { ok: false; error: string };
+
+const clamped = (label: string, min: number, max: number) =>
+  (raw: unknown): SettingResult<number> => {
+    const n = Number(raw);
+    if (!isFinite(n)) return { ok: false, error: `${label} has to be a number.` };
+    return { ok: true, value: Math.min(max, Math.max(min, Math.round(n))) };
+  };
+
+const chosen = <T extends string>(label: string, allowed: readonly T[]) =>
+  (raw: unknown): SettingResult<T> =>
+    (allowed as readonly string[]).includes(String(raw))
+      ? { ok: true, value: String(raw) as T }
+      : { ok: false, error: `${label} has to be one of: ${allowed.join(", ")}.` };
+
+const text = (max: number) =>
+  (raw: unknown): SettingResult<string> => ({ ok: true, value: String(raw ?? "").slice(0, max) });
+
+/**
+ * One validator per field, as a MAPPED TYPE over AppSettings — so leaving a
+ * field out is a compile error, not a silent no-op.
+ *
+ * This is why: hoursMode was in AppSettings, in KEYS, and in the UI, but the
+ * route validated its fields with a hand-written if-chain that had never been
+ * given a branch for it. Choosing scheduled hours answered 200, changed
+ * nothing, and the form sprang back on the next read. A setting that fails
+ * silently is the worst possible answer to somebody who just changed it, and a
+ * hand-maintained list of ifs will always eventually miss one.
+ */
+export const SETTING_VALIDATORS: {
+  [K in keyof AppSettings]: (raw: unknown) => SettingResult<AppSettings[K]>;
+} = {
+  timezone: (raw) => {
+    const tz = String(raw ?? "").trim();
+    return isValidTimeZone(tz)
+      ? { ok: true, value: tz }
+      : { ok: false, error: `"${tz}" isn't a timezone I know.` };
+  },
+  imageSeconds: clamped("Seconds per photo", 1, 3600),
+  slideSeconds: clamped("Seconds per slide", 1, 3600),
+  transition: chosen("The transition", ["none", "fade"] as const),
+  transitionMs: clamped("The crossfade length", 0, 5000),
+  fit: chosen("How media fills the screen", ["contain", "cover"] as const),
+  background: (raw) => {
+    const value = String(raw ?? "").trim();
+    return /^#[0-9a-fA-F]{3,8}$/.test(value)
+      ? { ok: true, value }
+      : { ok: false, error: "The background needs to be a hex colour." };
+  },
+  clock: chosen("The clock", ["off", "time", "time_date"] as const),
+  clockPosition: chosen("The clock corner",
+    ["top-left", "top-right", "bottom-left", "bottom-right"] as const),
+  footerText: text(300),
+  idleMessage: text(300),
+  pollSeconds: clamped("The check-in interval", 3, 600),
+  videoLoopSingle: (raw) => ({ ok: true, value: Boolean(raw) }),
+  hoursMode: chosen("Operating hours", ["always", "scheduled"] as const),
+};
+
+/** Fields this endpoint accepts. Anything else is refused, not dropped. */
+export const SETTABLE_KEYS: string[] = [
+  ...Object.keys(SETTING_VALIDATORS),
+  "defaultPlaylistId",
+];
+
+export function unknownSettingKeys(body: Record<string, unknown>): string[] {
+  return Object.keys(body).filter((k) => !SETTABLE_KEYS.includes(k));
+}
+
+/** Validate a whole body at once. Stops at the first thing that is wrong. */
+export function validateSettings(
+  body: Record<string, unknown>
+): SettingResult<Partial<AppSettings>> {
+  const unknown = unknownSettingKeys(body);
+  if (unknown.length) {
+    return { ok: false, error: `This app doesn't have a setting called ${unknown.join(", ")}.` };
+  }
+  const patch: Partial<AppSettings> = {};
+  for (const [field, validate] of Object.entries(SETTING_VALIDATORS)) {
+    const raw = body[field];
+    if (raw === undefined) continue;
+    const result = validate(raw);
+    if (!result.ok) return result;
+    (patch as Record<string, unknown>)[field] = result.value;
+  }
+  return { ok: true, value: patch };
+}
+
 export async function getSetting(pool: Pool, key: string): Promise<string> {
   const r = await pool.query("SELECT value FROM settings WHERE key = $1", [key]);
   return r.rows[0] ? r.rows[0].value : "";
