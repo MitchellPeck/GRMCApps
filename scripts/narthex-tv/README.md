@@ -41,7 +41,8 @@ nothing to log in to.
 #    see "Getting an ffmpeg that builds" below.
 ./build-ffmpeg-decklink.sh ~/Downloads/Blackmagic_DeckLink_SDK_12.4.2
 
-# 2. Confirm the card is visible. Note -sinks, not -sources: it is an output.
+# 2. Confirm the card is visible. Note -sinks, not -sources: it is an output,
+#    which is also why -sources and -list_formats will never show it.
 ~/.local/bin/ffmpeg-decklink -sinks decklink
 
 # 3. Run it.
@@ -115,11 +116,16 @@ Run the tests with:
 python3 -m unittest discover -s scripts/narthex-tv -p 'test_*.py'
 ```
 
-**Troubleshooting.** `--mode` must be a mode the device actually supports —
-`ffmpeg-decklink -f decklink -list_formats 1 -i 'UltraStudio Express Monitor 3G'`
-lists them. The pixel format is always `uyvy422`; the audio rate is always 48 kHz. If
-ffmpeg refuses the mode, add `-format_code` to the outer command in
-`start_outer()`. Run with `-v` to see every command it builds.
+**Troubleshooting.** `--mode` must be a mode the device actually supports.
+There is no way to list them: `-list_formats` only works on a *source*, and the
+UltraStudio Express Monitor 3G is output-only, so `-i <device>` fails with
+`Could not open input device` no matter what. You discover the modes by trying
+one. `start_outer()` passes no `-format_code` — it hands the driver a raw
+stream of the size and rate from `--mode` and lets it pick the matching mode,
+so `1920x1080@30` becomes 1080p30. If the driver refuses, ffmpeg says so on
+stderr and naming the mode explicitly with `-format_code` in `start_outer()` is
+the next thing to try. The pixel format is always `uyvy422`; the audio rate is
+always 48 kHz. Run with `-v` to see every command it builds.
 
 ### B. In the TV's own browser
 
