@@ -186,6 +186,8 @@ services:
       # (default 4h — whisper answers only when the whole job is done, so this
       # must exceed the slowest meeting you record). WHISPER_WARMUP=0 skips the
       # boot-time model load that keeps the first recording of the day fast.
+      # WHISPER_CHUNK_SECONDS (default 600) is the part length whole-meeting
+      # recordings are split into; the timeout then applies per part.
       MINUTES_DATA_DIR: "/data"
     volumes:
       - minutesdata:/data

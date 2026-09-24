@@ -18,6 +18,10 @@ export const config = {
   // well above the slowest meeting you expect (a whole-meeting recording of an
   // hour needs hours here at CPU speeds). 0 disables it.
   whisperTimeoutMs: Number(process.env.WHISPER_TIMEOUT_MS || 4 * 60 * 60 * 1000),
+  // Whole-meeting recordings are sent to whisper in parts of about this many
+  // seconds (cut at pauses). One 70-minute request crashed the whisper
+  // container every time; ten-minute parts keep its memory flat.
+  whisperChunkSeconds: Math.max(60, Number(process.env.WHISPER_CHUNK_SECONDS || 600)),
   // Send a throwaway clip at boot so the first real recording does not pay
   // for loading the model. Set WHISPER_WARMUP=0 to skip it.
   whisperWarmUp: process.env.WHISPER_WARMUP !== "0",
