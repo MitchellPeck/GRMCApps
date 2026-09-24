@@ -38,7 +38,7 @@ the operating hours and the blackout all behave identically — there is no
 second copy of that logic to drift.
 
     ./playout.py --url 'https://tv.grmc.app/player?t=<token>'
-    ./playout.py --url '...' --device 'UltraStudio Monitor 3G' --mode 1920x1080@30
+    ./playout.py --url '...' --device 'UltraStudio Express Monitor 3G' --mode 1920x1080@30
 """
 
 import argparse
@@ -442,7 +442,7 @@ def main(argv=None):
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--url", required=True,
                         help="the link from Narthex TV -> Screens -> Copy link")
-    parser.add_argument("--device", default="UltraStudio Monitor 3G",
+    parser.add_argument("--device", default="UltraStudio Express Monitor 3G",
                         help="exactly as `ffmpeg -sinks decklink` prints it")
     parser.add_argument("--mode", default="1920x1080@30",
                         help="must be a mode the device supports, e.g. 1920x1080@30")

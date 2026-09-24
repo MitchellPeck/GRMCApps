@@ -46,7 +46,7 @@ nothing to log in to.
 
 # 3. Run it.
 ./playout.py --url 'https://tv.grmc.app/player?t=<token>' \
-             --device 'UltraStudio Monitor 3G' --mode 1920x1080@30 \
+             --device 'UltraStudio Express Monitor 3G' --mode 1920x1080@30 \
              --ffmpeg ~/.local/bin/ffmpeg-decklink
 ```
 
@@ -116,7 +116,7 @@ python3 -m unittest discover -s scripts/narthex-tv -p 'test_*.py'
 ```
 
 **Troubleshooting.** `--mode` must be a mode the device actually supports —
-`ffmpeg-decklink -f decklink -list_formats 1 -i 'UltraStudio Monitor 3G'`
+`ffmpeg-decklink -f decklink -list_formats 1 -i 'UltraStudio Express Monitor 3G'`
 lists them. The pixel format is always `uyvy422`; the audio rate is always 48 kHz. If
 ffmpeg refuses the mode, add `-format_code` to the outer command in
 `start_outer()`. Run with `-v` to see every command it builds.
