@@ -122,6 +122,12 @@ and the TV would re-sync — a black flash between every photo. Instead:
   invariant.
 - Assets are cached on disk, so a server outage keeps the last schedule
   playing instead of going black.
+- **The card is always released on the way out.** An ffmpeg left holding the
+  device outlives the run that started it, and every later attempt then fails
+  with `Could not enable video output!` -- which says nothing about the real
+  cause. If you ever see that, check `pgrep -fl ffmpeg-decklink` first. A
+  wedged one can need several SIGTERMs, because ffmpeg only hard-exits after
+  the third.
 
 `com.grmc.narthextv-playout.plist` runs it at login and restarts it if it ever
 exits. Because nothing is drawn on screen, the Mac can be headless and the

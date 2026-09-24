@@ -184,9 +184,24 @@ class FakeOuter:
     def __init__(self):
         self.stdin = io.BytesIO()
         self.alive = True
+        self.terminated = 0
+        self.killed = 0
+        self.waited = 0
 
     def poll(self):
         return None if self.alive else 1
+
+    def terminate(self):
+        self.terminated += 1
+        self.alive = False
+
+    def kill(self):
+        self.killed += 1
+        self.alive = False
+
+    def wait(self, timeout=None):
+        self.waited += 1
+        return 0
 
 
 class PipeMechanics(unittest.TestCase):
@@ -226,6 +241,40 @@ class PipeMechanics(unittest.TestCase):
 
         self.playout.play({"kind": "image", "ms": 1000, "fit": "contain", "url": None})
         return self.playout.outer.stdin.tell()
+
+    def test_the_signal_handler_never_touches_the_pipe(self):
+        # stop() is a signal handler: it runs between two bytecodes of whatever
+        # the main thread was doing, which is usually the write in play().
+        # Closing the BufferedWriter from there raises "RuntimeError: reentrant
+        # call", which kills the interpreter before anything is cleaned up and
+        # leaves the ffmpeg holding the card -- after which every later run
+        # dies on "Could not enable video output!". So the handler must signal
+        # the process and leave the IO alone.
+        self.playout.stop()
+        self.assertFalse(self.playout.outer.stdin.closed,
+                         "stop() closed the pipe it may be interrupting")
+        self.assertEqual(self.playout.outer.terminated, 1)
+        self.assertTrue(self.playout.stopping.is_set())
+        self.assertTrue(self.playout.interrupt.is_set())
+
+    def test_the_card_is_released_on_the_way_out(self):
+        # The other half: something still has to close the pipe and reap the
+        # process, on the main thread, however the run ended.
+        self.playout.close_outer()
+        self.assertTrue(self.playout.outer.stdin.closed)
+        self.assertGreaterEqual(self.playout.outer.terminated, 1)
+        self.assertEqual(self.playout.outer.waited, 1)
+
+    def test_a_write_to_a_terminated_device_ends_the_item_quietly(self):
+        # What play() sees once stop() has signalled the outer: the write
+        # fails, and that is an expected ending rather than a crash.
+        self.playout.outer.stdin.close()
+        os.environ["FAKE_FRAME_SIZE"] = str(self.FRAME)
+        os.environ["FAKE_FRAMES"] = "3"
+        os.environ["FAKE_TAIL"] = "0"
+        os.environ["FAKE_DELAY"] = "0"
+        self.assertFalse(self.playout.play(
+            {"kind": "image", "ms": 1000, "fit": "contain", "url": None}))
 
     def test_whole_items_are_forwarded_frame_for_frame(self):
         self.assertEqual(self.run_play(frames=5), 5 * self.FRAME)

@@ -453,31 +453,70 @@ class Playout:
         while self.plan is None and time.time() < deadline and not self.stopping.is_set():
             time.sleep(0.5)
 
-        while not self.stopping.is_set():
-            if not self.outer_alive():
-                if self.outer is not None:
-                    self.log("the device closed; reopening in 5s")
-                    self.stopping.wait(5)
-                    if self.stopping.is_set():
-                        break
-                self.start_outer()
+        try:
+            while not self.stopping.is_set():
+                if not self.outer_alive():
+                    if self.outer is not None:
+                        self.log("the device closed; reopening in 5s")
+                        self.stopping.wait(5)
+                        if self.stopping.is_set():
+                            break
+                    self.start_outer()
 
-            self.interrupt.clear()
-            for frame in self.frames_now():
-                if self.stopping.is_set() or self.interrupt.is_set():
-                    break
-                if not self.play(frame):
-                    break
+                self.interrupt.clear()
+                for frame in self.frames_now():
+                    if self.stopping.is_set() or self.interrupt.is_set():
+                        break
+                    if not self.play(frame):
+                        break
+        finally:
+            self.close_outer()
 
     def stop(self, *_):
+        """
+        The signal handler, so it runs *between two bytecodes of whatever the
+        main thread was doing* -- including, most of the time, the write on
+        the next line down. It therefore touches nothing that is not safe to
+        re-enter.
+
+        Closing the pipe here is what it must not do. A BufferedWriter is not
+        reentrant, and interrupting play()'s `self.outer.stdin.write(chunk)` to
+        close that same writer raises `RuntimeError: reentrant call`, which
+        kills the interpreter before anything is cleaned up and leaves the
+        ffmpeg holding the card. The next run then cannot open the device at
+        all -- `Could not enable video output!` -- and nothing about that
+        message points back to a Ctrl-C.
+
+        So: set the flags, and signal the device to go through the process
+        table rather than through Python's IO. terminate() is a kill(2) and
+        safe anywhere. It also unblocks a write that is stuck because the card
+        stopped draining the pipe, which is the case where a handler that
+        politely waits its turn would never get one. The main thread then
+        leaves play() with a BrokenPipeError it already expects, unwinds, and
+        closes the pipe itself in close_outer().
+        """
         self.stopping.set()
         self.interrupt.set()
         if self.outer is not None:
-            try:
-                self.outer.stdin.close()
-            except (OSError, ValueError):
-                pass
             self.outer.terminate()
+
+    def close_outer(self):
+        """Let go of the card. Only ever called on the main thread."""
+        if self.outer is None:
+            return
+        try:
+            self.outer.stdin.close()
+        except (OSError, ValueError, RuntimeError):
+            pass
+        self.outer.terminate()
+        try:
+            self.outer.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            # A card that will not release is worse than an abrupt exit: the
+            # next run inherits a device it cannot open.
+            self.outer.kill()
+            self.outer.wait(timeout=5)
+        self.log("released the device")
 
 
 def main(argv=None):
