@@ -64,7 +64,8 @@ nothing to log in to.
 
 # 3. Run it. Note the loopback URL -- Screens -> Copy local link.
 ./playout.py --url 'http://127.0.0.1:3010/player?t=<token>' \
-             --device 'UltraStudio Express Monitor 3G' --mode 1920x1080@30 \
+             --device 'UltraStudio Express Monitor 3G' \
+             --mode 1920x1080@59.94 --format-code Hp5994 \
              --ffmpeg ~/.local/bin/ffmpeg-decklink
 ```
 
@@ -138,6 +139,35 @@ Run the tests with:
 ```sh
 python3 -m unittest discover -s scripts/narthex-tv -p 'test_*.py'
 ```
+
+#### Two settings that cost an afternoon
+
+Both defaults are now right, so this is only here for the next piece of
+hardware.
+
+**The codec must be `v210`.** The DeckLink muxer accepts exactly two things,
+`v210` and a wrapped frame in uyvy422, and refuses everything else -- including
+`rawvideo`, which reads perfectly sensibly next to a rawvideo input -- with
+`Unsupported codec type!`. That one at least fails loudly. `wrapped_avframe`
+is the trap: it is accepted, the header is written, ffmpeg reports a healthy
+output stream, and the card puts up **solid red** and clocks out at about
+`speed=0.08x`. Nothing in any log says the codec is wrong. If a screen ever
+goes red for no reason, this is the first thing to check.
+
+**1080p30 is not a safe default.** It is a legal CEA mode, the driver reports
+`Found Decklink mode 1920 x 1080 with rate 30.00`, and plenty of consumer
+televisions still mishandle it -- typically locking once and then refusing
+after a re-sync, which reads as an intermittent fault rather than a wrong
+setting. `1920x1080@59.94` with `--format-code Hp5994` is the pair that locks
+on everything. It doubles what goes through the pipe, from about 124 MB/s to
+248 MB/s; if that ever proves too much, 1080i59.94
+(`--mode 1920x1080@29.97 --format-code Hi5994`) is the fallback.
+
+**A leftover ffmpeg looks exactly like broken hardware.** One left holding the
+card outlives the run that started it, and every later attempt fails with
+`Could not enable video output!`. Check `pgrep -fl ffmpeg-decklink` before
+concluding anything about a mode or a cable. A wedged one needs several
+SIGTERMs, because ffmpeg only hard-exits after the third.
 
 **Troubleshooting.** `--mode` must be a mode the device actually supports.
 There is no way to list them: `-list_formats` only works on a *source*, and the

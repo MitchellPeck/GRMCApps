@@ -104,16 +104,34 @@ class PureHelpers(unittest.TestCase):
         self.assertNotEqual(a, playout.cache_name("/api/player/media/8/file"))
         self.assertNotIn("/", a)
 
-    def test_outer_command_uses_a_codec_the_decklink_muxer_accepts(self):
-        # FFmpeg's DeckLink muxer takes only v210 or a wrapped frame. Asking it
-        # for rawvideo -- which reads perfectly sensibly next to a rawvideo
-        # input -- is refused at header-write time with "Unsupported codec
-        # type!", so the card opens and then immediately closes. Nothing about
-        # the failure points at the codec, so pin it here.
+    def test_outer_command_defaults_to_the_codec_that_works(self):
+        # The muxer takes v210 or a wrapped frame, and refuses everything else
+        # -- rawvideo included -- at header-write time. But the two it accepts
+        # are not equal: wrapped_avframe passes every check and then puts solid
+        # red on the screen at a twentieth of real time. Only v210 shows the
+        # picture, and nothing in the logs distinguishes them, so pin it.
         command = playout.outer_command("ffmpeg", "UltraStudio Express Monitor 3G",
-                                        1920, 1080, 30)
-        codec = command[command.index("-c:v") + 1]
-        self.assertIn(codec, ("wrapped_avframe", "v210"))
+                                        1920, 1080, 59.94)
+        self.assertEqual(command[command.index("-c:v") + 1], "v210")
+        # v210 carries its own pixel format; naming another one contradicts it.
+        self.assertNotIn("-pix_fmt", command[command.index("-c:v"):])
+
+    def test_the_escape_hatch_codec_still_carries_its_pixel_format(self):
+        # wrapped_avframe has no pixel format of its own, so it needs one --
+        # the opposite of v210. Kept working for different hardware.
+        command = playout.outer_command("ffmpeg", "Dev", 1920, 1080, 30,
+                                        codec="wrapped_avframe")
+        tail = command[command.index("-c:v"):]
+        self.assertEqual(tail[1], "wrapped_avframe")
+        self.assertEqual(tail[tail.index("-pix_fmt") + 1], "uyvy422")
+
+    def test_the_command_line_defaults_to_the_mode_that_locks(self):
+        # 1080p30 is legal and plenty of televisions mishandle it; 1080p59.94
+        # is the one that always locks. The pair must agree.
+        args = playout.build_parser().parse_args(["--url", "http://x/player?t=1"])
+        self.assertEqual(args.mode, "1920x1080@59.94")
+        self.assertEqual(args.format_code, "Hp5994")
+        self.assertEqual(args.codec, "v210")
 
     def test_outer_command_can_name_the_mode_outright(self):
         # -format_code is a muxer option, so it only takes effect if it sits

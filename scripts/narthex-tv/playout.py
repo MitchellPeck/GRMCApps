@@ -143,25 +143,37 @@ def input_args(frame, path, width, height, fps):
     return ["-loop", "1", "-t", f"{duration:.3f}", "-i", path]
 
 
-def outer_command(ffmpeg, device, width, height, fps, format_code=None):
+CODECS = ("v210", "wrapped_avframe")
+
+
+def outer_command(ffmpeg, device, width, height, fps,
+                  format_code=None, codec="v210"):
     """
     The command for the one process that owns the card.
 
-    Three things here are not free choices, and getting any of them wrong ends
-    with the device refusing the stream rather than showing a wrong picture:
+    Four things here are not free choices, and each one was paid for in front
+    of the hardware:
 
-    - **The output codec must be `wrapped_avframe`.** FFmpeg's DeckLink muxer
-      accepts only `v210` or a wrapped frame in `uyvy422`; anything else,
-      `rawvideo` included, is rejected at header-write time with "Unsupported
-      codec type!". The pipe on the *input* side is genuinely raw, so the two
-      halves of this command disagree on purpose.
+    - **The output codec must be `v210`.** FFmpeg's DeckLink muxer accepts only
+      `v210` or a wrapped frame in uyvy422 -- anything else, `rawvideo`
+      included, is refused outright with "Unsupported codec type!". But
+      `wrapped_avframe`, the other legal answer, is not a working one on an
+      UltraStudio Express Monitor 3G: it is accepted, the header is written,
+      and then the card puts up a solid red frame and clocks out at about a
+      twentieth of real time. v210 shows the picture. So the choice is not
+      between two equal options, and `rawvideo` failing loudly is the kinder
+      of the two wrong answers.
+    - **No `-pix_fmt` on the output.** v210 is 10-bit YUV and brings its own;
+      asking for uyvy422 as well is a contradiction. The pipe on the *input*
+      side genuinely is raw uyvy422, so the two halves of this command disagree
+      on purpose, and ffmpeg converts between them.
     - **Silent stereo at 48 kHz is attached** because the muxer wants an audio
       stream and the card's clock is fixed at that rate. The narthex screen has
       no speakers, so it is silence.
     - **`format_code` names the mode outright** when the driver's own match on
       size and rate picks one the television will not take. A set that locks
       once and then refuses after a re-sync is the usual sign; 1080p30 is the
-      common offender over HDMI, and Hp5994 or Hi5994 the usual cures.
+      common offender over HDMI, and Hp5994 the one everything accepts.
     """
     command = [
         ffmpeg, "-hide_banner", "-loglevel", "warning",
@@ -169,9 +181,12 @@ def outer_command(ffmpeg, device, width, height, fps, format_code=None):
         "-s", f"{width}x{height}", "-r", f"{fps:g}",
         "-i", "pipe:0",
         "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
-        "-c:v", "wrapped_avframe", "-pix_fmt", "uyvy422",
-        "-c:a", "pcm_s16le", "-ar", "48000", "-ac", "2",
+        "-c:v", codec,
     ]
+    # wrapped_avframe carries no pixel format of its own; v210 does.
+    if codec == "wrapped_avframe":
+        command += ["-pix_fmt", "uyvy422"]
+    command += ["-c:a", "pcm_s16le", "-ar", "48000", "-ac", "2"]
     if format_code:
         command += ["-format_code", format_code]
     return command + ["-f", "decklink", device]
@@ -257,6 +272,7 @@ class Playout:
         self.outer = None
         self.opened_at = 0.0
         self.format_code = args.format_code
+        self.codec = args.codec
 
         os.makedirs(self.cache_dir, exist_ok=True)
 
@@ -277,7 +293,7 @@ class Playout:
         """Open the card. See outer_command for why it is built the way it is."""
         command = outer_command(self.ffmpeg, self.device,
                                 self.width, self.height, self.fps,
-                                self.format_code)
+                                self.format_code, self.codec)
         self.debug("outer: " + " ".join(command))
         self.outer = subprocess.Popen(command, stdin=subprocess.PIPE)
         self.opened_at = time.time()
@@ -554,13 +570,20 @@ def build_parser():
                         help="the link from Narthex TV -> Screens -> Copy link")
     parser.add_argument("--device", default="UltraStudio Express Monitor 3G",
                         help="exactly as `ffmpeg -sinks decklink` prints it")
-    parser.add_argument("--mode", default="1920x1080@30",
-                        help="must be a mode the device supports, e.g. 1920x1080@30")
-    parser.add_argument("--format-code", default=None,
+    parser.add_argument("--mode", default="1920x1080@59.94",
+                        help="must be a mode the device supports. 1080p59.94 is "
+                             "the one every television accepts; 1080p30 is a "
+                             "legal mode that many sets handle badly.")
+    parser.add_argument("--format-code", default="Hp5994",
                         help="name the DeckLink mode outright instead of letting "
                              "the driver match on size and rate: Hp30, Hp5994, "
-                             "Hi5994. Worth trying on a television that locks "
-                             "once and then refuses.")
+                             "Hi5994. Must agree with --mode.")
+    parser.add_argument("--codec", default="v210", choices=CODECS,
+                        help="how frames are handed to the card. v210 is the one "
+                             "that works; wrapped_avframe is accepted by the "
+                             "muxer but shows solid red on an UltraStudio "
+                             "Express Monitor 3G. Here only as an escape hatch "
+                             "for different hardware.")
     parser.add_argument("--ffmpeg", default="~/.local/bin/ffmpeg-decklink",
                         help="the ffmpeg built with --enable-decklink "
                              "(build-ffmpeg-decklink.sh puts it here)")
