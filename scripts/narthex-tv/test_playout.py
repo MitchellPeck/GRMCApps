@@ -115,6 +115,19 @@ class PureHelpers(unittest.TestCase):
         codec = command[command.index("-c:v") + 1]
         self.assertIn(codec, ("wrapped_avframe", "v210"))
 
+    def test_outer_command_can_name_the_mode_outright(self):
+        # -format_code is a muxer option, so it only takes effect if it sits
+        # with the output, before -f decklink. Put it after and ffmpeg reads it
+        # as an input option and silently ignores it -- which looks exactly
+        # like a television that just will not lock.
+        command = playout.outer_command("ffmpeg", "Dev", 1920, 1080, 59.94,
+                                        format_code="Hp5994")
+        self.assertEqual(command[-5:],
+                         ["-format_code", "Hp5994", "-f", "decklink", "Dev"])
+        # and nothing is added when it is not asked for
+        plain = playout.outer_command("ffmpeg", "Dev", 1920, 1080, 30)
+        self.assertNotIn("-format_code", plain)
+
     def test_outer_command_describes_the_pipe_it_is_actually_fed(self):
         # The input half must keep matching what the feeder writes: raw
         # uyvy422 at exactly the mode's size and rate, or every frame is
@@ -178,6 +191,19 @@ sys.stdout.buffer.flush()
 """
 
 
+def make_args(**overrides):
+    """
+    Arguments built by the program's own parser, so a flag added to the command
+    line cannot quietly go missing here. Every test that needs a Playout goes
+    through this.
+    """
+    argv = ["--url", "http://127.0.0.1:3010/player?t=tok",
+            "--device", "Fake", "--mode", "4x4@30"]
+    for name, value in overrides.items():
+        argv += ["--" + name.replace("_", "-"), str(value)]
+    return playout.build_parser().parse_args(argv)
+
+
 class FakeOuter:
     """Stands in for the long-lived ffmpeg that owns the card."""
 
@@ -214,11 +240,7 @@ class PipeMechanics(unittest.TestCase):
             handle.write(FAKE_FFMPEG)
         os.chmod(self.fake, 0o755)
 
-        args = types.SimpleNamespace(
-            url="https://tv.grmc.app/player?t=tok",
-            device="Fake", mode="4x4@30", ffmpeg=self.fake,
-            cache=os.path.join(self.tmp, "cache"), background="black", verbose=False,
-        )
+        args = make_args(ffmpeg=self.fake, cache=os.path.join(self.tmp, "cache"))
         self.playout = playout.Playout(args)
         self.playout.frame_size = self.FRAME
         self.playout.outer = FakeOuter()
@@ -302,10 +324,10 @@ class PipeMechanics(unittest.TestCase):
 
 class FrameSelection(unittest.TestCase):
     def make(self, plan):
-        args = types.SimpleNamespace(
-            url="https://tv.grmc.app/player?t=tok", device="Fake", mode="4x4@30",
-            ffmpeg="true", cache=tempfile.mkdtemp(), background="black", verbose=False,
-        )
+        # These tests only ask frames_now() what it would play, so any real
+        # executable satisfies the startup check without ever being run.
+        args = make_args(ffmpeg=sys.executable,
+                         cache=os.path.join(tempfile.mkdtemp(), "cache"))
         instance = playout.Playout(args)
         instance.plan = plan
         return instance
@@ -347,10 +369,10 @@ class TakeoverHandling(unittest.TestCase):
     hidden by the operating hours, and it must be reported."""
 
     def make(self, plan):
-        args = types.SimpleNamespace(
-            url="https://tv.grmc.app/player?t=tok", device="Fake", mode="4x4@30",
-            ffmpeg="true", cache=tempfile.mkdtemp(), background="black", verbose=False,
-        )
+        # These tests only ask frames_now() what it would play, so any real
+        # executable satisfies the startup check without ever being run.
+        args = make_args(ffmpeg=sys.executable,
+                         cache=os.path.join(tempfile.mkdtemp(), "cache"))
         instance = playout.Playout(args)
         instance.plan = plan
         return instance

@@ -143,12 +143,12 @@ def input_args(frame, path, width, height, fps):
     return ["-loop", "1", "-t", f"{duration:.3f}", "-i", path]
 
 
-def outer_command(ffmpeg, device, width, height, fps):
+def outer_command(ffmpeg, device, width, height, fps, format_code=None):
     """
     The command for the one process that owns the card.
 
-    Two things here are not free choices, and getting either wrong ends with
-    the device refusing the stream rather than showing a wrong picture:
+    Three things here are not free choices, and getting any of them wrong ends
+    with the device refusing the stream rather than showing a wrong picture:
 
     - **The output codec must be `wrapped_avframe`.** FFmpeg's DeckLink muxer
       accepts only `v210` or a wrapped frame in `uyvy422`; anything else,
@@ -158,8 +158,12 @@ def outer_command(ffmpeg, device, width, height, fps):
     - **Silent stereo at 48 kHz is attached** because the muxer wants an audio
       stream and the card's clock is fixed at that rate. The narthex screen has
       no speakers, so it is silence.
+    - **`format_code` names the mode outright** when the driver's own match on
+      size and rate picks one the television will not take. A set that locks
+      once and then refuses after a re-sync is the usual sign; 1080p30 is the
+      common offender over HDMI, and Hp5994 or Hi5994 the usual cures.
     """
-    return [
+    command = [
         ffmpeg, "-hide_banner", "-loglevel", "warning",
         "-f", "rawvideo", "-pix_fmt", "uyvy422",
         "-s", f"{width}x{height}", "-r", f"{fps:g}",
@@ -167,8 +171,10 @@ def outer_command(ffmpeg, device, width, height, fps):
         "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
         "-c:v", "wrapped_avframe", "-pix_fmt", "uyvy422",
         "-c:a", "pcm_s16le", "-ar", "48000", "-ac", "2",
-        "-f", "decklink", device,
     ]
+    if format_code:
+        command += ["-format_code", format_code]
+    return command + ["-f", "decklink", device]
 
 
 def describe_frame(frame):
@@ -249,6 +255,8 @@ class Playout:
         self.interrupt = threading.Event()   # cut the current item short
         self.stopping = threading.Event()
         self.outer = None
+        self.opened_at = 0.0
+        self.format_code = args.format_code
 
         os.makedirs(self.cache_dir, exist_ok=True)
 
@@ -268,10 +276,15 @@ class Playout:
     def start_outer(self):
         """Open the card. See outer_command for why it is built the way it is."""
         command = outer_command(self.ffmpeg, self.device,
-                                self.width, self.height, self.fps)
+                                self.width, self.height, self.fps,
+                                self.format_code)
         self.debug("outer: " + " ".join(command))
         self.outer = subprocess.Popen(command, stdin=subprocess.PIPE)
-        self.log(f"opened {self.device} at {self.width}x{self.height}@{self.fps:g}")
+        self.opened_at = time.time()
+        mode = f"{self.width}x{self.height}@{self.fps:g}"
+        if self.format_code:
+            mode += f" ({self.format_code})"
+        self.log(f"opened {self.device} at {mode}")
 
     def outer_alive(self):
         return self.outer is not None and self.outer.poll() is None
@@ -458,6 +471,15 @@ class Playout:
                 if not self.outer_alive():
                     if self.outer is not None:
                         self.log("the device closed; reopening in 5s")
+                        if time.time() - self.opened_at < 5:
+                            # It never really opened. By far the commonest
+                            # cause is a leftover ffmpeg from an earlier run
+                            # still holding the card, and the driver's own
+                            # message for that ("Could not enable video
+                            # output!") says nothing about it.
+                            self.log("it closed immediately. Check for a "
+                                     "leftover process holding the card: "
+                                     "pgrep -fl ffmpeg-decklink")
                         self.stopping.wait(5)
                         if self.stopping.is_set():
                             break
@@ -519,7 +541,13 @@ class Playout:
         self.log("released the device")
 
 
-def main(argv=None):
+def build_parser():
+    """
+    Exposed so the tests build their arguments exactly the way the command line
+    does. A hand-written stand-in drifts silently every time a flag is added,
+    and the drift surfaces as a crash in the one place nobody tests: the real
+    program.
+    """
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--url", required=True,
@@ -528,6 +556,11 @@ def main(argv=None):
                         help="exactly as `ffmpeg -sinks decklink` prints it")
     parser.add_argument("--mode", default="1920x1080@30",
                         help="must be a mode the device supports, e.g. 1920x1080@30")
+    parser.add_argument("--format-code", default=None,
+                        help="name the DeckLink mode outright instead of letting "
+                             "the driver match on size and rate: Hp30, Hp5994, "
+                             "Hi5994. Worth trying on a television that locks "
+                             "once and then refuses.")
     parser.add_argument("--ffmpeg", default="~/.local/bin/ffmpeg-decklink",
                         help="the ffmpeg built with --enable-decklink "
                              "(build-ffmpeg-decklink.sh puts it here)")
@@ -536,7 +569,11 @@ def main(argv=None):
     parser.add_argument("--background", default="black",
                         help="colour behind anything that does not fill the screen")
     parser.add_argument("-v", "--verbose", action="store_true")
-    args = parser.parse_args(argv)
+    return parser
+
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
 
     try:
         playout = Playout(args)
