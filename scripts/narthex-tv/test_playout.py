@@ -128,6 +128,19 @@ class PureHelpers(unittest.TestCase):
         # The pipe itself is raw; only the output is wrapped.
         self.assertEqual(command[command.index("-f") + 1], "rawvideo")
 
+    def test_describe_frame(self):
+        self.assertEqual(playout.describe_frame(None), "black")
+        self.assertEqual(
+            playout.describe_frame({"kind": "image", "title": "Notice", "ms": 8000}),
+            "image Notice (8000 ms)")
+        # A video runs to its natural end, which the plan spells as a null.
+        self.assertEqual(
+            playout.describe_frame({"kind": "video", "title": "Welcome", "ms": None}),
+            "video Welcome (to its end)")
+        # A slide out of a PowerPoint says which one it is.
+        self.assertIn("page 3", playout.describe_frame(
+            {"kind": "image", "title": "Deck", "ms": 5000, "page": 3}))
+
     def test_plan_changed(self):
         first = {"sourceKey": "awake:schedule:1:1:", "revision": "aaa"}
         # Nothing yet: build and start at once.

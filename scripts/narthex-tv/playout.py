@@ -171,6 +171,20 @@ def outer_command(ffmpeg, device, width, height, fps):
     ]
 
 
+def describe_frame(frame):
+    """One line for the log: what this item is and how long it should last."""
+    if frame is None:
+        return "black"
+    kind = frame.get("kind") or "?"
+    title = frame.get("title") or frame.get("url") or ""
+    ms = frame.get("ms")
+    span = "to its end" if ms is None else f"{ms} ms"
+    page = frame.get("page")
+    if page:
+        kind = f"{kind} page {page}"
+    return f"{kind} {title} ({span})".strip()
+
+
 def cache_name(url):
     """A stable local filename for an asset URL, ignoring its access token."""
     stripped = url.split("?", 1)[0]
@@ -375,6 +389,14 @@ class Playout:
             "-f", "rawvideo", "-pix_fmt", "uyvy422", "pipe:1",
         ]
 
+        # Worth a line each: when the screen is wrong, the two questions are
+        # always "what did it think it was showing" and "did any frame reach
+        # the card", and without this the program is silent from the moment the
+        # device opens -- which looks identical to a hang.
+        self.debug(f"item: {describe_frame(source)}")
+        self.debug("inner: " + " ".join(command))
+
+        written = 0
         inner = subprocess.Popen(command, stdout=subprocess.PIPE)
         try:
             while not self.stopping.is_set():
@@ -389,7 +411,11 @@ class Playout:
                     self.outer.stdin.write(chunk)
                 except (BrokenPipeError, ValueError):
                     return False
+                written += 1
+                if written == 1:
+                    self.debug("first frame reached the card")
         finally:
+            self.debug(f"item done after {written} frames")
             inner.kill()
             try:
                 inner.stdout.close()
