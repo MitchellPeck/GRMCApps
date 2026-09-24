@@ -123,8 +123,7 @@ class PureHelpers(unittest.TestCase):
         # The default is 1080p59.94, so this is the path that actually runs.
         args = playout.build_parser().parse_args(["--url", "http://x/player?t=1"])
         _, _, fps = playout.parse_mode(args.mode)
-        command = playout.outer_command("ffmpeg", "Dev", 1920, 1080, fps,
-                                        args.format_code)
+        command = playout.outer_command("ffmpeg", "Dev", 1920, 1080, fps)
         self.assertEqual(command[command.index("-r") + 1], "60000/1001")
 
     def test_no_audio_stream_is_attached(self):
@@ -163,21 +162,16 @@ class PureHelpers(unittest.TestCase):
         # is the one that always locks. The pair must agree.
         args = playout.build_parser().parse_args(["--url", "http://x/player?t=1"])
         self.assertEqual(args.mode, "1920x1080@59.94")
-        self.assertEqual(args.format_code, "Hp5994")
         self.assertEqual(args.codec, "v210")
 
-    def test_outer_command_can_name_the_mode_outright(self):
-        # -format_code is a muxer option, so it only takes effect if it sits
-        # with the output, before -f decklink. Put it after and ffmpeg reads it
-        # as an input option and silently ignores it -- which looks exactly
-        # like a television that just will not lock.
-        command = playout.outer_command("ffmpeg", "Dev", 1920, 1080, 59.94,
-                                        format_code="Hp5994")
-        self.assertEqual(command[-5:],
-                         ["-format_code", "Hp5994", "-f", "decklink", "Dev"])
-        # and nothing is added when it is not asked for
-        plain = playout.outer_command("ffmpeg", "Dev", 1920, 1080, 30)
-        self.assertNotIn("-format_code", plain)
+    def test_the_mode_is_never_named_on_the_output(self):
+        # format_code is a decklink CAPTURE option. An output-only build does
+        # not have it, and ffmpeg exits with "Unrecognized option" -- so for a
+        # long time it was being quietly absorbed by the capture option table
+        # and doing nothing, which read as a mode that had been set. The
+        # muxer picks the mode from the stream's size and rate, full stop.
+        command = playout.outer_command("ffmpeg", "Dev", 1920, 1080, 59.94)
+        self.assertNotIn("-format_code", command)
 
     def test_outer_command_describes_the_pipe_it_is_actually_fed(self):
         # The input half must keep matching what the feeder writes: raw

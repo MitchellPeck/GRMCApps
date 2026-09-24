@@ -65,7 +65,7 @@ nothing to log in to.
 # 3. Run it. Note the loopback URL -- Screens -> Copy local link.
 ./playout.py --url 'http://127.0.0.1:3010/player?t=<token>' \
              --device 'UltraStudio Express Monitor 3G' \
-             --mode 1920x1080@59.94 --format-code Hp5994 \
+             --mode 1920x1080@59.94 \
              --ffmpeg ~/.local/bin/ffmpeg-decklink
 ```
 
@@ -178,10 +178,15 @@ goes red for no reason, this is the first thing to check.
 `Found Decklink mode 1920 x 1080 with rate 30.00`, and plenty of consumer
 televisions still mishandle it -- typically locking once and then refusing
 after a re-sync, which reads as an intermittent fault rather than a wrong
-setting. `1920x1080@59.94` with `--format-code Hp5994` is the pair that locks
-on everything. It doubles what goes through the pipe, from about 124 MB/s to
-248 MB/s; if that ever proves too much, 1080i59.94
-(`--mode 1920x1080@29.97 --format-code Hi5994`) is the fallback.
+setting. `--mode 1920x1080@59.94` is what locks on everything.
+
+**There is no naming the mode.** `-format_code` is a decklink *capture*
+option; an output-only build does not have it and ffmpeg exits with
+`Unrecognized option 'format_code'`. Before capture was excluded it was
+quietly absorbed by the capture option table and did nothing at all, which
+read for a while as a mode that had been set. `--mode` is the only lever: the
+muxer matches the raw stream's size and rate against the device's modes and
+prints which one it took.
 
 **An NTSC rate is not the decimal it is written as.** 59.94 is 60000/1001,
 which is 59.94005994..., and the muxer compares the time base against the

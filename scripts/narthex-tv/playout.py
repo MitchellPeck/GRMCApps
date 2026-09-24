@@ -172,8 +172,7 @@ def rate_arg(fps):
     return EXACT_RATES.get(f"{fps:g}", f"{fps:g}")
 
 
-def outer_command(ffmpeg, device, width, height, fps,
-                  format_code=None, codec="v210"):
+def outer_command(ffmpeg, device, width, height, fps, codec="v210"):
     """
     The command for the one process that owns the card.
 
@@ -198,10 +197,13 @@ def outer_command(ffmpeg, device, width, height, fps,
       same command with `-an` showed the card behaves identically without one.
       The narthex has no speakers, so the stream, its preroll and its clock are
       all one less thing between the schedule and the screen.
-    - **`format_code` names the mode outright** when the driver's own match on
-      size and rate picks one the television will not take. A set that locks
-      once and then refuses after a re-sync is the usual sign; 1080p30 is the
-      common offender over HDMI, and Hp5994 the one everything accepts.
+    - **The mode is chosen by the stream, and only by the stream.** There is no
+      naming it: `format_code` belongs to the decklink *capture* options, and
+      an output build does not have it at all. The muxer matches the raw
+      stream's size and rate against the device's modes and says which it took
+      ("Found Decklink mode 1920 x 1080 with rate 59.94"), so `--mode` is the
+      only lever. 1080p59.94 is the one televisions accept; 1080p30 is legal
+      and plenty of sets mishandle it.
     """
     command = [
         ffmpeg, "-hide_banner", "-loglevel", "warning",
@@ -213,8 +215,6 @@ def outer_command(ffmpeg, device, width, height, fps,
     # wrapped_avframe carries no pixel format of its own; v210 does.
     if codec == "wrapped_avframe":
         command += ["-pix_fmt", "uyvy422"]
-    if format_code:
-        command += ["-format_code", format_code]
     return command + ["-f", "decklink", device]
 
 
@@ -297,7 +297,6 @@ class Playout:
         self.stopping = threading.Event()
         self.outer = None
         self.opened_at = 0.0
-        self.format_code = args.format_code
         self.codec = args.codec
 
         os.makedirs(self.cache_dir, exist_ok=True)
@@ -318,15 +317,12 @@ class Playout:
     def start_outer(self):
         """Open the card. See outer_command for why it is built the way it is."""
         command = outer_command(self.ffmpeg, self.device,
-                                self.width, self.height, self.fps,
-                                self.format_code, self.codec)
+                                self.width, self.height, self.fps, self.codec)
         self.debug("outer: " + " ".join(command))
         self.outer = subprocess.Popen(command, stdin=subprocess.PIPE)
         self.opened_at = time.time()
-        mode = f"{self.width}x{self.height}@{self.fps:g}"
-        if self.format_code:
-            mode += f" ({self.format_code})"
-        self.log(f"opened {self.device} at {mode}")
+        self.log(f"opened {self.device} at "
+                 f"{self.width}x{self.height}@{self.fps:g}")
 
     def write_frame(self, chunk):
         """
@@ -676,10 +672,6 @@ def build_parser():
                         help="must be a mode the device supports. 1080p59.94 is "
                              "the one every television accepts; 1080p30 is a "
                              "legal mode that many sets handle badly.")
-    parser.add_argument("--format-code", default="Hp5994",
-                        help="name the DeckLink mode outright instead of letting "
-                             "the driver match on size and rate: Hp30, Hp5994, "
-                             "Hi5994. Must agree with --mode.")
     parser.add_argument("--codec", default="v210", choices=CODECS,
                         help="how frames are handed to the card. v210 is the one "
                              "that works; wrapped_avframe is accepted by the "
