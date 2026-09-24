@@ -104,6 +104,29 @@ class PureHelpers(unittest.TestCase):
         self.assertNotEqual(a, playout.cache_name("/api/player/media/8/file"))
         self.assertNotIn("/", a)
 
+    def test_ntsc_rates_are_given_exactly(self):
+        # The muxer compares the time base against the mode's own for exact
+        # equality, so 59.94 -- which is 60000/1001 = 59.94005994... -- matches
+        # nothing, and the card answers "Unsupported video size, framerate or
+        # field order!". A bars test written as rate=60000/1001 works while the
+        # same mode written as 59.94 does not, which is what makes this worth
+        # pinning rather than obvious.
+        self.assertEqual(playout.rate_arg(59.94), "60000/1001")
+        self.assertEqual(playout.rate_arg(29.97), "30000/1001")
+        self.assertEqual(playout.rate_arg(23.98), "24000/1001")
+        # The whole-number rates really are whole numbers; leave them alone.
+        self.assertEqual(playout.rate_arg(30), "30")
+        self.assertEqual(playout.rate_arg(60), "60")
+        self.assertEqual(playout.rate_arg(25), "25")
+
+    def test_the_default_mode_reaches_ffmpeg_as_a_rational(self):
+        # The default is 1080p59.94, so this is the path that actually runs.
+        args = playout.build_parser().parse_args(["--url", "http://x/player?t=1"])
+        _, _, fps = playout.parse_mode(args.mode)
+        command = playout.outer_command("ffmpeg", "Dev", 1920, 1080, fps,
+                                        args.format_code)
+        self.assertEqual(command[command.index("-r") + 1], "60000/1001")
+
     def test_outer_command_defaults_to_the_codec_that_works(self):
         # The muxer takes v210 or a wrapped frame, and refuses everything else
         # -- rawvideo included -- at header-write time. But the two it accepts
@@ -155,7 +178,7 @@ class PureHelpers(unittest.TestCase):
         self.assertEqual(command[-3:], ["-f", "decklink", "Dev"])
         self.assertEqual(command[command.index("-i") + 1], "pipe:0")
         self.assertEqual(command[command.index("-s") + 1], "1280x720")
-        self.assertEqual(command[command.index("-r") + 1], "59.94")
+        self.assertEqual(command[command.index("-r") + 1], "60000/1001")
         # The pipe itself is raw; only the output is wrapped.
         self.assertEqual(command[command.index("-f") + 1], "rawvideo")
 

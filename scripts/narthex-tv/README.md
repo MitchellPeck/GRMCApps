@@ -163,6 +163,13 @@ on everything. It doubles what goes through the pipe, from about 124 MB/s to
 248 MB/s; if that ever proves too much, 1080i59.94
 (`--mode 1920x1080@29.97 --format-code Hi5994`) is the fallback.
 
+**An NTSC rate is not the decimal it is written as.** 59.94 is 60000/1001,
+which is 59.94005994..., and the muxer compares the time base against the
+mode's own for exact equality. So `-r 59.94` matches no mode and the card
+answers `Unsupported video size, framerate or field order!` -- while the very
+same mode written `rate=60000/1001` works. `rate_arg()` does the conversion;
+the whole-number rates pass through untouched.
+
 **A leftover ffmpeg looks exactly like broken hardware.** One left holding the
 card outlives the run that started it, and every later attempt fails with
 `Could not enable video output!`. Check `pgrep -fl ffmpeg-decklink` before

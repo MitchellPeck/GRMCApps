@@ -145,6 +145,25 @@ def input_args(frame, path, width, height, fps):
 
 CODECS = ("v210", "wrapped_avframe")
 
+# The NTSC-family rates, which are not the decimals everyone writes them as.
+# 59.94 is 60000/1001 = 59.94005994..., and the DeckLink muxer compares the
+# time base for exact equality against the mode's own, so "-r 59.94" matches no
+# mode at all and the card answers "Unsupported video size, framerate or field
+# order!". Being a thousandth out is the same as being wrong.
+EXACT_RATES = {
+    "23.98": "24000/1001",
+    "23.976": "24000/1001",
+    "29.97": "30000/1001",
+    "47.95": "48000/1001",
+    "59.94": "60000/1001",
+    "119.88": "120000/1001",
+}
+
+
+def rate_arg(fps):
+    """The frame rate as ffmpeg must be given it: exact, not rounded."""
+    return EXACT_RATES.get(f"{fps:g}", f"{fps:g}")
+
 
 def outer_command(ffmpeg, device, width, height, fps,
                   format_code=None, codec="v210"):
@@ -178,7 +197,7 @@ def outer_command(ffmpeg, device, width, height, fps,
     command = [
         ffmpeg, "-hide_banner", "-loglevel", "warning",
         "-f", "rawvideo", "-pix_fmt", "uyvy422",
-        "-s", f"{width}x{height}", "-r", f"{fps:g}",
+        "-s", f"{width}x{height}", "-r", rate_arg(fps),
         "-i", "pipe:0",
         "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
         "-c:v", codec,
@@ -412,7 +431,7 @@ class Playout:
         command += input_args(source, path, self.width, self.height, self.fps)
         command += [
             "-an",
-            "-vf", f"fps={self.fps:g}," + fit_filter(
+            "-vf", f"fps={rate_arg(self.fps)}," + fit_filter(
                 source.get("fit", "contain"), self.width, self.height, self.background
             ),
             "-f", "rawvideo", "-pix_fmt", "uyvy422", "pipe:1",
