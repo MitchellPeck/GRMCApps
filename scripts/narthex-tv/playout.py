@@ -46,6 +46,7 @@ import argparse
 import hashlib
 import json
 import os
+import select
 import shutil
 import signal
 import subprocess
@@ -158,6 +159,12 @@ EXACT_RATES = {
     "59.94": "60000/1001",
     "119.88": "120000/1001",
 }
+
+
+# How long the card may take no frames at all before it is declared stuck.
+# Generous, because a slow disk read or a keyframe can legitimately hold things
+# up for a moment; the point is only that "forever" is not an option.
+STALL_SECONDS = 5
 
 
 def rate_arg(fps):
@@ -321,6 +328,66 @@ class Playout:
             mode += f" ({self.format_code})"
         self.log(f"opened {self.device} at {mode}")
 
+    def write_frame(self, chunk):
+        """
+        Hand exactly one frame to the card, or give up on the card.
+
+        The card paces this program: the write blocks until the device wants
+        another frame, and that is what keeps the feeder in time without a
+        sleep anywhere. The failure is when it stops wanting them altogether.
+        A DeckLink that underruns stops its scheduler, and ffmpeg's muxer does
+        not start it again, so the write never returns -- and because the frame
+        loop only tests for an interrupt *between* frames, the whole program
+        stops with it. The screen sits on one frame, a new schedule cannot cut
+        in, and an emergency message never arrives. That is the worst way for
+        this program to fail, and it fails that way silently.
+
+        So the wait is bounded. Any progress at all resets the clock, because a
+        card taking frames slowly is still a card that is working; only a card
+        taking none for STALL_SECONDS is stuck, and then it is killed so the
+        run loop opens a new one. Restarting costs a black flash. Freezing
+        costs the whole screen until somebody notices.
+        """
+        try:
+            fd = self.outer.stdin.fileno()
+            # Set here, not where the pipe is made, because this is the code
+            # that depends on it: a *blocking* write to a pipe does not return
+            # until every byte has been taken, so the deadline below would
+            # never be reached and the bound would be no bound at all. Frames
+            # go to this descriptor directly and never through the
+            # BufferedWriter wrapped around it, which is what makes that safe.
+            os.set_blocking(fd, False)
+        except (ValueError, OSError):
+            # Already closed: the run is ending, or the device was let go.
+            return False
+        view = memoryview(chunk)
+        deadline = time.time() + STALL_SECONDS
+        while view:
+            if self.stopping.is_set():
+                return False
+            left = deadline - time.time()
+            if left <= 0:
+                self.log("the card stopped taking frames; restarting it")
+                self.outer.kill()
+                return False
+            try:
+                # Wake up regularly even while stuck, so stopping is honoured.
+                ready = select.select([], [fd], [], min(left, 0.5))[1]
+            except (OSError, ValueError):
+                return False
+            if not ready:
+                continue
+            try:
+                sent = os.write(fd, view)
+            except BlockingIOError:
+                continue
+            except (BrokenPipeError, OSError, ValueError):
+                return False
+            if sent:
+                view = view[sent:]
+                deadline = time.time() + STALL_SECONDS
+        return True
+
     def outer_alive(self):
         return self.outer is not None and self.outer.poll() is None
 
@@ -445,6 +512,7 @@ class Playout:
         self.debug("inner: " + " ".join(command))
 
         written = 0
+        started = time.time()
         inner = subprocess.Popen(command, stdout=subprocess.PIPE)
         try:
             while not self.stopping.is_set():
@@ -455,15 +523,19 @@ class Playout:
                 chunk = inner.stdout.read(self.frame_size)
                 if not chunk or len(chunk) < self.frame_size:
                     break
-                try:
-                    self.outer.stdin.write(chunk)
-                except (BrokenPipeError, ValueError):
+                if not self.write_frame(chunk):
                     return False
                 written += 1
                 if written == 1:
                     self.debug("first frame reached the card")
         finally:
-            self.debug(f"item done after {written} frames")
+            elapsed = time.time() - started
+            rate = written / elapsed if elapsed > 0 else 0
+            # The sustained rate is the number that matters: anything under the
+            # mode's own is the card being starved, which is what ends in a
+            # stall.
+            self.debug(f"item done after {written} frames "
+                       f"in {elapsed:.1f}s ({rate:.1f} fps)")
             inner.kill()
             try:
                 inner.stdout.close()

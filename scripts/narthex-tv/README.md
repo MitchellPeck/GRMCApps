@@ -170,6 +170,18 @@ answers `Unsupported video size, framerate or field order!` -- while the very
 same mode written `rate=60000/1001` works. `rate_arg()` does the conversion;
 the whole-number rates pass through untouched.
 
+**A stuck card used to stop the whole program.** The card paces this
+program -- the write blocks until the device wants another frame, and that is
+what keeps the feeder in time without a sleep anywhere. But a DeckLink that
+underruns stops its scheduler and ffmpeg's muxer never starts it again, so the
+write never returns. Since the frame loop only tests for an interrupt
+*between* frames, everything stopped with it: one frozen frame on the screen,
+no new schedule, and an emergency message that never arrived. The wait is
+bounded now (`STALL_SECONDS`), and any progress resets the clock, so a slow
+card is not mistaken for a stuck one. If you see `the card stopped taking
+frames; restarting it` more than occasionally, the feeder is not keeping up --
+drop to 1080i59.94 and halve the data rate.
+
 **A leftover ffmpeg looks exactly like broken hardware.** One left holding the
 card outlives the run that started it, and every later attempt fails with
 `Could not enable video output!`. Check `pgrep -fl ffmpeg-decklink` before

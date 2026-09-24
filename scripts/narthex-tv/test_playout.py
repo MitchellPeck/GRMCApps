@@ -246,10 +246,19 @@ def make_args(**overrides):
 
 
 class FakeOuter:
-    """Stands in for the long-lived ffmpeg that owns the card."""
+    """
+    Stands in for the long-lived ffmpeg that owns the card.
 
-    def __init__(self):
-        self.stdin = io.BytesIO()
+    Backed by a real file rather than a BytesIO, because frames are written to
+    the raw descriptor with os.write and selected on -- a stub with no fileno
+    would exercise none of that. A regular file is always ready for writing and
+    never short-writes, which is the "card keeping up" case; the stall is
+    covered separately.
+    """
+
+    def __init__(self, path):
+        self.stdin = open(path, "wb")
+        self.path = path
         self.alive = True
         self.terminated = 0
         self.killed = 0
@@ -270,6 +279,32 @@ class FakeOuter:
         self.waited += 1
         return 0
 
+    def written(self):
+        """Bytes that reached the 'card'."""
+        return os.path.getsize(self.path)
+
+
+class StuckOuter:
+    """A card that took the mode and then stopped draining its pipe."""
+
+    def __init__(self, write_fd):
+        self.stdin = os.fdopen(write_fd, "wb", buffering=0)
+        self.killed = 0
+        self.alive = True
+
+    def poll(self):
+        return None if self.alive else 1
+
+    def kill(self):
+        self.killed += 1
+        self.alive = False
+
+    def terminate(self):
+        self.kill()
+
+    def wait(self, timeout=None):
+        return 0
+
 
 class PipeMechanics(unittest.TestCase):
     FRAME = 32  # a tiny "frame" keeps the test instant
@@ -284,7 +319,7 @@ class PipeMechanics(unittest.TestCase):
         args = make_args(ffmpeg=self.fake, cache=os.path.join(self.tmp, "cache"))
         self.playout = playout.Playout(args)
         self.playout.frame_size = self.FRAME
-        self.playout.outer = FakeOuter()
+        self.playout.outer = FakeOuter(os.path.join(self.tmp, "card"))
 
     def run_play(self, frames, tail=0, interrupt_after=None, delay=0):
         os.environ["FAKE_FRAME_SIZE"] = str(self.FRAME)
@@ -296,14 +331,14 @@ class PipeMechanics(unittest.TestCase):
             def trip():
                 # Let some frames through, then ask for a cut.
                 deadline = time.time() + 10
-                while (self.playout.outer.stdin.tell() < interrupt_after * self.FRAME
+                while (self.playout.outer.written() < interrupt_after * self.FRAME
                        and time.time() < deadline):
                     time.sleep(0.001)
                 self.playout.interrupt.set()
             threading.Thread(target=trip, daemon=True).start()
 
         self.playout.play({"kind": "image", "ms": 1000, "fit": "contain", "url": None})
-        return self.playout.outer.stdin.tell()
+        return self.playout.outer.written()
 
     def test_the_signal_handler_never_touches_the_pipe(self):
         # stop() is a signal handler: it runs between two bytecodes of whatever
@@ -355,6 +390,69 @@ class PipeMechanics(unittest.TestCase):
         self.assertEqual(written % self.FRAME, 0, "cut mid-frame — the picture would tear")
         self.assertGreater(written, 0)
         self.assertLess(written, 400 * self.FRAME)
+
+    def test_a_card_that_stops_taking_frames_is_given_up_on(self):
+        # The real failure this guards. A DeckLink that underruns stops its
+        # scheduler and ffmpeg's muxer never restarts it, so the pipe fills and
+        # the write never returns. Because the frame loop only tests for an
+        # interrupt BETWEEN frames, the whole program stops with it: the screen
+        # holds one frame, a new schedule cannot cut in, and an emergency
+        # message never arrives.
+        #
+        # A full pipe with nothing reading it reproduces that exactly.
+        read_fd, write_fd = os.pipe()
+        stuck = StuckOuter(write_fd)
+        self.playout.outer = stuck
+        playout.STALL_SECONDS, saved = 0.4, playout.STALL_SECONDS
+        try:
+            started = time.time()
+            ok = self.playout.write_frame(b"\x00" * (1024 * 1024))
+            waited = time.time() - started
+        finally:
+            playout.STALL_SECONDS = saved
+            os.close(read_fd)
+            try:
+                os.close(write_fd)
+            except OSError:
+                pass
+
+        self.assertFalse(ok, "a stuck card must end the item, not hang")
+        self.assertLess(waited, 5, "it waited far past the stall limit")
+        self.assertGreaterEqual(waited, 0.4, "it gave up before the limit")
+        self.assertEqual(stuck.killed, 1,
+                         "a stuck card must be killed so the run loop reopens it")
+
+    def test_a_slow_card_is_not_mistaken_for_a_stuck_one(self):
+        # Progress resets the clock: a card taking frames slowly is still
+        # working, and restarting it would be the worse answer.
+        read_fd, write_fd = os.pipe()
+        stuck = StuckOuter(write_fd)
+        self.playout.outer = stuck
+        playout.STALL_SECONDS, saved = 0.4, playout.STALL_SECONDS
+
+        # A pipe holds 64 KiB, so a 192 KiB frame needs three rounds. Drain
+        # generously often enough to finish, at 0.25s between reads -- slower
+        # than a frame interval, but never silent for the whole 0.4s limit.
+        def drain():
+            for _ in range(12):
+                time.sleep(0.25)
+                try:
+                    if not os.read(read_fd, 64 * 1024):
+                        return
+                except OSError:
+                    return
+        threading.Thread(target=drain, daemon=True).start()
+        try:
+            ok = self.playout.write_frame(b"\x00" * (192 * 1024))
+        finally:
+            playout.STALL_SECONDS = saved
+            os.close(read_fd)
+            try:
+                os.close(write_fd)
+            except OSError:
+                pass
+        self.assertTrue(ok, "a slow but living card was given up on")
+        self.assertEqual(stuck.killed, 0)
 
     def test_a_dead_device_is_reported_rather_than_looping_forever(self):
         self.playout.outer.alive = False
