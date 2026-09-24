@@ -38,7 +38,8 @@ the operating hours and the blackout all behave identically — there is no
 second copy of that logic to drift.
 
     ./playout.py --url 'https://tv.grmc.app/player?t=<token>'
-    ./playout.py --url '...' --device 'UltraStudio Express Monitor 3G' --mode 1920x1080@30
+    ./playout.py --url 'http://127.0.0.1:3010/player?t=...' \
+                 --device 'UltraStudio Express Monitor 3G' --mode 1920x1080@30
 """
 
 import argparse

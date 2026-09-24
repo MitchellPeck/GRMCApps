@@ -7,6 +7,7 @@
   var playlists = [];
   var scheduleEntries = [];
   var screens = [];
+  var localPort = 3010;
   var settings = null;
   var defaultPlaylistId = null;
   var people = [];
@@ -1137,6 +1138,15 @@
     return location.origin + "/player?t=" + encodeURIComponent(screen.token);
   }
 
+  // For playout.py, which runs on the same machine as the containers. Going
+  // out to the public name and back in means the screen depends on the WAN,
+  // and puts Cloudflare's bot rules between the schedule and the television.
+  // Loopback removes both. Only useful ON that machine, hence its own button.
+  function localKioskUrl(screen) {
+    return "http://127.0.0.1:" + localPort +
+      "/player?t=" + encodeURIComponent(screen.token);
+  }
+
   function renderScreens() {
     var box = $("screen-list");
     box.innerHTML = "";
@@ -1166,6 +1176,8 @@
       if (screen.lastPlaying) sub.push("showing “" + screen.lastPlaying + "”");
       main.appendChild(el("div", "row-sub", sub.join(" · ") || "Landscape"));
       main.appendChild(el("div", "kiosk-url", kioskUrl(screen)));
+      main.appendChild(el("div", "kiosk-url", localKioskUrl(screen) +
+        "  (playout.py, on the machine running the containers)"));
       row.appendChild(main);
 
       var actions = el("div", "row-actions");
@@ -1175,6 +1187,17 @@
           b.classList.add("copied");
           b.textContent = "Copied";
           setTimeout(function () { b.classList.remove("copied"); b.textContent = "Copy link"; }, 1500);
+        });
+      }));
+      actions.appendChild(button("Copy local link", "btn-sm", function (e) {
+        navigator.clipboard.writeText(localKioskUrl(screen)).then(function () {
+          var b = e.target;
+          b.classList.add("copied");
+          b.textContent = "Copied";
+          setTimeout(function () {
+            b.classList.remove("copied");
+            b.textContent = "Copy local link";
+          }, 1500);
         });
       }));
       actions.appendChild(button("Open", "btn-sm", function () {
@@ -1219,6 +1242,7 @@
     if (!can("manage")) return;
     var data = await api("GET", "/api/screens");
     screens = data.screens || [];
+    if (data.localPort) localPort = data.localPort;
     renderScreens();
     renderPreviewScreens();
   }

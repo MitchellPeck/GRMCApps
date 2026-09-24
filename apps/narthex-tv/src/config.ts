@@ -28,4 +28,10 @@ export const config = {
   maxFiles: Number(process.env.NARTHEXTV_MAX_FILES || 20),
   // How long one conversion may take before the queue gives up on it.
   convertTimeoutMs: Number(process.env.NARTHEXTV_CONVERT_TIMEOUT_MS || 20 * 60 * 1000),
+  // The loopback port docker-compose publishes so the playout script on this
+  // same machine can reach the player without leaving the box. Surfaced in
+  // Screens purely so nobody has to hand-assemble that URL; it grants nothing
+  // on its own, since only 127.0.0.1 is bound and the token still gates every
+  // request.
+  localPort: Number(process.env.NARTHEXTV_LOCAL_PORT || 3010),
 };

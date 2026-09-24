@@ -1,5 +1,6 @@
 import { FastifyInstance } from "fastify";
 import { pool } from "../db";
+import { config } from "../config";
 import { getIdentity } from "../identity";
 import { requirePermission } from "../guard";
 import {
@@ -31,6 +32,7 @@ function screenView(row: ScreenRow) {
 export async function screenRoutes(app: FastifyInstance): Promise<void> {
   app.get("/api/screens", { preHandler: requirePermission("manage") }, async () => ({
     ok: true,
+    localPort: config.localPort,
     screens: (await listScreens(pool)).map(screenView),
   }));
 

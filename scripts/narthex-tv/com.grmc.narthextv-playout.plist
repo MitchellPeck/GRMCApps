@@ -4,7 +4,10 @@
 
   Install:
     1. Edit ProgramArguments below: the real path to playout.py, and the real
-       player URL from Narthex TV -> Screens -> Copy link.
+       player URL from Narthex TV -> Screens -> Copy LOCAL link. This runs on
+       the same machine as the containers, so it talks to the app over
+       loopback: no WAN, no Cloudflare, and the narthex keeps playing through
+       an internet outage.
     2. Build ffmpeg first — Homebrew's ffmpegdecklink does not compile against
        a current DeckLink SDK (see build-ffmpeg-decklink.sh), then confirm the
        device name matches what it reports:
@@ -32,7 +35,7 @@
     <string>/usr/bin/python3</string>
     <string>/Users/CHANGEME/GRMCApps/scripts/narthex-tv/playout.py</string>
     <string>--url</string>
-    <string>https://tv.grmc.app/player?t=CHANGEME</string>
+    <string>http://127.0.0.1:3010/player?t=CHANGEME</string>
     <string>--device</string>
     <string>UltraStudio Express Monitor 3G</string>
     <string>--mode</string>

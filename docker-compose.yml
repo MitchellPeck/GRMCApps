@@ -293,9 +293,20 @@ services:
       NARTHEXTV_MAX_FILE_MB: "${NARTHEXTV_MAX_FILE_MB:-512}"
       NARTHEXTV_MAX_FILES: "${NARTHEXTV_MAX_FILES:-20}"
       NARTHEXTV_CONVERT_TIMEOUT_MS: "${NARTHEXTV_CONVERT_TIMEOUT_MS:-1200000}"
+      # Only so Screens can show the playout script the right loopback URL.
+      NARTHEXTV_LOCAL_PORT: "${NARTHEXTV_LOCAL_PORT:-3010}"
       BASE_DOMAIN: "${BASE_DOMAIN}"
     volumes:
       - narthextvdata:/data
+    # The playout script runs on this same machine, so it talks to the app
+    # directly rather than going out to Cloudflare and back in through Traefik.
+    # That removes the WAN, the TLS handshake and Cloudflare's bot rules from
+    # the path between the schedule and the screen: the narthex keeps playing
+    # through an internet outage, and nothing blocks a non-browser client.
+    # Bound to 127.0.0.1, so this is not reachable from the LAN; the screen
+    # token still gates every request exactly as it does through Traefik.
+    ports:
+      - "127.0.0.1:${NARTHEXTV_LOCAL_PORT:-3010}:3000"
     depends_on:
       postgres:
         condition: service_healthy

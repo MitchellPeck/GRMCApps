@@ -12,6 +12,23 @@ A single full-screen web page:
 https://tv.<BASE_DOMAIN>/player?t=<token>
 ```
 
+There is a second address for exactly the same thing:
+
+```
+http://127.0.0.1:3010/player?t=<token>
+```
+
+**`playout.py` should always use the loopback one**, because it runs on the
+same machine as the containers. The public name leaves the building, hits
+Cloudflare and comes back in through the tunnel and Traefik, which means the
+narthex goes dark during an internet outage and Cloudflare's bot rules sit
+between the schedule and the television — a non-browser client like this one
+gets a 403 from Bot Fight Mode before the app is ever asked. Loopback has
+neither problem. **Screens** shows both; **Copy local link** gives you this one.
+
+Only `127.0.0.1` is bound, so it is not reachable from the LAN, and the screen
+token still gates every request either way.
+
 It shows one picture or one video at a time and asks the server every ten
 seconds what it should be showing. The server has already flattened every
 PowerPoint into images and re-encoded every video, so the page never renders a
@@ -45,8 +62,8 @@ nothing to log in to.
 #    which is also why -sources and -list_formats will never show it.
 ~/.local/bin/ffmpeg-decklink -sinks decklink
 
-# 3. Run it.
-./playout.py --url 'https://tv.grmc.app/player?t=<token>' \
+# 3. Run it. Note the loopback URL -- Screens -> Copy local link.
+./playout.py --url 'http://127.0.0.1:3010/player?t=<token>' \
              --device 'UltraStudio Express Monitor 3G' --mode 1920x1080@30 \
              --ffmpeg ~/.local/bin/ffmpeg-decklink
 ```
