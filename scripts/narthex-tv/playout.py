@@ -193,9 +193,11 @@ def outer_command(ffmpeg, device, width, height, fps,
       asking for uyvy422 as well is a contradiction. The pipe on the *input*
       side genuinely is raw uyvy422, so the two halves of this command disagree
       on purpose, and ffmpeg converts between them.
-    - **Silent stereo at 48 kHz is attached** because the muxer wants an audio
-      stream and the card's clock is fixed at that rate. The narthex screen has
-      no speakers, so it is silence.
+    - **There is no audio at all.** The muxer was long believed to require an
+      audio stream, so a silent 48 kHz pair used to be attached. Testing the
+      same command with `-an` showed the card behaves identically without one.
+      The narthex has no speakers, so the stream, its preroll and its clock are
+      all one less thing between the schedule and the screen.
     - **`format_code` names the mode outright** when the driver's own match on
       size and rate picks one the television will not take. A set that locks
       once and then refuses after a re-sync is the usual sign; 1080p30 is the
@@ -206,13 +208,11 @@ def outer_command(ffmpeg, device, width, height, fps,
         "-f", "rawvideo", "-pix_fmt", "uyvy422",
         "-s", f"{width}x{height}", "-r", rate_arg(fps),
         "-i", "pipe:0",
-        "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
-        "-c:v", codec,
+        "-an", "-c:v", codec,
     ]
     # wrapped_avframe carries no pixel format of its own; v210 does.
     if codec == "wrapped_avframe":
         command += ["-pix_fmt", "uyvy422"]
-    command += ["-c:a", "pcm_s16le", "-ar", "48000", "-ac", "2"]
     if format_code:
         command += ["-format_code", format_code]
     return command + ["-f", "decklink", device]

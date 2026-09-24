@@ -69,6 +69,26 @@ nothing to log in to.
              --ffmpeg ~/.local/bin/ffmpeg-decklink
 ```
 
+#### Match the SDK to the driver
+
+`build-ffmpeg-decklink.sh` passes `--disable-indev=decklink`, so **capture is
+not built** -- and capture is the only part that will not compile against a
+current SDK. That matters more than it sounds.
+
+Built against 12.x headers and run against a 16.x driver, everything looks
+right and nothing works: the device opens, the mode is accepted, playback
+starts, the picture moves for exactly one second, and then it sits on a frozen
+frame forever. One second is ffmpeg's own video buffer (`FFMIN(fps, 60)`
+frames) draining. What has actually happened is that the frame-completion
+callback never fires, so ffmpeg's free-slot count never recovers and it blocks
+on the next frame for good. No log anywhere says a word about it, and a static
+test pattern looks identical playing or frozen -- use `testsrc2`, which has a
+counter, not `smptebars`.
+
+So: check the driver's version in **Desktop Video Setup -> About** and download
+the SDK that matches it. The script refuses an SDK several majors behind, which
+is the opposite of the rule that used to apply here.
+
 #### Getting an ffmpeg that builds
 
 `brew install amiaopensource/amiaos/ffmpegdecklink` **fails** as of September
@@ -104,8 +124,8 @@ and the TV would re-sync — a black flash between every photo. Instead:
 
 - **One long-lived ffmpeg owns the card** for the life of the process, reading
   raw `uyvy422` frames from a pipe. It never sees an end-of-input, so the
-  signal is continuous. Silent 48 kHz stereo is attached because the DeckLink
-  muxer wants an audio stream; the narthex has no speakers.
+  signal is continuous. There is no audio stream: the muxer was long believed
+  to require one, and testing with `-an` showed it does not.
 - **A feeder decodes one item at a time** into that pipe — a photo held for its
   duration, one slide, one video. Items are fitted to the canvas *as they
   play*, not when they are uploaded, so the per-item seconds in the app stays a

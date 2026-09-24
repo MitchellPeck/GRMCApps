@@ -164,25 +164,27 @@ if [[ -f "$VERSION_HEADER" ]]; then
     API_NUM=$((16#$API_HEX))
     PRETTY="$(( (API_NUM >> 24) & 0xFF )).$(( (API_NUM >> 16) & 0xFF )).$(( (API_NUM >> 8) & 0xFF ))"
     echo "SDK version: $PRETTY"
-    # 14.0 is where Blackmagic moved GetBytes onto IDeckLinkVideoBuffer and
-    # dropped the input allocator; 12.9 is the newest reported to still build.
-    # In between is untested rather than known-bad, so warn instead of refusing.
-    if (( API_NUM >= 0x0E000000 )); then
+    # Any SDK builds now that capture is excluded, but an OLD one is the
+    # problem it used to be the cure for. Built against 12.x headers and run
+    # against a 16.x driver, the card takes the mode, plays the frames ffmpeg
+    # has buffered -- one second of them -- and then freezes forever: the
+    # frame-completion callback never fires, ffmpeg's free-slot count never
+    # recovers, and it blocks on the next frame. Nothing in any log says so.
+    # Match the SDK to the installed Desktop Video version.
+    if (( API_NUM < 0x0E000000 )); then
       cat >&2 <<MSG
 
-SDK ${PRETTY} is too new. FFmpeg's decklink capture code does not compile
-against 14.x or later — you will get exactly the failure this script exists
-to avoid:
+SDK ${PRETTY} is older than the Desktop Video driver is likely to be.
 
-    no member named 'GetBytes' in 'IDeckLinkVideoInputFrame'
-    no member named 'SetVideoInputFrameMemoryAllocator' in 'IDeckLinkInput'
+Capture is no longer built, so this WILL compile -- but an SDK several major
+versions behind the installed driver is what makes a card play for exactly one
+second and then sit on a frozen frame. Check the driver's version in Blackmagic
+Desktop Video Setup (About), and download the matching SDK from
+https://www.blackmagicdesign.com/support -- search for "Desktop Video SDK".
 
-Download a 12.x SDK (12.4.2 is a known-good one) from
-https://www.blackmagicdesign.com/support and point this script at that. The
-Desktop Video driver on the Mac can stay current — only these build-time
-headers need to be old.
+Set NARTHEX_ALLOW_OLD_SDK=1 to build against it anyway.
 MSG
-      exit 65
+      [[ "${NARTHEX_ALLOW_OLD_SDK:-}" == "1" ]] || exit 65
     elif (( API_NUM > 0x0C090000 )); then
       echo "warning: SDK ${PRETTY} is newer than the 12.9 that is known to build;" >&2
       echo "         if it fails the same way, drop back to 12.4.2." >&2
@@ -317,6 +319,14 @@ if ! ./configure \
   --prefix="$PREFIX" \
   --cc="$CC" \
   --enable-decklink \
+  `# Capture is the only part that will not compile against a current SDK --` \
+  `# GetBytes and the input allocator were removed after 12.4 and FFmpeg still` \
+  `# calls them. This program only ever OUTPUTS, so leave capture out and the` \
+  `# headers can match the installed driver. That matters: built against 12.x` \
+  `# headers and run against a 16.x driver, playback starts, plays the frames` \
+  `# ffmpeg buffered and then stops forever, because the frame-completion` \
+  `# callback never fires and ffmpeg's free-slot count never recovers.` \
+  --disable-indev=decklink \
   --extra-cflags="-I$INCLUDE ${SYSROOT_FLAGS}" \
   --extra-cxxflags="-I$INCLUDE ${SYSROOT_FLAGS}" \
   --extra-ldflags="${SYSROOT_FLAGS}" \

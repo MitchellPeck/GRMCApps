@@ -127,6 +127,16 @@ class PureHelpers(unittest.TestCase):
                                         args.format_code)
         self.assertEqual(command[command.index("-r") + 1], "60000/1001")
 
+    def test_no_audio_stream_is_attached(self):
+        # The muxer was long believed to need one, and a silent 48 kHz pair was
+        # attached for it. Running the same command with -an showed the card
+        # behaves identically. The narthex has no speakers, so this is a whole
+        # stream, its preroll and its clock removed from the path.
+        command = playout.outer_command("ffmpeg", "Dev", 1920, 1080, 59.94)
+        self.assertIn("-an", command)
+        self.assertNotIn("-c:a", command)
+        self.assertFalse([a for a in command if "anullsrc" in a])
+
     def test_outer_command_defaults_to_the_codec_that_works(self):
         # The muxer takes v210 or a wrapped frame, and refuses everything else
         # -- rawvideo included -- at header-write time. But the two it accepts
