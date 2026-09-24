@@ -143,6 +143,34 @@ def input_args(frame, path, width, height, fps):
     return ["-loop", "1", "-t", f"{duration:.3f}", "-i", path]
 
 
+def outer_command(ffmpeg, device, width, height, fps):
+    """
+    The command for the one process that owns the card.
+
+    Two things here are not free choices, and getting either wrong ends with
+    the device refusing the stream rather than showing a wrong picture:
+
+    - **The output codec must be `wrapped_avframe`.** FFmpeg's DeckLink muxer
+      accepts only `v210` or a wrapped frame in `uyvy422`; anything else,
+      `rawvideo` included, is rejected at header-write time with "Unsupported
+      codec type!". The pipe on the *input* side is genuinely raw, so the two
+      halves of this command disagree on purpose.
+    - **Silent stereo at 48 kHz is attached** because the muxer wants an audio
+      stream and the card's clock is fixed at that rate. The narthex screen has
+      no speakers, so it is silence.
+    """
+    return [
+        ffmpeg, "-hide_banner", "-loglevel", "warning",
+        "-f", "rawvideo", "-pix_fmt", "uyvy422",
+        "-s", f"{width}x{height}", "-r", f"{fps:g}",
+        "-i", "pipe:0",
+        "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
+        "-c:v", "wrapped_avframe", "-pix_fmt", "uyvy422",
+        "-c:a", "pcm_s16le", "-ar", "48000", "-ac", "2",
+        "-f", "decklink", device,
+    ]
+
+
 def cache_name(url):
     """A stable local filename for an asset URL, ignoring its access token."""
     stripped = url.split("?", 1)[0]
@@ -224,21 +252,9 @@ class Playout:
     # ── the device ──────────────────────────────────────────────────────────
 
     def start_outer(self):
-        """
-        The one process that owns the card. Silent stereo at 48 kHz is attached
-        because the DeckLink muxer wants an audio stream and the card's clock is
-        fixed at 48 kHz; the narthex screen has no speakers, so it is silence.
-        """
-        command = [
-            self.ffmpeg, "-hide_banner", "-loglevel", "warning",
-            "-f", "rawvideo", "-pix_fmt", "uyvy422",
-            "-s", f"{self.width}x{self.height}", "-r", f"{self.fps:g}",
-            "-i", "pipe:0",
-            "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
-            "-c:v", "rawvideo", "-pix_fmt", "uyvy422",
-            "-c:a", "pcm_s16le", "-ar", "48000", "-ac", "2",
-            "-f", "decklink", self.device,
-        ]
+        """Open the card. See outer_command for why it is built the way it is."""
+        command = outer_command(self.ffmpeg, self.device,
+                                self.width, self.height, self.fps)
         self.debug("outer: " + " ".join(command))
         self.outer = subprocess.Popen(command, stdin=subprocess.PIPE)
         self.log(f"opened {self.device} at {self.width}x{self.height}@{self.fps:g}")

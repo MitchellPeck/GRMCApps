@@ -104,6 +104,30 @@ class PureHelpers(unittest.TestCase):
         self.assertNotEqual(a, playout.cache_name("/api/player/media/8/file"))
         self.assertNotIn("/", a)
 
+    def test_outer_command_uses_a_codec_the_decklink_muxer_accepts(self):
+        # FFmpeg's DeckLink muxer takes only v210 or a wrapped frame. Asking it
+        # for rawvideo -- which reads perfectly sensibly next to a rawvideo
+        # input -- is refused at header-write time with "Unsupported codec
+        # type!", so the card opens and then immediately closes. Nothing about
+        # the failure points at the codec, so pin it here.
+        command = playout.outer_command("ffmpeg", "UltraStudio Express Monitor 3G",
+                                        1920, 1080, 30)
+        codec = command[command.index("-c:v") + 1]
+        self.assertIn(codec, ("wrapped_avframe", "v210"))
+
+    def test_outer_command_describes_the_pipe_it_is_actually_fed(self):
+        # The input half must keep matching what the feeder writes: raw
+        # uyvy422 at exactly the mode's size and rate, or every frame is
+        # misread.
+        command = playout.outer_command("/x/ffmpeg", "Dev", 1280, 720, 59.94)
+        self.assertEqual(command[0], "/x/ffmpeg")
+        self.assertEqual(command[-3:], ["-f", "decklink", "Dev"])
+        self.assertEqual(command[command.index("-i") + 1], "pipe:0")
+        self.assertEqual(command[command.index("-s") + 1], "1280x720")
+        self.assertEqual(command[command.index("-r") + 1], "59.94")
+        # The pipe itself is raw; only the output is wrapped.
+        self.assertEqual(command[command.index("-f") + 1], "rawvideo")
+
     def test_plan_changed(self):
         first = {"sourceKey": "awake:schedule:1:1:", "revision": "aaa"}
         # Nothing yet: build and start at once.
