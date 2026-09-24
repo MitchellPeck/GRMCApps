@@ -513,17 +513,28 @@ class Playout:
 
         written = 0
         started = time.time()
+        # Why the item ended decides what to do about it, and the two that
+        # matter look identical from the outside: a source that ran out and a
+        # card that stopped taking frames both end with a frame count and a
+        # screen showing something else. Name it.
+        ended = "stopped"
         inner = subprocess.Popen(command, stdout=subprocess.PIPE)
         try:
             while not self.stopping.is_set():
                 if self.interrupt.is_set():
+                    ended = "cut short"
                     break
                 # EXACTLY one frame, so an interrupt can never leave a partial
                 # frame in the pipe and shift everything after it.
                 chunk = inner.stdout.read(self.frame_size)
-                if not chunk or len(chunk) < self.frame_size:
+                if not chunk:
+                    ended = "source ended"
+                    break
+                if len(chunk) < self.frame_size:
+                    ended = "source ended on a partial frame"
                     break
                 if not self.write_frame(chunk):
+                    ended = "card stopped taking frames"
                     return False
                 written += 1
                 if written == 1:
@@ -531,11 +542,11 @@ class Playout:
         finally:
             elapsed = time.time() - started
             rate = written / elapsed if elapsed > 0 else 0
-            # The sustained rate is the number that matters: anything under the
-            # mode's own is the card being starved, which is what ends in a
-            # stall.
-            self.debug(f"item done after {written} frames "
-                       f"in {elapsed:.1f}s ({rate:.1f} fps)")
+            # The rate is only meaningful against the mode's own, and only the
+            # reason says whether a low one is starvation or just a short clip.
+            self.debug(f"item done after {written} frames in {elapsed:.1f}s "
+                       f"({rate:.1f} fps): {ended}; "
+                       f"decoder exit {inner.poll()}")
             inner.kill()
             try:
                 inner.stdout.close()
