@@ -1,4 +1,6 @@
 FROM node:20-alpine
+# ffmpeg splits long whole-meeting recordings into parts for whisper.
+RUN apk add --no-cache ffmpeg
 WORKDIR /app
 COPY apps/meeting-minutes/package.json ./
 RUN npm install

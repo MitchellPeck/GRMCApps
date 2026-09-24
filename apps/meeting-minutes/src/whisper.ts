@@ -149,6 +149,12 @@ export async function transcribeAudio(file: AudioFile, timeoutMs?: number): Prom
     if (err.code === "ECONNREFUSED" || err.code === "ENOTFOUND" || err.code === "EAI_AGAIN") {
       throw new Error("Transcription service is unreachable. Is the whisper container running?");
     }
+    if (err.code === "ECONNRESET" || /socket hang up/i.test(err.message || "")) {
+      throw new Error(
+        "The transcription service dropped the connection mid-job — the whisper container most likely " +
+        "crashed or restarted (see `docker compose logs whisper`). The recording is kept; retry to reprocess it."
+      );
+    }
     throw new Error(err.message || "Transcription failed.");
   }
 

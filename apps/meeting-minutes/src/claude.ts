@@ -353,7 +353,10 @@ export async function reconcileSpeakers(pool: Pool, input: ReconcileInput): Prom
     input.transcript,
   ];
   try {
-    const raw = await callClaude(pool, RECONCILE_SYSTEM, parts.join("\n"), 1024);
+    // A long recording is transcribed in parts, each with its own labels, so
+    // the answer can list dozens of labels; leave room for all of them.
+    const maxTokens = Math.min(4096, Math.max(1024, 256 + 32 * input.speakerOrder.length));
+    const raw = await callClaude(pool, RECONCILE_SYSTEM, parts.join("\n"), maxTokens);
     return parseSpeakerMap(raw, input.speakerOrder, names);
   } catch {
     return {};

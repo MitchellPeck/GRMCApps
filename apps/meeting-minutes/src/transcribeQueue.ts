@@ -13,6 +13,8 @@ import {
 import { getRecording, latestRecording, getMeetingRecording, latestMeetingRecording } from "./recordings";
 import { segmentByMarkers, chronologicalSpeakerOrder, TopicMarker } from "./segmentation";
 import { readFile } from "node:fs/promises";
+import { transcribeLongAudio } from "./chunking";
+import { config } from "./config";
 
 export interface TranscribeJob {
   itemId: number;
@@ -434,10 +436,12 @@ async function saveMeetingItem(
 }
 
 const realMeetingDeps: MeetingDeps = {
-  transcribe: async (job) => {
-    const buffer = await readFile(job.path);
-    return transcribeAudio({ fileName: `meeting-${job.meetingId}.webm`, mimeType: job.mimeType, buffer });
-  },
+  // Read-only on job.path: the stored recording is never modified, so a failed
+  // run can always be reprocessed.
+  transcribe: (job) => transcribeLongAudio(job.path, config.whisperChunkSeconds, {
+    transcribe: (file) => transcribeAudio(file),
+    log: (message) => realLog(`meeting ${job.meetingId}: ${message}`),
+  }),
   reconcile: realMeetingReconcile,
   setStatus: (meetingId, status, error) => setMeetingRecordingStatus(pool, meetingId, status, error ?? ""),
   loadMarkers: (recordingId) => listTopicMarkers(pool, recordingId),
