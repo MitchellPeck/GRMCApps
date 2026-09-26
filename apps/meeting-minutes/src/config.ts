@@ -22,6 +22,9 @@ export const config = {
   // seconds (cut at pauses). One 70-minute request crashed the whisper
   // container every time; ten-minute parts keep its memory flat.
   whisperChunkSeconds: Math.max(60, Number(process.env.WHISPER_CHUNK_SECONDS || 600)),
+  // Speaker-embedding model used to match voices across those parts. Baked
+  // into the image by the Dockerfile.
+  speakerModelPath: process.env.SPEAKER_EMBEDDING_MODEL || "/app/models/speaker-embedding.onnx",
   // Send a throwaway clip at boot so the first real recording does not pay
   // for loading the model. Set WHISPER_WARMUP=0 to skip it.
   whisperWarmUp: process.env.WHISPER_WARMUP !== "0",

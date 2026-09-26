@@ -130,12 +130,15 @@ test("transcribing in parts never modifies the stored recording and cleans up", 
       transcribe: async (file) => {
         sent.push(file.buffer.length);
         assert.equal(file.mimeType, "audio/wav");
-        return { text: "x", segments: [{ text: "x", speaker: "SPEAKER_00", start: 1, end: 2 }] };
+        return { text: "x", segments: [{ text: "x", speaker: "SPEAKER_00", start: 1, end: 4 }] };
       },
+      // One steady tone throughout: every part's label is the same "voice".
+      embed: () => Float32Array.from([1, 0, 0]),
       log: () => {},
-    });
+    }, { maxSpeakers: 8 });
     assert.equal(sent.length, 3);
-    assert.deepEqual(result.segments.map((s) => s.speaker), ["P1_SPEAKER_00", "P2_SPEAKER_00", "P3_SPEAKER_00"]);
+    // Matched across parts to one meeting-wide speaker, not one per part.
+    assert.deepEqual(result.segments.map((s) => s.speaker), ["SPEAKER_00", "SPEAKER_00", "SPEAKER_00"]);
     assert.equal(result.segments[0].start, 1);
     assert.ok(result.segments[1].start > 570 && result.segments[1].start < 632);
     assert.equal(sha(input), before, "the stored recording is untouched");
@@ -145,7 +148,8 @@ test("transcribing in parts never modifies the stored recording and cleans up", 
     // the recording intact for a retry.
     await assert.rejects(
       transcribeLongAudio(input, 600, {
-        transcribe: async (file) => { if (sent.length++ >= 4) throw new Error("socket hang up"); return { text: "", segments: [] }; },
+        transcribe: async () => { if (sent.length++ >= 4) throw new Error("socket hang up"); return { text: "", segments: [] }; },
+        embed: () => Float32Array.from([1]),
         log: () => {},
       }),
       /Part 2 of 3: socket hang up/
@@ -162,4 +166,17 @@ test("a missing ffmpeg-readable file fails clearly", { skip: !hasFfmpeg }, async
     transcribeLongAudio("/nonexistent/recording.webm", 600, { transcribe: async () => ({ text: "", segments: [] }), log: () => {} }),
     /Could not read the recording audio/
   );
+});
+
+test("a split recording without speaker matching fails instead of saving phantom speakers", { skip: !hasFfmpeg }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "chunk-test-"));
+  try {
+    const input = makeRecording(dir);
+    await assert.rejects(
+      transcribeLongAudio(input, 600, { transcribe: async () => ({ text: "", segments: [] }), log: () => {} }),
+      /Speaker matching is unavailable/
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

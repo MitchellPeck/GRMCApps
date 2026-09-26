@@ -187,7 +187,9 @@ services:
       # must exceed the slowest meeting you record). WHISPER_WARMUP=0 skips the
       # boot-time model load that keeps the first recording of the day fast.
       # WHISPER_CHUNK_SECONDS (default 600) is the part length whole-meeting
-      # recordings are split into; the timeout then applies per part.
+      # recordings are split into; the timeout then applies per part. Voices
+      # are matched across parts with a speaker-embedding model baked into the
+      # image (SPEAKER_EMBEDDING_MODEL overrides its path).
       MINUTES_DATA_DIR: "/data"
     volumes:
       - minutesdata:/data
