@@ -15,6 +15,8 @@ import { screenRoutes } from "./routes/screens";
 import { settingsRoutes } from "./routes/settings";
 import { playerRoutes } from "./routes/player";
 import { powerRoutes, takeoverRoutes } from "./routes/power";
+import { realDeps as powerActionDeps } from "./power-actions";
+import { pressKey } from "./samsung-pairing";
 import { noticeRoutes } from "./routes/notices";
 import { startPowerRunner } from "./power-runner";
 
@@ -51,6 +53,11 @@ app.addHook("onSend", async (req, reply) => {
 app.get("/healthz", async () => ({ ok: true, queue: queue.size() }));
 
 async function start(): Promise<void> {
+  // power-actions.ts is brand-agnostic and has no database handle, so the one
+  // action that needs the stored pairing is wired in here rather than reaching
+  // for the pool from inside it.
+  powerActionDeps.samsung = (key) => pressKey(pool, key);
+
   await mkdir(join(config.dataDir, "media"), { recursive: true });
   await ensureSchema();
   await resumePending(queue, pool, (m) => app.log.info(m));

@@ -13,11 +13,18 @@ import { createSocket } from "node:dgram";
 export type PowerAction =
   | { kind: "none" }
   | { kind: "http"; method: string; url: string; headers: Record<string, string>; body: string }
-  | { kind: "wol"; mac: string; ip: string };
+  | { kind: "wol"; mac: string; ip: string }
+  // The one brand with a first-class entry, because it cannot be expressed as
+  // a request: see samsung.ts. It carries no address of its own -- the paired
+  // set is a setting, so changing an hour never means pairing again.
+  | { kind: "samsung"; key: string };
 
 export const NO_ACTION: PowerAction = { kind: "none" };
 
 const MAC = /^([0-9A-Fa-f]{2})([:-]?)([0-9A-Fa-f]{2})(\2[0-9A-Fa-f]{2}){4}$/;
+// KEY_POWER toggles and is the one every model has. The discrete pair exists
+// on some sets and not others, which is why the toggle is the default.
+export const SAMSUNG_KEYS = ["KEY_POWER", "KEY_POWEROFF", "KEY_POWERON"];
 const METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"];
 
 export type ParseResult =
@@ -42,6 +49,18 @@ export function parseAction(raw: unknown): ParseResult {
 
   const kind = String(value.kind ?? "none");
   if (kind === "none") return { ok: true, action: NO_ACTION };
+
+  if (kind === "samsung") {
+    // ?? alone would let "" through to the error below; an unset key means
+    // the toggle, which is the only key every model has.
+    const key = (String(value.key ?? "").trim() || "KEY_POWER").toUpperCase();
+    // A fixed list, not free text: this goes to a device on the LAN, and the
+    // only keys that belong in an hours hook are the power ones.
+    if (!SAMSUNG_KEYS.includes(key)) {
+      return { ok: false, error: `That isn't a power key. Use one of: ${SAMSUNG_KEYS.join(", ")}.` };
+    }
+    return { ok: true, action: { kind: "samsung", key } };
+  }
 
   if (kind === "http") {
     const url = String(value.url ?? "").trim();
@@ -100,6 +119,7 @@ export function magicPacket(mac: string): Buffer {
 export interface ActionDeps {
   request(action: Extract<PowerAction, { kind: "http" }>): Promise<{ status: number }>;
   wake(packet: Buffer, target: string): Promise<void>;
+  samsung(key: string): Promise<{ ok: boolean; detail: string }>;
 }
 
 export interface ActionResult {
@@ -117,6 +137,8 @@ export async function runAction(action: PowerAction, deps: ActionDeps): Promise<
       return { ok, detail: `${action.method} ${action.url} → ${res.status}` };
     }
 
+    if (action.kind === "samsung") return await deps.samsung(action.key);
+
     // A directed packet reaches a TV whose address the router still knows; the
     // broadcast is the fallback for one that has dropped off the ARP table.
     const target = action.ip || "255.255.255.255";
@@ -128,6 +150,9 @@ export async function runAction(action: PowerAction, deps: ActionDeps): Promise<
 }
 
 export const realDeps: ActionDeps = {
+  // Filled in by index.ts, which has the pool needed to read the pairing.
+  samsung: async () => ({ ok: false, detail: "Samsung control is not wired up." }),
+
   async request(action) {
     // A TV on the LAN answers in milliseconds or not at all; never let a
     // hanging request hold up the hours ticker.

@@ -239,6 +239,44 @@ export async function getPowerActionRaw(pool: Pool, when: "on" | "off"): Promise
   return getSetting(pool, `power_${when}_action`);
 }
 
+// The paired television. Stored as plain settings rather than inside the
+// power actions, because the pairing outlives whatever the on and off hooks
+// are currently set to -- and re-pairing to change an hour would be absurd.
+export interface SamsungStored {
+  host: string;
+  mac: string;
+  token: string;
+  name: string;
+  pairedAt: string | null;
+}
+
+export async function getSamsung(pool: Pool): Promise<SamsungStored> {
+  const [host, mac, token, name, pairedAt] = await Promise.all([
+    getSetting(pool, "samsung_host"),
+    getSetting(pool, "samsung_mac"),
+    getSetting(pool, "samsung_token"),
+    getSetting(pool, "samsung_name"),
+    getSetting(pool, "samsung_paired_at"),
+  ]);
+  return {
+    host, mac, token,
+    name: name || "Narthex TV",
+    pairedAt: pairedAt || null,
+  };
+}
+
+export async function setSamsung(pool: Pool, value: Partial<SamsungStored>): Promise<void> {
+  const keys: Array<[keyof SamsungStored, string]> = [
+    ["host", "samsung_host"], ["mac", "samsung_mac"], ["token", "samsung_token"],
+    ["name", "samsung_name"], ["pairedAt", "samsung_paired_at"],
+  ];
+  for (const [field, key] of keys) {
+    if (value[field] !== undefined) {
+      await setSetting(pool, key, value[field] === null ? "" : String(value[field]));
+    }
+  }
+}
+
 export async function setPowerActionRaw(
   pool: Pool,
   when: "on" | "off",

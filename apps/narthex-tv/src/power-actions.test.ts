@@ -7,11 +7,13 @@ import {
 function deps(over: Partial<ActionDeps> = {}) {
   const sent: Array<{ target: string; packet: Buffer }> = [];
   const requests: PowerAction[] = [];
+  const keys: string[] = [];
   const base: ActionDeps = {
     async request(action) { requests.push(action); return { status: 200 }; },
     async wake(packet, target) { sent.push({ packet, target }); },
+    async samsung(key) { keys.push(key); return { ok: true, detail: `sent ${key}` }; },
   };
-  return { deps: { ...base, ...over }, sent, requests };
+  return { deps: { ...base, ...over }, sent, requests, keys };
 }
 
 test("no configuration is a valid, silent action", async () => {
@@ -118,4 +120,33 @@ test("junk in the settings row is reported, not thrown", () => {
   assert.equal(parseAction("{not json").ok, false);
   assert.equal(parseAction({ kind: "teleport" }).ok, false);
   assert.equal(parseAction(42).ok, false);
+});
+
+test("a samsung action carries only a key, never an address", async () => {
+  // The paired set is a setting. If the address lived in the action, changing
+  // which hour the screen goes off would mean pairing again.
+  const parsed = parseAction({ kind: "samsung", key: "key_power" });
+  assert.deepEqual(parsed, { ok: true, action: { kind: "samsung", key: "KEY_POWER" } });
+
+  const d = deps();
+  const result = await runAction({ kind: "samsung", key: "KEY_POWER" }, d.deps);
+  assert.equal(result.ok, true);
+  assert.deepEqual(d.keys, ["KEY_POWER"]);
+});
+
+test("only power keys are accepted", async () => {
+  // This reaches a device on the church LAN; an hours hook has no business
+  // sending arbitrary remote keys.
+  assert.equal(parseAction({ kind: "samsung", key: "KEY_VOLUP" }).ok, false);
+  assert.equal(parseAction({ kind: "samsung", key: "" }).ok, true, "empty defaults to the toggle");
+  assert.deepEqual(
+    serializeAction({ kind: "samsung", key: "KEY_POWER" }),
+    JSON.stringify({ kind: "samsung", key: "KEY_POWER" }));
+});
+
+test("a samsung failure is reported, not swallowed", async () => {
+  const d = deps({ async samsung() { return { ok: false, detail: "not paired" }; } });
+  const result = await runAction({ kind: "samsung", key: "KEY_POWER" }, d.deps);
+  assert.equal(result.ok, false);
+  assert.equal(result.detail, "not paired");
 });

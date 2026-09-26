@@ -1410,8 +1410,17 @@
   // ── the power hook ───────────────────────────────────────────────────────
   var POWER_KINDS = [
     ["none", "Nothing \u2014 just blank the screen"],
+    ["samsung", "Samsung TV (paired below)"],
     ["http", "Send a web request"],
     ["wol", "Send a Wake-on-LAN packet"]
+  ];
+
+  // KEY_POWER toggles and every model has it. The discrete pair exists on some
+  // sets and not others, so the toggle is the default.
+  var SAMSUNG_KEYS = [
+    ["KEY_POWER", "Power (toggle)"],
+    ["KEY_POWEROFF", "Power off (not on every model)"],
+    ["KEY_POWERON", "Power on (not on every model)"]
   ];
 
   function powerEditor(when) {
@@ -1457,9 +1466,31 @@
     wolBox.appendChild(wolRow);
     box.appendChild(wolBox);
 
+    var samsungBox = el("div");
+    var keyField = el("div", "field");
+    keyField.appendChild(el("label", null, "Key to send"));
+    var keySelect = el("select");
+    keySelect.id = id + "-key";
+    SAMSUNG_KEYS.forEach(function (k) {
+      var o = el("option", null, k[1]);
+      o.value = k[0];
+      keySelect.appendChild(o);
+    });
+    keySelect.value = parsed.key || "KEY_POWER";
+    keyField.appendChild(keySelect);
+    samsungBox.appendChild(keyField);
+    samsungBox.appendChild(el("div", "hint", when === "on"
+      // Worth saying here rather than in a support call on a Sunday.
+      ? "A Samsung stops answering on the network the moment it is off, so this "
+        + "can only turn it ON if \u201cPower On with Mobile\u201d is enabled on the TV. "
+        + "If it will not wake, use Wake-on-LAN for opening and Samsung for closing."
+      : "Sent over the paired connection below."));
+    box.appendChild(samsungBox);
+
     function sync() {
       httpBox.hidden = kind.value !== "http";
       wolBox.hidden = kind.value !== "wol";
+      samsungBox.hidden = kind.value !== "samsung";
     }
     kind.addEventListener("change", sync);
     sync();
@@ -1482,6 +1513,7 @@
     var id = "power-" + when;
     var kind = $(id + "-kind").value;
     if (kind === "none") return { kind: "none" };
+    if (kind === "samsung") return { kind: "samsung", key: $(id + "-key").value };
     if (kind === "wol") {
       return { kind: "wol", mac: $(id + "-mac").value.trim(), ip: $(id + "-ip").value.trim() };
     }
@@ -1552,7 +1584,127 @@
     powerEditor("on");
     powerEditor("off");
     renderPowerEvents();
+    await loadSamsung();
   }
+
+  // ── the paired television ───────────────────────────────────────────────
+  // Pairing is a conversation, not a request: somebody presses Pair here and
+  // then walks to the narthex to press Allow. So the button starts it and this
+  // polls, rather than holding a request open for a minute.
+  var samsungPoll = null;
+
+  async function loadSamsung() {
+    if (!can("admin")) return;
+    var data = await api("GET", "/api/power/samsung");
+    var s = data.samsung || {};
+    if (document.activeElement !== $("sam-host")) $("sam-host").value = s.host || "";
+    if (document.activeElement !== $("sam-mac")) $("sam-mac").value = s.mac || "";
+    if (document.activeElement !== $("sam-name")) $("sam-name").value = s.name || "";
+    renderSamsungStatus(s, data.pairing || { state: "idle" });
+  }
+
+  function renderSamsungStatus(s, pairing) {
+    var box = $("sam-status");
+    box.className = "hint";
+    box.innerHTML = "";
+
+    var label = "Not paired";
+    var tone = "pill-info";
+    var detail = "Enter the TV's address and press Pair with TV.";
+
+    if (pairing.state === "waiting") {
+      label = "Waiting";
+      tone = "pill-pending";
+      detail = "Go to the television and press Allow on the prompt.";
+    } else if (pairing.state === "failed") {
+      label = pairing.denied ? "Refused" : "Failed";
+      tone = "pill-rejected";
+      detail = pairing.error;
+    } else if (s.paired) {
+      label = "Paired";
+      tone = "pill-ok";
+      detail = "With " + s.host
+        + (s.pairedAt ? ", on " + new Date(s.pairedAt).toLocaleString() : "") + ".";
+    }
+
+    var pill = el("span", "pill " + tone, label);
+    pill.style.marginRight = "8px";
+    box.appendChild(pill);
+    box.appendChild(document.createTextNode(detail));
+  }
+
+  function watchPairing() {
+    if (samsungPoll) clearInterval(samsungPoll);
+    samsungPoll = setInterval(async function () {
+      try {
+        var data = await api("GET", "/api/power/samsung");
+        renderSamsungStatus(data.samsung || {}, data.pairing || { state: "idle" });
+        if ((data.pairing || {}).state !== "waiting") {
+          clearInterval(samsungPoll);
+          samsungPoll = null;
+          busy("sam-pair", false);
+          if (data.pairing.state === "paired") msg("sam-msg", "Paired.", "ok");
+          else if (data.pairing.state === "failed") msg("sam-msg", data.pairing.error, "err");
+        }
+      } catch (e) {
+        clearInterval(samsungPoll);
+        samsungPoll = null;
+        busy("sam-pair", false);
+      }
+    }, 2000);
+  }
+
+  $("sam-save").addEventListener("click", async function () {
+    busy("sam-save", true);
+    try {
+      await api("PUT", "/api/power/samsung", {
+        host: $("sam-host").value, mac: $("sam-mac").value, name: $("sam-name").value
+      });
+      await loadSamsung();
+      msg("sam-msg", "Saved.", "ok");
+    } catch (e) { msg("sam-msg", e.message, "err"); }
+    finally { busy("sam-save", false); }
+  });
+
+  $("sam-pair").addEventListener("click", async function () {
+    busy("sam-pair", true);
+    try {
+      // Save first, so pairing uses whatever is on screen rather than what was
+      // last stored.
+      await api("PUT", "/api/power/samsung", {
+        host: $("sam-host").value, mac: $("sam-mac").value, name: $("sam-name").value
+      });
+      var started = await api("POST", "/api/power/samsung/pair", { host: $("sam-host").value });
+      msg("sam-msg", started.message, "ok");
+      renderSamsungStatus({}, { state: "waiting" });
+      watchPairing();
+    } catch (e) {
+      msg("sam-msg", e.message, "err");
+      busy("sam-pair", false);
+    }
+  });
+
+  $("sam-test").addEventListener("click", async function () {
+    busy("sam-test", true);
+    try {
+      var result = await api("POST", "/api/power/samsung/test", { key: "KEY_POWER" });
+      msg("sam-msg", result.detail, result.ok ? "ok" : "err");
+      hours.events = result.events;
+      renderPowerEvents();
+    } catch (e) { msg("sam-msg", e.message, "err"); }
+    finally { busy("sam-test", false); }
+  });
+
+  $("sam-forget").addEventListener("click", async function () {
+    if (!confirm("Forget this pairing? The TV will have to be paired again.")) return;
+    busy("sam-forget", true);
+    try {
+      await api("DELETE", "/api/power/samsung");
+      await loadSamsung();
+      msg("sam-msg", "Pairing forgotten.", "ok");
+    } catch (e) { msg("sam-msg", e.message, "err"); }
+    finally { busy("sam-forget", false); }
+  });
 
   // ── the idle screen ─────────────────────────────────────────────────────
   var idle = null;

@@ -11,6 +11,9 @@ import { parseAction, realDeps, runAction, serializeAction } from "../power-acti
 import { clearTakeover, getTakeover, startTakeover } from "../takeover";
 import { getIdentity } from "../identity";
 import { tickPower } from "../power-runner";
+import { getSamsung, setSamsung } from "../settings";
+import { loadConfig, pairingStatus, pressKey, startPairing } from "../samsung-pairing";
+import { NO_SAMSUNG, validateHost } from "../samsung";
 import { realDeps as powerDeps } from "../power-actions";
 
 const intParam = (value: unknown): number => {
@@ -119,6 +122,80 @@ export async function powerRoutes(app: FastifyInstance): Promise<void> {
     }
     const result = await runAction(parsed.action, realDeps);
     await recordPowerEvent(pool, `test-${when}`, result.ok, result.detail);
+    return { ok: result.ok, detail: result.detail, events: await listPowerEvents(pool, 10) };
+  });
+
+  // ── the paired television ────────────────────────────────────────────────
+  // The token is the credential for turning the narthex screen on and off, so
+  // it is never sent back out: the screen only needs to know whether there IS
+  // one.
+  app.get("/api/power/samsung", { preHandler: requirePermission("admin") }, async () => {
+    const stored = await getSamsung(pool);
+    return {
+      ok: true,
+      samsung: {
+        host: stored.host,
+        mac: stored.mac,
+        name: stored.name,
+        pairedAt: stored.pairedAt,
+        paired: Boolean(stored.token),
+      },
+      pairing: pairingStatus(),
+    };
+  });
+
+  app.put("/api/power/samsung", { preHandler: requirePermission("admin") }, async (req, reply) => {
+    const body = (req.body ?? {}) as { host?: string; mac?: string; name?: string };
+    const patch: Record<string, string> = {};
+
+    if (body.host !== undefined) {
+      const checked = validateHost(body.host);
+      if (!checked.ok) return reply.code(400).send({ ok: false, error: checked.error });
+      const stored = await getSamsung(pool);
+      patch.host = checked.host;
+      // A token belongs to the set it was issued by. Keeping it against a new
+      // address would look paired and fail at the first keypress.
+      if (stored.host && stored.host !== checked.host) {
+        patch.token = "";
+        patch.pairedAt = "";
+      }
+    }
+    if (body.mac !== undefined) patch.mac = String(body.mac).trim();
+    if (body.name !== undefined) patch.name = String(body.name).trim() || NO_SAMSUNG.name;
+
+    await setSamsung(pool, patch);
+    return { ok: true };
+  });
+
+  app.post("/api/power/samsung/pair", { preHandler: requirePermission("admin") }, async (req, reply) => {
+    const stored = await getSamsung(pool);
+    const body = (req.body ?? {}) as { host?: string };
+    const host = body.host !== undefined ? String(body.host) : stored.host;
+
+    const started = startPairing(pool, host, stored.name);
+    if (!started.ok) return reply.code(409).send({ ok: false, error: started.error });
+    return {
+      ok: true,
+      // The answer is on the television, not on this screen.
+      message: "Go to the television and press Allow on the prompt.",
+      pairing: pairingStatus(),
+    };
+  });
+
+  app.delete("/api/power/samsung", { preHandler: requirePermission("admin") }, async () => {
+    await setSamsung(pool, { token: "", pairedAt: "" });
+    return { ok: true };
+  });
+
+  // Prove it before Sunday.
+  app.post("/api/power/samsung/test", { preHandler: requirePermission("admin") }, async (req, reply) => {
+    const body = (req.body ?? {}) as { key?: string };
+    const key = String(body.key || "KEY_POWER").toUpperCase();
+    if (!/^KEY_[A-Z0-9_]+$/.test(key)) {
+      return reply.code(400).send({ ok: false, error: "That isn't a remote key." });
+    }
+    const result = await pressKey(pool, key);
+    await recordPowerEvent(pool, `samsung-${key}`, result.ok, result.detail);
     return { ok: result.ok, detail: result.detail, events: await listPowerEvents(pool, 10) };
   });
 }

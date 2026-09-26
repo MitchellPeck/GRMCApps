@@ -574,6 +574,42 @@
     </div>
 
     <div class="card" data-needs="admin" hidden>
+      <div class="ct">Samsung television</div>
+      <p class="muted" style="font-size:13px;margin:0 0 14px">
+        A Samsung will not take a plain web request. It wants a paired connection,
+        and pairing means answering a prompt on the television itself. Do this once
+        and the screen can be switched on and off from the hours above.
+      </p>
+      <div class="row2">
+        <div class="field">
+          <label for="sam-host">TV's IP address</label>
+          <input type="text" id="sam-host" placeholder="192.168.1.50">
+        </div>
+        <div class="field">
+          <label for="sam-mac">TV's MAC address (for waking it)</label>
+          <input type="text" id="sam-mac" placeholder="AA:BB:CC:DD:EE:FF">
+        </div>
+      </div>
+      <div class="field">
+        <label for="sam-name">Name shown on the TV's prompt</label>
+        <input type="text" id="sam-name" placeholder="Narthex TV">
+      </div>
+      <div id="sam-status" class="hint" style="margin:10px 0"></div>
+      <div class="btn-row">
+        <button class="btn btn-primary" id="sam-pair" data-default="Pair with TV">Pair with TV</button>
+        <button class="btn btn-secondary" id="sam-save" data-default="Save">Save</button>
+        <button class="btn btn-secondary" id="sam-test" data-default="Test power">Test power</button>
+        <button class="btn btn-secondary" id="sam-forget" data-default="Forget pairing">Forget pairing</button>
+      </div>
+      <div id="sam-msg"></div>
+      <div class="hint" style="margin-top:12px">
+        The television must be <strong>on</strong> to pair. If no prompt appears, check
+        Settings &rarr; General &rarr; External Device Manager &rarr; Device Connection Manager,
+        and remove any old entry for this name from the Device List before trying again.
+      </div>
+    </div>
+
+    <div class="card" data-needs="admin" hidden>
       <div class="ct">Who can do what</div>
       <div class="grid2">
         <div class="field">

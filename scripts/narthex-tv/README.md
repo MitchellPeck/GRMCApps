@@ -326,26 +326,45 @@ morning that the TV never woke up is the failure this is here to prevent.
 
 Roku is the only one that just works with no pairing.
 
-**Samsung specifically.** Power-*off* needs a WebSocket session on port 8002
-with a token you get by accepting a prompt on the TV once, over TLS with a
-self-signed certificate. That is more unverifiable network code than it is
-worth building into this app, and it cannot be tested anywhere but in front of
-the actual television. Two better routes:
+**Samsung specifically.** A Samsung is the one brand with first-class support,
+under **Settings → Samsung television**, because it is the one that cannot be
+expressed as a configured request. It wants a WebSocket session on port 8002,
+over TLS with a certificate it signed itself, carrying a token the set only
+issues to somebody standing in front of it.
 
-- **A smart plug or Home Assistant**, either of which exposes a plain HTTP
-  endpoint you can paste straight into the web-request action above. This is
-  the path with the fewest moving parts.
-- **The TV's own On Timer / Off Timer** (Settings → General → System → Time →
-  Sleep Timer / On Timer), which needs no integration at all and survives every
-  network problem. Its limitation is that it lives in the TV's menu, so
-  changing the hours means walking to the TV — and, per the warning above, a
-  consumer Samsung will come back to Smart Hub rather than to the browser.
+So pairing is a conversation, not a request:
 
-For power-*on*, Samsung needs **Network Standby** enabled (Settings → General →
-Network → Expert Settings → Power On with Mobile) and a Wake-on-LAN packet. Be
-aware the container reaches your LAN through Docker Desktop's NAT, so a
-*broadcast* packet will not get out — fill in the TV's IP address as well as its
-MAC so the packet is sent directly.
+1. Enter the TV's IP address (and its MAC, for waking it) and press **Pair with
+   TV**. The television must be **on**.
+2. A prompt appears on the television. Press **Allow** with the remote.
+3. The token is stored. The card says *Paired*, and **Test power** proves it.
+
+The page polls while it waits rather than holding a request open, because that
+minute is somebody walking to the narthex and a proxy gives up long before a
+person does. If no prompt appears, check **Settings → General → External Device
+Manager → Device Connection Manager → Device List** on the TV and delete any
+old entry with the same name: a set that already knows the name reconnects
+silently and issues no token.
+
+Then set the hours actions above to **Samsung TV (paired below)**.
+
+**Turning it back ON is the hard direction.** A Samsung stops answering on the
+network the moment it is off, so the paired connection can only switch it off.
+For on, either:
+
+- Enable **Power On with Mobile** (Settings → General → Network → Expert
+  Settings) and use **Wake-on-LAN** for the opening boundary. Note the
+  container reaches your LAN through Docker Desktop's NAT, so a *broadcast*
+  packet will not get out — fill in the TV's IP as well as its MAC so the
+  packet goes directly.
+- Or use a smart plug with an HTTP endpoint, which is the path with the fewest
+  moving parts.
+- Or the TV's own **On Timer** (Settings → General → System → Time), which
+  needs no integration and survives every network problem, at the cost of
+  living in the TV's menu.
+
+The token is stored in the app's settings and is never sent back to the
+browser: the screen is only told whether there is one.
 
 ## Checking it is alive
 
