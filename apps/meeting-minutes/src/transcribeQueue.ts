@@ -14,6 +14,7 @@ import { getRecording, latestRecording, getMeetingRecording, latestMeetingRecord
 import { segmentByMarkers, chronologicalSpeakerOrder, TopicMarker } from "./segmentation";
 import { readFile } from "node:fs/promises";
 import { transcribeLongAudio } from "./chunking";
+import { embedSpeaker } from "./speakerEmbedding";
 import { config } from "./config";
 
 export interface TranscribeJob {
@@ -438,9 +439,14 @@ async function saveMeetingItem(
 const realMeetingDeps: MeetingDeps = {
   // Read-only on job.path: the stored recording is never modified, so a failed
   // run can always be reprocessed.
-  transcribe: (job) => transcribeLongAudio(job.path, config.whisperChunkSeconds, {
+  transcribe: async (job) => transcribeLongAudio(job.path, config.whisperChunkSeconds, {
     transcribe: (file) => transcribeAudio(file),
+    embed: embedSpeaker,
     log: (message) => realLog(`meeting ${job.meetingId}: ${message}`),
+  }, {
+    // Never report more voices than people marked present — and, when no one
+    // is marked present, still no more than a page can sensibly show.
+    maxSpeakers: (await getAttendeeIds(pool, job.meetingId)).length || 12,
   }),
   reconcile: realMeetingReconcile,
   setStatus: (meetingId, status, error) => setMeetingRecordingStatus(pool, meetingId, status, error ?? ""),

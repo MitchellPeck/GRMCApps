@@ -3,6 +3,9 @@ import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DiarizedSegment, TranscriptionResult } from "./whisper";
+import {
+  Fingerprint, MIN_EMBED_SECONDS, applySpeakerClusters, clusterFingerprints, labelAudio, wavSamples,
+} from "./speakerLinking";
 
 // ── Long-recording transcription in parts ───────────────────────────────────
 // A whole-meeting recording sent to whisper in one request crashed the whisper
@@ -88,9 +91,11 @@ export interface PartResult { offset: number; result: TranscriptionResult }
 // Stitch per-part results onto one timeline. Whisper's speaker labels are only
 // meaningful within the request that produced them — "SPEAKER_00" in part 2 is
 // not necessarily "SPEAKER_00" in part 3 — so each part's labels get their own
-// namespace ("P2_SPEAKER_00"). Speaker reconciliation already expects one
-// person to span several labels and maps them to names meeting-wide. A single
-// part is returned untouched, so short recordings keep their plain labels.
+// namespace ("P2_SPEAKER_00"). transcribeLongAudio then matches those labels
+// to meeting-wide voices by fingerprint (speakerLinking.ts) — never ship the
+// namespaced labels themselves: that produced 200+ "speakers" for eight
+// people. A single part is returned untouched, so short recordings keep their
+// plain labels.
 export function mergePartResults(parts: PartResult[]): TranscriptionResult {
   if (parts.length === 1 && parts[0].offset === 0) return parts[0].result;
   const segments: DiarizedSegment[] = [];
@@ -171,7 +176,35 @@ export async function splitAudio(inputPath: string, workDir: string, chunkSecond
 
 export interface LongAudioDeps {
   transcribe(file: { fileName: string; mimeType: string; buffer: Buffer }): Promise<TranscriptionResult>;
+  // Voice fingerprint of 16 kHz mono samples. Required whenever a recording
+  // is long enough to be split: without it speakers cannot be matched across
+  // parts, and the job fails rather than save hundreds of phantom speakers.
+  embed?(samples: Float32Array, sampleRate: number): Float32Array;
   log(message: string): void;
+}
+
+export interface LongAudioOptions {
+  // People present at the meeting: the most distinct voices to report.
+  maxSpeakers?: number;
+}
+
+// Fingerprint every label whisper used in one part, from that part's audio.
+function fingerprintPart(
+  wav: Buffer,
+  partIndex: number,
+  result: TranscriptionResult,
+  embed: NonNullable<LongAudioDeps["embed"]>
+): Fingerprint[] {
+  const { sampleRate, samples } = wavSamples(wav);
+  const labels = [...new Set(result.segments.map((s) => s.speaker).filter(Boolean))];
+  const prints: Fingerprint[] = [];
+  for (const label of labels) {
+    const audio = labelAudio(samples, sampleRate, result.segments, label);
+    if (audio.length < MIN_EMBED_SECONDS * sampleRate) continue;
+    // Same key mergePartResults gives this label.
+    prints.push({ key: `P${partIndex + 1}_${label}`, embedding: embed(audio, sampleRate) });
+  }
+  return prints;
 }
 
 // Transcribe a stored recording of any length, part by part. `inputPath` is
@@ -179,12 +212,17 @@ export interface LongAudioDeps {
 export async function transcribeLongAudio(
   inputPath: string,
   chunkSeconds: number,
-  deps: LongAudioDeps
+  deps: LongAudioDeps,
+  opts: LongAudioOptions = {}
 ): Promise<TranscriptionResult> {
   const workDir = await mkdtemp(join(tmpdir(), "minutes-split-"));
   try {
     const parts = await splitAudio(inputPath, workDir, chunkSeconds);
+    if (parts.length > 1 && !deps.embed) {
+      throw new Error("Speaker matching is unavailable, so a recording this long cannot be split.");
+    }
     const results: PartResult[] = [];
+    const prints: Fingerprint[] = [];
     for (let i = 0; i < parts.length; i++) {
       const started = Date.now();
       let result: TranscriptionResult;
@@ -197,8 +235,26 @@ export async function transcribeLongAudio(
         deps.log(`transcribed part ${i + 1}/${parts.length} (from ${Math.round(parts[i].offset)}s) in ${((Date.now() - started) / 1000).toFixed(1)}s`);
       } catch { /* logging must never fail a job */ }
       results.push({ offset: parts[i].offset, result });
+      if (parts.length > 1) {
+        try {
+          prints.push(...fingerprintPart(await readFile(parts[i].path), i, result, deps.embed!));
+        } catch (e) {
+          throw new Error(`Part ${i + 1} of ${parts.length}: could not fingerprint speakers: ${(e as Error).message}`);
+        }
+      }
     }
-    return mergePartResults(results);
+    const merged = mergePartResults(results);
+    if (parts.length === 1) return merged;
+    if (!prints.length && merged.segments.some((s) => s.speaker)) {
+      throw new Error("No speaker had enough audio to be matched across parts.");
+    }
+    const clusterOf = clusterFingerprints(prints, opts.maxSpeakers);
+    const segments = applySpeakerClusters(merged.segments, clusterOf);
+    try {
+      deps.log(`matched ${prints.length} per-part speaker label(s) to ${new Set(clusterOf.values()).size} voice(s)`
+        + (opts.maxSpeakers ? ` (at most ${opts.maxSpeakers} present)` : ""));
+    } catch { /* logging must never fail a job */ }
+    return { text: merged.text, segments };
   } finally {
     await rm(workDir, { recursive: true, force: true }).catch(() => {});
   }
