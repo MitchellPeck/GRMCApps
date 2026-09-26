@@ -501,6 +501,92 @@ class FakeOuter:
         return os.path.getsize(self.path)
 
 
+class WakeOnLan(unittest.TestCase):
+    """
+    Waking the television, which only this machine can do: the app reaches the
+    network through Docker Desktop's NAT and a broadcast does not survive it.
+    """
+
+    def setUp(self):
+        args = make_args(ffmpeg=sys.executable,
+                         cache=os.path.join(tempfile.mkdtemp(), "cache"))
+        self.playout = playout.Playout(args)
+        self.woken = []
+        self.playout.wake_tv = lambda mac: self.woken.append(mac)
+
+    def plan(self, on, mac="AA:BB:CC:DD:EE:FF"):
+        return {"power": {"on": on, "wakeMac": mac}, "revision": "r"}
+
+    def test_the_packet_is_six_ff_bytes_then_the_mac_sixteen_times(self):
+        packet = playout.magic_packet("AA:BB:CC:DD:EE:FF")
+        self.assertEqual(len(packet), 102)
+        self.assertEqual(packet[:6], b"\xff" * 6)
+        self.assertEqual(packet[6:12], bytes.fromhex("aabbccddeeff"))
+        self.assertEqual(packet[-6:], bytes.fromhex("aabbccddeeff"))
+        # Separators are a matter of taste; the bytes are not.
+        for form in ("aa-bb-cc-dd-ee-ff", "aabbccddeeff", "AA:BB:CC:DD:EE:FF"):
+            self.assertEqual(playout.magic_packet(form), packet)
+
+    def test_a_bad_mac_is_refused_rather_than_broadcast(self):
+        # 102 bytes of nonsense onto the LAN helps nobody, and a typo in a
+        # settings field should not become network traffic.
+        for bad in ("", "nope", "aa:bb:cc:dd:ee", "aa:bb:cc:dd:ee:ff:00"):
+            with self.assertRaises(ValueError):
+                playout.magic_packet(bad)
+
+    def test_it_broadcasts_rather_than_addressing_the_set(self):
+        # A television that has been off for hours has dropped out of the
+        # router's ARP table, so a directed packet has nowhere to go.
+        sent = []
+        playout.wake("aabbccddeeff", send=lambda data, addr: sent.append(addr))
+        self.assertTrue(all(host == "255.255.255.255" for host, _ in sent))
+        self.assertEqual(sorted(port for _, port in sent), [7, 9])
+
+    def test_opening_wakes_the_television(self):
+        self.playout.maybe_wake(self.plan(False))   # first plan: closed
+        self.playout.maybe_wake(self.plan(True))    # the narthex opens
+        self.assertEqual(self.woken, ["AA:BB:CC:DD:EE:FF"])
+
+    def test_it_fires_on_the_edge_and_not_on_every_poll(self):
+        # The plan says "on" every ten seconds all day. Waking each time would
+        # nudge a set that is already awake, and the first thing anybody would
+        # notice is the television turning itself off.
+        self.playout.maybe_wake(self.plan(False))
+        for _ in range(5):
+            self.playout.maybe_wake(self.plan(True))
+        self.assertEqual(len(self.woken), 1)
+
+    def test_starting_up_with_the_screen_already_on_sends_nothing(self):
+        # Restarting the script at nine on a Sunday, mid-service, must not
+        # send anything: the first plan is not an edge.
+        for _ in range(3):
+            self.playout.maybe_wake(self.plan(True))
+        self.assertEqual(self.woken, [])
+
+    def test_closing_then_opening_again_wakes_it_again(self):
+        self.playout.maybe_wake(self.plan(True))
+        self.playout.maybe_wake(self.plan(False))
+        self.playout.maybe_wake(self.plan(True))
+        self.assertEqual(len(self.woken), 1)
+
+    def test_no_mac_configured_means_no_packet(self):
+        self.playout.maybe_wake(self.plan(False, mac=""))
+        self.playout.maybe_wake(self.plan(True, mac=""))
+        self.assertEqual(self.woken, [])
+
+    def test_a_failure_to_send_does_not_wedge_the_edge(self):
+        # If the send raises and the state were recorded afterwards, every
+        # later poll would look like an edge and retry forever.
+        def explode(mac):
+            raise OSError("network is down")
+        self.playout.wake_tv = explode
+        self.playout.maybe_wake(self.plan(False))
+        self.playout.maybe_wake(self.plan(True))     # raises internally
+        self.playout.wake_tv = lambda mac: self.woken.append(mac)
+        self.playout.maybe_wake(self.plan(True))     # no longer an edge
+        self.assertEqual(self.woken, [])
+
+
 class StuckOuter:
     """A card that took the mode and then stopped draining its pipe."""
 

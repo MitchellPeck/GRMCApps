@@ -183,6 +183,16 @@ export interface PlanPower {
   /** false = show nothing at all: the narthex is outside its opening hours. */
   on: boolean;
   changesAt: string | null;
+  /**
+   * The television's MAC address, for waking it, or "".
+   *
+   * It is in the plan because the magic packet has to be sent from the LAN,
+   * and the app is not on the LAN -- it reaches the network through Docker
+   * Desktop's NAT, which a broadcast does not survive. playout.py runs on the
+   * Mac in the room, so it sends the packet and the server only says who to
+   * wake.
+   */
+  wakeMac: string;
 }
 
 export interface PlanTakeover {

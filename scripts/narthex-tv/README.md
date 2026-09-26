@@ -391,20 +391,34 @@ silently and issues no token.
 
 Then set the hours actions above to **Samsung TV (paired below)**.
 
-**Turning it back ON is the hard direction.** A Samsung stops answering on the
-network the moment it is off, so the paired connection can only switch it off.
-For on, either:
+**Turning it back ON is the hard direction, and it is handled for you.**
 
-- Enable **Power On with Mobile** (Settings → General → Network → Expert
-  Settings) and use **Wake-on-LAN** for the opening boundary. Note the
-  container reaches your LAN through Docker Desktop's NAT, so a *broadcast*
-  packet will not get out — fill in the TV's IP as well as its MAC so the
-  packet goes directly.
-- Or use a smart plug with an HTTP endpoint, which is the path with the fewest
-  moving parts.
-- Or the TV's own **On Timer** (Settings → General → System → Time), which
-  needs no integration and survives every network problem, at the cost of
-  living in the TV's menu.
+A Samsung keeps its network alive for a few minutes after it is switched off,
+which is why turning it straight back on appears to work. Once it drops into
+deep standby it answers nothing at all — not port 8002, not a ping — and the
+only thing that will wake it is a broadcast Wake-on-LAN packet.
+
+That packet cannot come from the app. The container reaches your network
+through Docker Desktop's NAT, which a broadcast does not survive, and a
+*directed* packet is no use either, because a set that has been off for hours
+has long since dropped out of the router's ARP table. **`playout.py` sends it
+instead**, from the Mac, which is on the same LAN as the television. Fill in
+the MAC under **Settings → Samsung television** and it fires on the opening
+boundary, once per edge — never on every poll, which would nudge a set that is
+already awake into turning itself off.
+
+Two things on the television, without which nothing will wake it:
+
+- **Settings → General → Network → Expert Settings → Power On with Mobile: On**
+  (called *Network Standby* on some models).
+- **Use Ethernet if you can.** Many Samsungs drop WiFi entirely in deep
+  standby and honour Wake-on-LAN only over a wired connection. This is the
+  commonest reason a correctly configured wake does nothing.
+
+If it still will not wake, a smart plug with an HTTP endpoint (as a
+web-request action) or the TV's own **On Timer** (Settings → General → System
+→ Time) both sidestep the problem entirely, at the cost of living outside the
+app.
 
 The token is stored in the app's settings and is never sent back to the
 browser: the screen is only told whether there is one.

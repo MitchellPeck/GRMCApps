@@ -47,8 +47,10 @@ import datetime
 import hashlib
 import json
 import os
+import re
 import select
 import shutil
+import socket
 import signal
 import subprocess
 import sys
@@ -211,6 +213,51 @@ def drawtext_escape(value):
                  .replace("'", "\\'")
                  .replace("[", "\\[")
                  .replace("]", "\\]"))
+
+
+# Port 9 is the usual one; 7 costs nothing and some sets only listen there.
+WOL_PORTS = (9, 7)
+
+
+def magic_packet(mac):
+    """
+    Six 0xFF bytes then the target MAC sixteen times. Raises on a MAC that is
+    not one, rather than sending 102 bytes of nonsense onto the network.
+    """
+    digits = re.sub(r"[^0-9A-Fa-f]", "", mac or "")
+    if len(digits) != 12:
+        raise ValueError(f"{mac!r} is not a MAC address")
+    address = bytes.fromhex(digits)
+    return b"\xff" * 6 + address * 16
+
+
+def wake(mac, send=None):
+    """
+    Wake a television, from the machine that is actually on its network.
+
+    This runs here rather than in the app on purpose. A Samsung in deep
+    standby answers nothing at all -- not port 8002, not a ping -- so the only
+    thing that will bring it back is a broadcast magic packet, and a broadcast
+    does not survive Docker Desktop's NAT. The Mac driving the screen is on
+    the same LAN as the television, so it is the one thing in the system that
+    can send it.
+
+    Broadcast rather than the set's own address, because a machine that has
+    been off for hours has long since dropped out of the router's ARP table
+    and a directed packet has nowhere to go.
+    """
+    packet = magic_packet(mac)
+    if send is None:
+        def send(payload, address):
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+                sock.sendto(payload, address)
+            finally:
+                sock.close()
+    for port in WOL_PORTS:
+        send(packet, ("255.255.255.255", port))
+    return len(WOL_PORTS)
 
 
 def clock_lines(now, mode):
@@ -576,6 +623,10 @@ class Playout:
         self.codec = args.codec
         self.font = find_font()
         self.overlay_scale = args.overlay_scale
+        # None until the first plan arrives, so starting up with the screen
+        # already on is not mistaken for the narthex opening.
+        self.power_was_on = None
+        self.wake_tv = wake
         # Answered in run(), not here: asking means running ffmpeg, and a
         # constructor that shells out cannot be built in a test without one.
         self.can_draw = False
@@ -712,6 +763,7 @@ class Playout:
                 body = self.api("/api/player/plan")
                 new = body.get("plan") if body.get("ok") else None
                 if new:
+                    self.maybe_wake(new)
                     with self.plan_lock:
                         old = self.plan
                         rebuild, at_once = plan_changed(old, new)
@@ -929,6 +981,36 @@ class Playout:
             self.debug(f"could not write the footer ({exc}); leaving it off")
             return None
         return self.footer_file
+
+    def maybe_wake(self, plan):
+        """
+        Send the magic packet when the narthex opens.
+
+        On the edge only, never while the plan merely says the screen should
+        be on: a set that is already awake would get a KEY_POWER-equivalent
+        nudge every ten seconds, and the first thing anybody would notice is
+        the television turning itself off.
+
+        The first plan after starting up is deliberately not an edge either.
+        Restarting the script at nine on a Sunday morning, with the screen
+        already on and playing, must not send anything.
+        """
+        power = plan.get("power") or {}
+        on = bool(power.get("on", True))
+        mac = str(power.get("wakeMac") or "")
+        was = self.power_was_on
+
+        # Remember first, so an exception below cannot leave this stuck and
+        # firing on every poll.
+        self.power_was_on = on
+        if was is None or not on or was or not mac:
+            return
+
+        try:
+            self.wake_tv(mac)
+            self.log(f"narthex opening: sent Wake-on-LAN to {mac}")
+        except (ValueError, OSError) as exc:
+            self.log(f"could not send Wake-on-LAN to {mac}: {exc}")
 
     def frames_now(self):
         """The item list to work through, or [None] meaning 'show black'."""

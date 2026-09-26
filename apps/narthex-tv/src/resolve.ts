@@ -2,7 +2,7 @@ import { Pool } from "pg";
 import { Resolution, resolveSchedule } from "./schedule";
 import { listEntries } from "./schedule-repo";
 import { getPlaylist, listItems, PlaylistRow } from "./playlists";
-import { AppSettings, getDefaultPlaylistId, loadSettings } from "./settings";
+import { AppSettings, getDefaultPlaylistId, getSamsung, loadSettings } from "./settings";
 import { buildFrames, Frame, Plan, PlanItem, planRevision } from "./plan";
 import { resolvePower } from "./power";
 import { localDateKey } from "./tz";
@@ -76,6 +76,7 @@ export async function buildPlan(
 ): Promise<Plan> {
   const { resolution, playlist, source, settings, power } = await resolveNow(pool, opts.at);
   const takeover = await getTakeover(pool);
+  const samsung = await getSamsung(pool);
 
   const items: PlanItem[] = playlist
     ? (await listItems(pool, playlist.id)).map((row) => ({
@@ -202,6 +203,7 @@ export async function buildPlan(
     power: {
       // A takeover overrides the operating hours outright: a dark screen is no
       // use to somebody being told to evacuate.
+      wakeMac: samsung.mac,
       on: power.on || takeover.active,
       changesAt: power.changesAt ? power.changesAt.toISOString() : null,
     },

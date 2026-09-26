@@ -116,7 +116,7 @@ test("the revision changes when anything the screen renders changes", () => {
       footerText: "", rotation: 0, pollSeconds: 10, idleMessage: "",
       idleHeadline: "", idleShowMark: true, loopSingleVideo: true,
     },
-    power: { on: true, changesAt: null },
+    power: { on: true, changesAt: null, wakeMac: "" },
     takeover: { active: false, headline: "", body: "", urgent: true },
     frames: buildFrames([item({ media: {} })], playlist, DEFAULT_SETTINGS),
   };
@@ -135,10 +135,10 @@ test("the revision changes when anything the screen renders changes", () => {
     first
   );
   // Going dark outside opening hours must reach the TV.
-  assert.notEqual(planRevision({ ...base, power: { on: false, changesAt: null } }), first);
+  assert.notEqual(planRevision({ ...base, power: { on: false, changesAt: null, wakeMac: "" } }), first);
   // ...but the countdown to the next boundary moves every second and must not.
   assert.equal(
-    planRevision({ ...base, power: { on: true, changesAt: "2026-01-11T14:00:00.000Z" } }),
+    planRevision({ ...base, power: { on: true, changesAt: "2026-01-11T14:00:00.000Z", wakeMac: "" } }),
     first
   );
 });
