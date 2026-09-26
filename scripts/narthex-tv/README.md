@@ -69,7 +69,7 @@ nothing to log in to.
              --ffmpeg ~/.local/bin/ffmpeg-decklink
 ```
 
-#### Match the SDK to the driver
+#### Match the SDK to the driver, and build current FFmpeg
 
 `build-ffmpeg-decklink.sh` passes `--disable-indev=decklink`, so **capture is
 not built** -- and capture is the only part that will not compile against a
@@ -89,34 +89,39 @@ So: check the driver's version in **Desktop Video Setup -> About** and download
 the SDK that matches it. The script refuses an SDK several majors behind, which
 is the opposite of the rule that used to apply here.
 
-#### Getting an ffmpeg that builds
+#### Getting an ffmpeg that works
 
-`brew install amiaopensource/amiaos/ffmpegdecklink` **fails** as of September
-2026, with:
+`brew install amiaopensource/amiaos/ffmpegdecklink` **fails**:
 
 ```
 no member named 'GetBytes' in 'IDeckLinkVideoInputFrame'
 no member named 'SetVideoInputFrameMemoryAllocator' in 'IDeckLinkInput'
 ```
 
-Blackmagic removed both after DeckLink SDK 12.4 — `GetBytes` moved to
-`IDeckLinkVideoBuffer`, the input allocator was deleted — and FFmpeg still
-calls them unguarded. Two things follow:
+Blackmagic removed both after SDK 12.4 and FFmpeg still calls them unguarded.
+Every one of those errors is in `decklink_dec.cpp`, the **capture** path, which
+this app never touches — so the script passes `--disable-indev=decklink` and
+the file is never compiled. That is what lets the SDK match the driver.
 
-- **A newer FFmpeg does not help.** Master has the same unguarded calls.
-- **Every one of those errors is in `decklink_dec.cpp`, the capture path**,
-  which this app never touches: we only ever output. But `--enable-decklink`
-  builds capture and playout together, so it takes the whole build down.
-
-So the SDK has to be an old one. `build-ffmpeg-decklink.sh` does the build
-given a 12.x SDK, and refuses up front if handed a 14.x or later rather than
-letting you find out fifteen minutes in. The SDK is needed only for headers at
-build time — the Desktop Video **driver** on the Mac stays current.
-
-Download a 12.x SDK (12.4.2 is known good) from
+Download the SDK whose version matches **Desktop Video Setup → About** from
 <https://www.blackmagicdesign.com/support>, searching for *Desktop Video SDK*.
 The download sits behind a name/email form, which is the one step that cannot
 be scripted.
+
+**The FFmpeg version is not optional.** The script builds `master`, and a
+release will not do. FFmpeg 7.1's `decklink_frame::QueryInterface` refuses
+every interface with `E_NOINTERFACE`; current FFmpeg answers `IID_IUnknown`.
+An UltraStudio Express Monitor 3G on Desktop Video 16.4 requires that, and
+without it rejects the very first frame:
+
+```
+[decklink] Could not schedule video frame. error 80000003.
+```
+
+`0x80000003` is `E_INVALIDARG`, and it says nothing about which argument.
+Building `master` then fails on macOS with `use of undeclared identifier
+'IID_IUnknown'`, because Blackmagic's Mac SDK does not define it — the script
+supplies it. Verified at `b139ba1` against SDK 16.0.
 
 **How it works, and why.** `ffmpeg -f decklink` *closes the device when its
 input ends*, so one ffmpeg per slide would drop the signal every few seconds

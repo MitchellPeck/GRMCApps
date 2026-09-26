@@ -38,7 +38,13 @@ set -euo pipefail
 
 SDK_ROOT="${1:-}"
 PREFIX="${PREFIX:-$HOME/.local}"
-FFMPEG_TAG="${FFMPEG_TAG:-n7.1}"
+# Current FFmpeg, not a release: 7.1's decklink_frame::QueryInterface refuses
+# every interface with E_NOINTERFACE, and an UltraStudio Express Monitor 3G on
+# Desktop Video 16.4 then rejects the very first frame with E_INVALIDARG.
+# Current FFmpeg answers IID_IUnknown and the same command plays. Verified at
+# b139ba1 with SDK 16.0; if a later master regresses, that commit is the known
+# good one.
+FFMPEG_TAG="${FFMPEG_TAG:-master}"
 CC="${CC:-clang}"
 SYSROOT_FLAGS=""
 WORK="${WORK:-${TMPDIR:-/tmp}/narthex-ffmpeg-build}"
