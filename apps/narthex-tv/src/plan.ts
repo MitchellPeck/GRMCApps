@@ -163,6 +163,12 @@ export interface PlanDisplay {
   transitionMs: number;
   clock: AppSettings["clock"];
   clockPosition: AppSettings["clockPosition"];
+  /**
+   * The app's timezone, for a client that has no other way to know it. The
+   * browser player uses the television's own clock, but playout.py draws the
+   * time with ffmpeg on a Mac that may well be set to something else.
+   */
+  timezone: string;
   footerText: string;
   rotation: number;
   pollSeconds: number;

@@ -146,6 +146,17 @@ and the TV would re-sync — a black flash between every photo. Instead:
   framing, so a cut landing mid-frame would shift every frame after it and tear
   the picture until somebody restarted it. `test_playout.py` checks that
   invariant.
+- **The clock and footer are burnt into the frames.** The browser player draws
+  them as page elements; this program decodes pictures and video and draws
+  nothing, so on this path they have to go through the filter chain or the
+  screen shows the media and nothing else. Every string drawn comes from a
+  file -- a footer reading `Sunday: 9:00, 11:00` interpolated into a
+  filtergraph would end an option, then end the filter, and take the whole
+  picture down. Python rewrites the clock file twice a second and `drawtext`
+  rereads it every frame, which also puts the clock in the app's timezone
+  rather than whatever the Mac is set to. The overlays are drawn before the
+  conversion to `uyvy422`, because `drawtext` cannot draw on a packed format
+  and the card will take nothing else.
 - Assets are cached on disk, so a server outage keeps the last schedule
   playing instead of going black.
 - **The card is always released on the way out.** An ffmpeg left holding the

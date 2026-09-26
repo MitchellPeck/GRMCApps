@@ -184,6 +184,7 @@ export async function buildPlan(
       transitionMs: settings.transitionMs,
       clock: settings.clock,
       clockPosition: settings.clockPosition,
+      timezone: settings.timezone,
       footerText: playlist?.footer_text || settings.footerText,
       rotation: opts.rotation,
       pollSeconds: settings.pollSeconds,

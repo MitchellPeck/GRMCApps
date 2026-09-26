@@ -43,6 +43,7 @@ second copy of that logic to drift.
 """
 
 import argparse
+import datetime
 import hashlib
 import json
 import os
@@ -56,6 +57,11 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:      # Python without the tz database; fall back to the Mac's own clock.
+    ZoneInfo = None
 
 # ── pure helpers (exercised by test_playout.py) ─────────────────────────────
 
@@ -110,7 +116,122 @@ def fit_filter(fit, width, height, background="black"):
             f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
             f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color={background}"
         )
-    return f"{geometry},format=uyvy422,setsar=1"
+    # No format conversion here. drawtext cannot draw on packed uyvy422, so the
+    # conversion has to come after the overlays rather than before them; play()
+    # appends it at the end of the chain.
+    return f"{geometry},setsar=1"
+
+
+# Where a corner overlay sits, as a fraction of the shorter edge. Televisions
+# overscan, and a clock hard against the edge is the first thing to be eaten.
+OVERLAY_MARGIN = 0.035
+
+FONT_CANDIDATES = (
+    "/System/Library/Fonts/Helvetica.ttc",
+    "/System/Library/Fonts/HelveticaNeue.ttc",
+    "/System/Library/Fonts/Supplemental/Arial.ttf",
+    "/Library/Fonts/Arial.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+)
+
+
+def find_font(candidates=FONT_CANDIDATES):
+    """The first font that is actually present, or None."""
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    return None
+
+
+def drawtext_escape(value):
+    """
+    Quote a path or literal for one drawtext option.
+
+    Inside a filtergraph a colon ends the option and a comma ends the filter,
+    so both have to be escaped even though no shell is involved.
+    """
+    return (value.replace("\\", "\\\\")
+                 .replace(":", "\\:")
+                 .replace(",", "\\,")
+                 .replace("'", "\\'")
+                 .replace("[", "\\[")
+                 .replace("]", "\\]"))
+
+
+def clock_lines(now, mode):
+    """
+    The clock exactly as the browser player words it, so the two screens agree.
+
+    %-I is the hour without a leading zero, matching toLocaleTimeString with a
+    numeric hour; the date matches toLocaleDateString asking for a long weekday
+    and month.
+    """
+    if mode not in ("time", "time_date"):
+        return []
+    lines = [now.strftime("%-I:%M %p")]
+    if mode == "time_date":
+        lines.append(now.strftime("%A, %B %-d"))
+    return lines
+
+
+def overlay_filters(display, width, height, font, clock_files=(), footer_file=None):
+    """
+    The clock and footer, as ffmpeg filters.
+
+    The browser player draws these as ordinary page elements. This program
+    decodes pictures and video and draws nothing, so on the DeckLink path they
+    have to be burnt into the frames -- the same reason the emergency message
+    and the idle screen are rendered server-side. Without this the television
+    shows the media and nothing else.
+
+    **Every string drawn comes from a file**, and none is ever interpolated
+    into the filter description. Inside a filtergraph a colon ends an option
+    and a comma ends a filter, so a footer reading "Sunday: 9:00, 11:00" would
+    take the whole chain down with it -- and ffmpeg's own `%{localtime}`
+    expansion, the obvious way to draw a ticking clock, needs escaping of
+    exactly the kind that looks right and is not. Python writes the clock into
+    a file once a second instead and drawtext rereads it every frame, which
+    also means the timezone is the app's rather than whatever the Mac is set
+    to, and the wording is shared with the browser player.
+    """
+    if not font:
+        return []
+
+    filters = []
+    margin = max(8, round(min(width, height) * OVERLAY_MARGIN))
+    fontfile = drawtext_escape(font)
+    sizes = [max(12, round(height / 22)), max(10, round(height / 34))]
+
+    if clock_files:
+        corner = (display or {}).get("clockPosition") or "bottom-right"
+        gap = round(sizes[0] * 0.3)
+        block = sum(sizes[:len(clock_files)]) + gap * (len(clock_files) - 1)
+        x = f"w-tw-{margin}" if corner.endswith("right") else str(margin)
+        y = margin if corner.startswith("top") else height - margin - block
+
+        for path, size in zip(clock_files, sizes):
+            filters.append(_drawtext(fontfile, path, size, x, str(y)))
+            y += size + gap
+
+    if footer_file:
+        filters.append(_drawtext(fontfile, footer_file,
+                                 max(10, round(height / 30)),
+                                 "(w-tw)/2", f"h-th-{margin}"))
+
+    return filters
+
+
+def _drawtext(fontfile, textfile, size, x, y):
+    # reload=1 rereads the file every frame, which is what lets the clock tick
+    # inside a single long-running decode. expansion=none because these files
+    # hold text somebody typed, or a time, and %{...} in either is just
+    # characters.
+    return (f"drawtext=fontfile={fontfile}"
+            f":textfile={drawtext_escape(textfile)}:reload=1:expansion=none"
+            f":fontsize={size}:fontcolor=white"
+            f":box=1:boxcolor=black@0.45:boxborderw={max(4, round(size / 4))}"
+            f":x={x}:y={y}")
 
 
 def seconds_for(frame, default_seconds):
@@ -298,6 +419,10 @@ class Playout:
         self.outer = None
         self.opened_at = 0.0
         self.codec = args.codec
+        self.font = find_font()
+        self.footer_file = os.path.join(self.cache_dir, "footer.txt")
+        self.clock_files = [os.path.join(self.cache_dir, "clock-0.txt"),
+                            os.path.join(self.cache_dir, "clock-1.txt")]
 
         os.makedirs(self.cache_dir, exist_ok=True)
 
@@ -490,13 +615,27 @@ class Playout:
             path = self.asset(frame["url"])
         source = frame if frame is not None else {"kind": "image", "ms": 1000}
 
+        with self.plan_lock:
+            display = (self.plan or {}).get("display") or {}
+
+        # Black is black: no clock on a screen that is deliberately dark.
+        overlays = [] if frame is None else overlay_filters(
+            display, self.width, self.height, self.font,
+            self.clock_overlay_files(display), self.write_footer(display))
+
+        chain = [f"fps={rate_arg(self.fps)}"]
+        chain.append(fit_filter(source.get("fit", "contain"),
+                                self.width, self.height, self.background))
+        chain += overlays
+        # Last, because drawtext cannot draw on packed uyvy422 -- and the card
+        # will take nothing else.
+        chain.append("format=uyvy422")
+
         command = [self.ffmpeg, "-hide_banner", "-loglevel", "error"]
         command += input_args(source, path, self.width, self.height, self.fps)
         command += [
             "-an",
-            "-vf", f"fps={rate_arg(self.fps)}," + fit_filter(
-                source.get("fit", "contain"), self.width, self.height, self.background
-            ),
+            "-vf", ",".join(chain),
             "-f", "rawvideo", "-pix_fmt", "uyvy422", "pipe:1",
         ]
 
@@ -514,7 +653,14 @@ class Playout:
         # card that stopped taking frames both end with a frame count and a
         # screen showing something else. Name it.
         ended = "stopped"
-        inner = subprocess.Popen(command, stdout=subprocess.PIPE)
+        # ffmpeg's %{localtime} reads the process timezone, and the Mac driving
+        # the screen need not be set to the church's. The app knows which one it
+        # means, so say so rather than hope.
+        environment = dict(os.environ)
+        if display.get("timezone"):
+            environment["TZ"] = str(display["timezone"])
+
+        inner = subprocess.Popen(command, stdout=subprocess.PIPE, env=environment)
         try:
             while not self.stopping.is_set():
                 if self.interrupt.is_set():
@@ -551,6 +697,69 @@ class Playout:
             inner.wait(timeout=5)
         return self.outer_alive()
 
+    def now_in(self, timezone):
+        """The time the app means, not the time the Mac happens to be set to."""
+        if timezone and ZoneInfo is not None:
+            try:
+                return datetime.datetime.now(ZoneInfo(str(timezone)))
+            except Exception:
+                # A timezone the Mac's database does not have is not worth
+                # taking the screen down for.
+                self.debug(f"unknown timezone {timezone!r}; using the Mac's clock")
+        return datetime.datetime.now()
+
+    def write_atomic(self, path, text):
+        """Replace a file drawtext may be reading this instant, never truncate it."""
+        temporary = path + ".part"
+        with open(temporary, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        os.replace(temporary, path)
+
+    def clock_forever(self):
+        """
+        Keep the clock files current. drawtext rereads them every frame, so
+        this is what makes the clock tick inside one long decode.
+        """
+        while not self.stopping.is_set():
+            with self.plan_lock:
+                display = (self.plan or {}).get("display") or {}
+            lines = clock_lines(self.now_in(display.get("timezone")),
+                                display.get("clock") or "off")
+            for path, line in zip(self.clock_files, lines):
+                try:
+                    self.write_atomic(path, line)
+                except OSError as exc:
+                    self.debug(f"could not write the clock ({exc})")
+                    break
+            # Twice a second: the minute has to turn over promptly, and this
+            # costs two small writes.
+            self.stopping.wait(0.5)
+
+    def clock_overlay_files(self, display):
+        """The clock files in use, which is how many lines the mode asks for."""
+        count = len(clock_lines(self.now_in(display.get("timezone")),
+                                display.get("clock") or "off"))
+        return self.clock_files[:count]
+
+    def write_footer(self, display):
+        """
+        Put the footer somewhere drawtext can read it, and return the path.
+
+        Through a file, never interpolated into the filter string: this is
+        somebody's typing, and a colon or a comma in it would otherwise be read
+        as filter syntax and break the whole chain.
+        """
+        text = (display.get("footerText") or "").strip()
+        if not text:
+            return None
+        try:
+            with open(self.footer_file, "w", encoding="utf-8") as handle:
+                handle.write(text)
+        except OSError as exc:
+            self.debug(f"could not write the footer ({exc}); leaving it off")
+            return None
+        return self.footer_file
+
     def frames_now(self):
         """The item list to work through, or [None] meaning 'show black'."""
         with self.plan_lock:
@@ -572,6 +781,13 @@ class Playout:
 
     def run(self):
         threading.Thread(target=self.poll_forever, daemon=True).start()
+        # Before anything decodes: drawtext fails outright on a textfile that
+        # is not there, which would take the picture down rather than the
+        # clock.
+        for path in self.clock_files:
+            if not os.path.exists(path):
+                self.write_atomic(path, " ")
+        threading.Thread(target=self.clock_forever, daemon=True).start()
 
         # Do not start the card until we know what to show, but do not wait
         # forever either: a Mac that boots before the network is up should

@@ -12,6 +12,7 @@ somebody restarts it. That invariant is checked here.
     python3 -m unittest discover -s scripts/narthex-tv -p 'test_*.py'
 """
 
+import datetime
 import io
 import os
 import subprocess
@@ -64,10 +65,71 @@ class PureHelpers(unittest.TestCase):
         self.assertIn("force_original_aspect_ratio=increase", cover)
         self.assertIn("crop=1920:1080", cover)
 
-        # Both must end in the card's only pixel format, or the splice breaks.
+        # The pixel format is deliberately NOT set here. drawtext cannot draw
+        # on packed uyvy422, so the overlays go between this and the
+        # conversion, and play() appends that at the end of the chain.
         for chain in (contain, cover):
-            self.assertIn("format=uyvy422", chain)
+            self.assertNotIn("format=uyvy422", chain)
             self.assertIn("setsar=1", chain)
+
+    def test_clock_lines_match_the_browser_player(self):
+        when = datetime.datetime(2026, 9, 26, 15, 7)
+        self.assertEqual(playout.clock_lines(when, "off"), [])
+        self.assertEqual(playout.clock_lines(when, "time"), ["3:07 PM"])
+        self.assertEqual(playout.clock_lines(when, "time_date"),
+                         ["3:07 PM", "Saturday, September 26"])
+        # No leading zero on the hour, because the browser player has none and
+        # the two screens are meant to read the same.
+        self.assertEqual(playout.clock_lines(
+            datetime.datetime(2026, 9, 26, 9, 5), "time"), ["9:05 AM"])
+
+    def test_overlay_filters_draw_the_clock_and_the_footer(self):
+        filters = playout.overlay_filters(
+            {"clockPosition": "top-left"}, 1920, 1080, "/f/S.ttf",
+            ["/c/0.txt", "/c/1.txt"], "/c/footer.txt")
+        self.assertEqual(len(filters), 3)
+        self.assertTrue(filters[0].endswith(":x=38:y=38"),
+                        "top-left clock sits one margin in from both edges")
+        # Every drawn string comes from a file, reread each frame so the clock
+        # can tick inside one long decode.
+        for f in filters:
+            self.assertIn("reload=1", f)
+            self.assertIn("expansion=none", f)
+            self.assertIn("textfile=", f)
+
+    def test_overlay_filters_respect_the_corner(self):
+        for corner, expected in (("top-left", "x=38"),
+                                 ("top-right", "x=w-tw-38"),
+                                 ("bottom-left", "x=38"),
+                                 ("bottom-right", "x=w-tw-38")):
+            filters = playout.overlay_filters(
+                {"clockPosition": corner}, 1920, 1080, "/f/S.ttf", ["/c/0.txt"])
+            self.assertIn(":" + expected + ":", filters[0], corner)
+        # A bottom clock ends up in the lower half, a top one in the upper.
+        low = playout.overlay_filters({"clockPosition": "bottom-left"},
+                                      1920, 1080, "/f/S.ttf", ["/c/0.txt"])[0]
+        self.assertGreater(int(low.rsplit("y=", 1)[1]), 540)
+
+    def test_nothing_is_drawn_when_it_is_switched_off(self):
+        # No clock files and no footer: the mode is off, so there is nothing
+        # to draw and no filter to add.
+        self.assertEqual(playout.overlay_filters({}, 1920, 1080, "/f/S.ttf"), [])
+        # And nothing at all without a font, rather than a broken filter chain
+        # that takes the whole picture down with it.
+        self.assertEqual(
+            playout.overlay_filters({}, 1920, 1080, None,
+                                    ["/c/0.txt"], "/c/footer.txt"), [])
+
+    def test_text_never_reaches_the_filter_string(self):
+        # A colon ends an option and a comma ends a filter, so a footer reading
+        # "Sunday: 9:00, 11:00" interpolated into the chain would take the
+        # whole picture down. Nothing drawn is ever interpolated -- it all
+        # arrives through files -- and the paths that ARE interpolated get
+        # escaped.
+        filters = playout.overlay_filters({}, 1920, 1080, "/f/S.ttf",
+                                          footer_file="/tmp/odd,name:1.txt")
+        self.assertEqual(len(filters), 1)
+        self.assertIn(r"/tmp/odd\,name\:1.txt", filters[0])
 
     def test_seconds_for(self):
         self.assertEqual(playout.seconds_for({"kind": "image", "ms": 12000}, 10), 12.0)
