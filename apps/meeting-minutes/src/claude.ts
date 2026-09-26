@@ -57,6 +57,12 @@ async function callClaude(
   const data: any = await res.json();
   if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
   const text = data.content?.map((b: any) => b.text || "").join("") ?? "";
+  // A reply cut off at max_tokens is incomplete JSON for every structured
+  // caller; saving it produced a "summary" that was literally half a JSON
+  // object. Fail loudly instead so the caller can retry or report it.
+  if (data.stop_reason === "max_tokens") {
+    throw new Error("Claude's reply was cut off before it finished.");
+  }
   return text as string;
 }
 
@@ -177,9 +183,33 @@ Respond with ONLY a JSON object, no prose around it:
 Use an empty array when there are genuinely no action items. Base everything
 strictly on the provided text; never invent tasks, owners, or decisions.`;
 
+// Best-effort recovery from a JSON reply that does not parse (e.g. cut off
+// mid-array): the summary string, and every action item that is complete.
+function salvageSummary(raw: string): SummarizeResult | null {
+  const m = /"summary"\s*:\s*("(?:[^"\\]|\\.)*")/.exec(raw);
+  if (!m) return null;
+  let summary: string;
+  try { summary = JSON.parse(m[1]); } catch { return null; }
+  const actionItems: ActionItem[] = [];
+  const re = /\{\s*"task"\s*:\s*("(?:[^"\\]|\\.)*")\s*,\s*"owner"\s*:\s*("(?:[^"\\]|\\.)*")\s*\}/g;
+  for (let a; (a = re.exec(raw)); ) {
+    try {
+      const task = String(JSON.parse(a[1])).trim();
+      if (task) actionItems.push({ task, owner: String(JSON.parse(a[2])).trim() || "Unassigned" });
+    } catch { /* skip a malformed item */ }
+  }
+  return { summary: summary.trim(), actionItems };
+}
+
 export function parseSummary(raw: string): SummarizeResult {
   let data: any;
-  try { data = JSON.parse(stripJsonFences(raw)); } catch { return { summary: raw.trim(), actionItems: [] }; }
+  try { data = JSON.parse(stripJsonFences(raw)); } catch {
+    const salvaged = salvageSummary(raw);
+    if (salvaged) return salvaged;
+    // Never store JSON-looking text as the summary itself.
+    if (/^\s*(```|\{)/.test(raw)) throw new Error("Claude returned a summary that could not be read. Try again.");
+    return { summary: raw.trim(), actionItems: [] };
+  }
   const actionItems: ActionItem[] = Array.isArray(data?.actionItems)
     ? data.actionItems
         .map((a: any) => ({ task: String(a?.task ?? "").trim(), owner: String(a?.owner ?? "").trim() || "Unassigned" }))
@@ -204,7 +234,9 @@ export async function summarizeItem(pool: Pool, input: SummarizeInput): Promise<
   if (!input.transcript && !input.notes) {
     throw new Error("Nothing to summarize yet — record a transcript or type notes first.");
   }
-  return parseSummary(await callClaude(pool, SUMMARIZE_SYSTEM, parts.join("\n"), 1024));
+  // A long topic (a whole-meeting recording can put an hour under one item)
+  // yields a long summary and a dozen-plus action items; 1024 tokens cut it off.
+  return parseSummary(await callClaude(pool, SUMMARIZE_SYSTEM, parts.join("\n"), 4096));
 }
 
 export interface ReportItem {

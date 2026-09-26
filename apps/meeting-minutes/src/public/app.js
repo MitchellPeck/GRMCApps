@@ -1274,23 +1274,33 @@ function renderMeetingRecUi(){
           +(state.meetingRecordings && state.meetingRecordings.length
             ? '<button class="btn-sm" id="btn-mrec-retry">Retry processing</button>' : '');
         var rb=document.getElementById('btn-mrec-retry');
-        if(rb) rb.addEventListener('click', function(){
-          var last=state.meetingRecordings[state.meetingRecordings.length-1];
-          api('/api/meeting-recordings/'+last.id+'/reprocess', { method:'POST' }).then(function(res){
-            if(!res.ok){ msg('mrec-msg','err',res.error||'Could not queue processing.'); return; }
-            state.meeting.recording_status='queued';
-            renderMeetingRecUi();
-            startPolling();
-          })['catch'](function(e){ msg('mrec-msg','err',e.message); });
-        });
+        if(rb) rb.addEventListener('click', reprocessMeetingRecording);
       }
       else if(rs==='done' && state.meetingRecordings && state.meetingRecordings.length){
         var lastRec=state.meetingRecordings[state.meetingRecordings.length-1];
-        ex.innerHTML='<div class="hint">Processed. <a href="/api/meeting-recordings/'+lastRec.id+'/download">Download the recording</a></div>';
+        ex.innerHTML='<div class="hint">Processed. <a href="/api/meeting-recordings/'+lastRec.id+'/download">Download the recording</a></div>'
+          +'<button class="btn-sm" id="btn-mrec-reprocess">Reprocess recording</button>';
+        document.getElementById('btn-mrec-reprocess').addEventListener('click', function(){
+          // Reprocessing rewrites every topic's transcript, speakers and
+          // summary from the stored audio; the audio itself is untouched.
+          if(!confirm('Reprocess the meeting recording? This replaces every topic\'s transcript, speaker names and summary. The recording itself is kept.')) return;
+          reprocessMeetingRecording();
+        });
       }
       else ex.innerHTML='';
     }
   }
+}
+
+// Queue the latest stored meeting recording for processing again.
+function reprocessMeetingRecording(){
+  var last=state.meetingRecordings[state.meetingRecordings.length-1];
+  api('/api/meeting-recordings/'+last.id+'/reprocess', { method:'POST' }).then(function(res){
+    if(!res.ok){ msg('mrec-msg','err',res.error||'Could not queue processing.'); return; }
+    state.meeting.recording_status='queued';
+    renderMeetingRecUi();
+    startPolling();
+  })['catch'](function(e){ msg('mrec-msg','err',e.message); });
 }
 
 function uploadMeetingChunk(blob){
