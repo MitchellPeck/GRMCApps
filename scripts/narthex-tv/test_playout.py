@@ -123,22 +123,71 @@ class PureHelpers(unittest.TestCase):
             self.assertIn("expansion=none", f)
             self.assertIn("textfile=", f)
 
-    def test_the_clock_is_not_drawn_as_a_caption(self):
-        # A dark rectangle behind the time turns a clock into a subtitle. The
-        # browser player uses a drop shadow and no box, and the two screens are
-        # meant to look like one system.
+    def test_drawtext_draws_plain_text_and_nothing_else(self):
+        # Everything drawtext offers for legibility is hard-edged: borderw is
+        # a solid outline traced round the glyphs and shadowx/shadowy is the
+        # same text stamped again a few pixels over. Neither is a drop shadow,
+        # and both look like it. The softness is made by blurring a copy of
+        # the layer, in overlay_graph.
         filters = playout.overlay_filters(
             {"clockPosition": "bottom-right"}, 1920, 1080, "/f/S.ttf",
             ["/c/0.txt", "/c/1.txt"], "/c/footer.txt")
         for f in filters:
-            self.assertNotIn("box=1", f)
-            self.assertNotIn("boxcolor", f)
-            # Both, not either: drawtext cannot blur, so a lone offset shadow
-            # vanishes against a bright frame and the outline is what actually
-            # keeps white readable.
-            self.assertIn("shadowcolor", f)
-            self.assertIn("bordercolor", f)
-        # The date is set back from the time, as in the stylesheet.
+            for hard in ("box=1", "boxcolor", "borderw", "bordercolor",
+                         "shadowcolor", "shadowx", "shadowy"):
+                self.assertNotIn(hard, f)
+
+    def test_the_shadow_is_blurred_and_then_made_dense_again(self):
+        graph = playout.overlay_graph(
+            {"clockPosition": "bottom-right"}, 1920, 1080, 59.94, "null",
+            "/f/S.ttf", ["/c/0.txt"], None)
+        # Flattened to black with the alpha left alone, so what gets blurred
+        # is the SHAPE of the letters.
+        self.assertIn("colorchannelmixer=rr=0:gg=0:bb=0,", graph)
+        self.assertIn("gblur=", graph)
+        # Blurred small and scaled back up: a blur is the expensive filter
+        # here and a shadow has no detail to lose.
+        self.assertIn("scale=480:270,gblur", graph)
+        # Then boosted back to opacity, because blurring spreads the alpha too
+        # thin to hold white over a bright frame. Chained, since aa caps at 2.
+        self.assertEqual(graph.count("colorchannelmixer=aa=2"),
+                         playout.SHADOW_BOOST)
+        # Shadow under, sharp text over.
+        self.assertLess(graph.index("[shadow]overlay"), graph.index("[ctext]overlay"))
+        self.assertTrue(graph.endswith("format=uyvy422[out]"))
+
+    def test_no_chrome_means_no_graph_at_all(self):
+        # Nothing to draw: no second layer, no blur, no compositing, and the
+        # caller falls back to a plain -vf chain.
+        self.assertIsNone(playout.overlay_graph(
+            {}, 1920, 1080, 59.94, "null", "/f/S.ttf"))
+        self.assertIsNone(playout.overlay_graph(
+            {}, 1920, 1080, 59.94, "null", None, ["/c/0.txt"], "/c/f.txt"))
+
+    def test_the_clock_stacks_above_the_footer_at_any_size(self):
+        # The footer grows upward as it gets bigger. Pinning the clock a fixed
+        # distance off the bottom put a scaled-up footer straight through the
+        # date, which the browser never does because there the footer is a bar
+        # and the clock rides on top of it.
+        def box(f):
+            size = int(f.split(":fontsize=")[1].split(":")[0])
+            y = int(f.rsplit("y=", 1)[1])
+            return y, y + round(size * 1.35)
+        for scale in (1.0, 1.3, 1.6, 2.0):
+            filters = playout.overlay_filters(
+                {"clockPosition": "bottom-right"}, 1920, 1080, "/f/S.ttf",
+                ["/c/0.txt", "/c/1.txt"], "/c/footer.txt", scale=scale)
+            date_bottom = box(filters[1])[1]
+            footer_top, footer_bottom = box(filters[2])
+            self.assertGreater(footer_top, date_bottom,
+                               f"clock and footer overlap at scale {scale}")
+            self.assertLessEqual(footer_bottom, 1080,
+                                 f"footer falls off the frame at scale {scale}")
+
+    def test_the_date_is_set_back_from_the_time(self):
+        filters = playout.overlay_filters(
+            {"clockPosition": "bottom-right"}, 1920, 1080, "/f/S.ttf",
+            ["/c/0.txt", "/c/1.txt"])
         self.assertIn("white@0.92", filters[0])
         self.assertIn("white@0.78", filters[1])
         self.assertGreater(int(filters[0].split(":fontsize=")[1].split(":")[0]),

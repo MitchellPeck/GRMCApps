@@ -133,7 +133,12 @@ FOOTER_VH = 0.027
 LINE_HEIGHT = 1.35
 MARGIN_X_VW = 0.03
 MARGIN_TOP_VH = 0.03
+# The clock stops 6vh up and the footer sits 1.6vh from the bottom, which is
+# what keeps them apart: in player.css the footer is a bar across the bottom
+# and the clock rides above it. Positioning the footer from the TOP margin
+# instead put it straight through a bottom-corner date.
 MARGIN_BOTTOM_VH = 0.06
+FOOTER_BOTTOM_VH = 0.016
 
 # Plain .ttf first, and every .ttc last.
 #
@@ -256,6 +261,10 @@ def overlay_filters(display, width, height, font, clock_files=(), footer_file=No
     # The two lines are faded differently in the browser; the date sits back.
     alphas = ["0.92", "0.78"]
 
+    footer_size = max(10, round(height * FOOTER_VH * scale)) if footer_file else 0
+    footer_top = (height - round(height * FOOTER_BOTTOM_VH)
+                  - round(footer_size * LINE_HEIGHT)) if footer_file else height
+
     if clock_files:
         corner = (display or {}).get("clockPosition") or "bottom-right"
         lines = list(zip(clock_files, sizes, alphas))
@@ -265,35 +274,92 @@ def overlay_filters(display, width, height, font, clock_files=(), footer_file=No
         # A right-hand corner right-aligns for free: every line's right edge
         # lands on the same x, which is what the browser does too.
         x = f"w-tw-{side}" if corner.endswith("right") else str(side)
-        y = (round(height * MARGIN_TOP_VH) if corner.startswith("top")
-             else height - round(height * MARGIN_BOTTOM_VH) - block)
+        if corner.startswith("top"):
+            y = round(height * MARGIN_TOP_VH)
+        else:
+            # Above the footer, not merely 6vh up. The footer grows upward as
+            # it gets bigger, so a fixed inset put a scaled-up footer straight
+            # through the date -- which the browser never does, because there
+            # the footer is a bar and the clock stacks on top of it.
+            floor = min(height - round(height * MARGIN_BOTTOM_VH),
+                        footer_top - round(height * 0.012))
+            y = floor - block
 
         for path, size, alpha in lines:
             filters.append(_drawtext(fontfile, path, size, x, str(y), alpha))
             y += round(size * LINE_HEIGHT)
 
     if footer_file:
-        footer_size = max(10, round(height * FOOTER_VH * scale))
-        filters.append(_drawtext(
-            fontfile, footer_file, footer_size, "(w-tw)/2",
-            str(height - round(height * MARGIN_TOP_VH) - round(footer_size * LINE_HEIGHT))))
+        filters.append(_drawtext(fontfile, footer_file, footer_size,
+                                 "(w-tw)/2", str(footer_top)))
 
     return filters
+
+
+# The shadow, blurred at quarter resolution. A blur is the expensive filter
+# here and a shadow has no detail to lose, so it is done at 480x270 and scaled
+# back up -- which costs about a sixteenth of blurring the full frame and, if
+# anything, looks smoother for it. Note the sigma is in QUARTER-scale pixels:
+# the upscale multiplies the radius by four.
+SHADOW_SIGMA = 2.0
+# Blurring spreads the alpha thin, so the shadow is dense enough to hold white
+# over a bright frame only once it is boosted back up. Clipping at the top is
+# the point: it thickens the core while leaving the outer edge soft, which is
+# what a drop shadow looks like and what an outline never will.
+# colorchannelmixer caps aa at 2, so the boost is chained.
+SHADOW_BOOST = 3
+SHADOW_DROP = 18
+
+
+def overlay_graph(display, width, height, fps, base_chain, font,
+                  clock_files=(), footer_file=None, scale=1.0):
+    """
+    The whole filter graph when there is chrome to draw, or None when there is
+    not and a plain -vf chain will do.
+
+    The text is composited rather than drawn into the picture, because drawtext
+    has no blur and so cannot make a soft shadow -- only a hard outline or the
+    same text stamped again a few pixels over, both of which look like exactly
+    what they are.
+
+    So: draw the text onto a transparent layer, split it, flatten one copy to
+    black, blur that, and lay it under the sharp copy. That is a real drop
+    shadow, the kind the browser player gets from CSS for nothing.
+    """
+    draws = overlay_filters(display, width, height, font,
+                            clock_files, footer_file, scale)
+    if not draws:
+        return None
+
+    drop = max(2, round(height * CLOCK_TIME_VH * scale / SHADOW_DROP))
+    return ";".join([
+        f"{base_chain}[base]",
+        # An RGBA layer the size of the frame, holding nothing but the text.
+        f"color=c=black@0:s={width}x{height}:r={rate_arg(fps)},format=rgba,"
+        + ",".join(draws) + "[chrome]",
+        "[chrome]split[ctext][cshadow]",
+        # rr/gg/bb to zero makes it black while leaving the alpha alone, so
+        # what gets blurred is the SHAPE of the letters.
+        f"[cshadow]colorchannelmixer=rr=0:gg=0:bb=0,"
+        f"scale={width // 4}:{height // 4},gblur=sigma={SHADOW_SIGMA},"
+        f"scale={width}:{height}"
+        + ",colorchannelmixer=aa=2" * SHADOW_BOOST + "[shadow]",
+        f"[base][shadow]overlay=0:{drop}[lit]",
+        "[lit][ctext]overlay=0:0,format=uyvy422[out]",
+    ])
 
 
 def _drawtext(fontfile, textfile, size, x, y, alpha="0.92"):
     """
     One line, styled the way the browser player styles its chrome.
 
-    No box. A dark rectangle behind the time turns it into a subtitle, which is
-    not what this is -- it is a clock in the corner of a picture.
+    Plain white text and nothing else. No box, no outline, no drawtext shadow.
 
-    Legibility instead comes from two things together, because neither is
-    enough on its own. The browser blurs a drop shadow; drawtext cannot blur,
-    and a lone hard-offset shadow all but disappears against a bright frame.
-    So there is also a thin dark outline hugging the glyphs, which is what
-    every broadcast lower-third does and what keeps white readable over
-    anything. The shadow then reads as depth rather than doing all the work.
+    drawtext cannot blur, so everything it offers for legibility is hard-edged:
+    `borderw` is a solid outline traced round the glyphs and `shadowx/shadowy`
+    is the same text stamped again a few pixels over. Neither is a drop shadow
+    and both look like it. The softness is made in overlay_graph instead, by
+    blurring a copy of this whole layer and laying it underneath.
     """
     # reload=1 rereads the file every frame, which is what lets the clock tick
     # inside a single long-running decode. expansion=none because these files
@@ -302,12 +368,6 @@ def _drawtext(fontfile, textfile, size, x, y, alpha="0.92"):
     return (f"drawtext=fontfile={fontfile}"
             f":textfile={drawtext_escape(textfile)}:reload=1:expansion=none"
             f":fontsize={size}:fontcolor=white@{alpha}"
-            # A hairline outline to separate the glyphs from the picture, and
-            # a soft shadow straight down for depth. Chosen by rendering the
-            # alternatives and looking at them: a heavier outline goes crunchy
-            # and a shadow on its own washes out over a bright frame.
-            f":borderw={max(1, round(size / 40))}:bordercolor=black@0.85"
-            f":shadowcolor=black@0.55:shadowx=0:shadowy={max(2, round(size / 15))}"
             f":x={x}:y={y}")
 
 
@@ -700,26 +760,30 @@ class Playout:
             display = (self.plan or {}).get("display") or {}
 
         # Black is black: no clock on a screen that is deliberately dark.
-        overlays = [] if (frame is None or not self.can_draw) else overlay_filters(
-            display, self.width, self.height, self.font,
-            self.clock_overlay_files(display), self.write_footer(display),
-            self.overlay_scale)
+        graph = None
+        if frame is not None and self.can_draw:
+            graph = overlay_graph(
+                display, self.width, self.height, self.fps,
+                (f"fps={rate_arg(self.fps)},"
+                 + fit_filter(frame.get("fit", "contain"),
+                              self.width, self.height, self.background)),
+                self.font, self.clock_overlay_files(display),
+                self.write_footer(display), self.overlay_scale)
 
-        chain = [f"fps={rate_arg(self.fps)}"]
-        chain.append(fit_filter(source.get("fit", "contain"),
-                                self.width, self.height, self.background))
-        chain += overlays
-        # Last, because drawtext cannot draw on packed uyvy422 -- and the card
-        # will take nothing else.
-        chain.append("format=uyvy422")
+        base = (f"fps={rate_arg(self.fps)},"
+                + fit_filter(source.get("fit", "contain"),
+                             self.width, self.height, self.background))
 
         command = [self.ffmpeg, "-hide_banner", "-loglevel", "error"]
         command += input_args(source, path, self.width, self.height, self.fps)
-        command += [
-            "-an",
-            "-vf", ",".join(chain),
-            "-f", "rawvideo", "-pix_fmt", "uyvy422", "pipe:1",
-        ]
+        command += ["-an"]
+        if graph:
+            command += ["-filter_complex", graph, "-map", "[out]"]
+        else:
+            # Nothing to draw: no second layer, no blur, no compositing. The
+            # conversion still goes last, because the card takes nothing else.
+            command += ["-vf", base + ",format=uyvy422"]
+        command += ["-f", "rawvideo", "-pix_fmt", "uyvy422", "pipe:1"]
 
         # Worth a line each: when the screen is wrong, the two questions are
         # always "what did it think it was showing" and "did any frame reach
@@ -914,17 +978,25 @@ class Playout:
             self.write_atomic(file, line)
 
         self.check_overlays()
-        chain = [fit_filter("cover", self.width, self.height, self.background)]
-        chain += overlay_filters(display, self.width, self.height, self.font,
-                                 self.clock_files[:len(clock_lines(
-                                     self.now_in(display.get("timezone")),
-                                     display.get("clock") or "time_date"))],
-                                 self.write_footer(display), self.overlay_scale)
+        base = fit_filter("cover", self.width, self.height, self.background)
+        files = self.clock_files[:len(clock_lines(
+            self.now_in(display.get("timezone")),
+            display.get("clock") or "time_date"))]
+        graph = overlay_graph(display, self.width, self.height, self.fps, base,
+                              self.font, files, self.write_footer(display),
+                              self.overlay_scale)
         command = [
             self.ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
             "-f", "lavfi", "-i", f"testsrc2=size={self.width}x{self.height}",
-            "-vf", ",".join(chain), "-frames:v", "1", path,
         ]
+        if graph:
+            # rgb24 rather than the card's uyvy422, so the PNG is a picture
+            # rather than something only a DeckLink can read.
+            command += ["-filter_complex", graph.replace(",format=uyvy422[out]", "[out]"),
+                        "-map", "[out]"]
+        else:
+            command += ["-vf", base]
+        command += ["-frames:v", "1", path]
         self.debug("preview: " + " ".join(command))
         result = subprocess.run(command)
         if result.returncode != 0:
