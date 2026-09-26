@@ -164,7 +164,10 @@ and the TV would re-sync — a black flash between every photo. Instead:
   rereads it every frame, which also puts the clock in the app's timezone
   rather than whatever the Mac is set to. The overlays are drawn before the
   conversion to `uyvy422`, because `drawtext` cannot draw on a packed format
-  and the card will take nothing else.
+  and the card will take nothing else. The sizes, corners and colours come
+  from `player.css` -- white with a drop shadow and no box behind it, because
+  a dark rectangle turns a clock into a subtitle and the two screens are meant
+  to look like one system.
 - Assets are cached on disk, so a server outage keeps the last schedule
   playing instead of going black.
 - **The card is always released on the way out.** An ffmpeg left holding the

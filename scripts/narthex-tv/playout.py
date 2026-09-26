@@ -122,9 +122,17 @@ def fit_filter(fit, width, height, background="black"):
     return f"{geometry},setsar=1"
 
 
-# Where a corner overlay sits, as a fraction of the shorter edge. Televisions
-# overscan, and a clock hard against the edge is the first thing to be eaten.
-OVERLAY_MARGIN = 0.035
+# The browser player's own chrome, in the units its stylesheet uses, so the two
+# screens look like one system rather than two. See player.css: the clock is
+# 3.4vh over 1.9vh at 3vw from the side, 3vh from the top or 6vh from the
+# bottom, white with a soft drop shadow and NO box behind it.
+CLOCK_TIME_VH = 0.034
+CLOCK_DATE_VH = 0.019
+FOOTER_VH = 0.023
+LINE_HEIGHT = 1.35
+MARGIN_X_VW = 0.03
+MARGIN_TOP_VH = 0.03
+MARGIN_BOTTOM_VH = 0.06
 
 FONT_CANDIDATES = (
     "/System/Library/Fonts/Helvetica.ttc",
@@ -225,38 +233,57 @@ def overlay_filters(display, width, height, font, clock_files=(), footer_file=No
         return []
 
     filters = []
-    margin = max(8, round(min(width, height) * OVERLAY_MARGIN))
     fontfile = drawtext_escape(font)
-    sizes = [max(12, round(height / 22)), max(10, round(height / 34))]
+    side = max(8, round(width * MARGIN_X_VW))
+    sizes = [max(12, round(height * CLOCK_TIME_VH)),
+             max(10, round(height * CLOCK_DATE_VH))]
+    # The two lines are faded differently in the browser; the date sits back.
+    alphas = ["0.92", "0.78"]
 
     if clock_files:
         corner = (display or {}).get("clockPosition") or "bottom-right"
-        gap = round(sizes[0] * 0.3)
-        block = sum(sizes[:len(clock_files)]) + gap * (len(clock_files) - 1)
-        x = f"w-tw-{margin}" if corner.endswith("right") else str(margin)
-        y = margin if corner.startswith("top") else height - margin - block
+        lines = list(zip(clock_files, sizes, alphas))
+        # Laid out from the block's own height, because the stylesheet pins
+        # the block's bottom edge, not its first line.
+        block = sum(round(size * LINE_HEIGHT) for _, size, _ in lines)
+        # A right-hand corner right-aligns for free: every line's right edge
+        # lands on the same x, which is what the browser does too.
+        x = f"w-tw-{side}" if corner.endswith("right") else str(side)
+        y = (round(height * MARGIN_TOP_VH) if corner.startswith("top")
+             else height - round(height * MARGIN_BOTTOM_VH) - block)
 
-        for path, size in zip(clock_files, sizes):
-            filters.append(_drawtext(fontfile, path, size, x, str(y)))
-            y += size + gap
+        for path, size, alpha in lines:
+            filters.append(_drawtext(fontfile, path, size, x, str(y), alpha))
+            y += round(size * LINE_HEIGHT)
 
     if footer_file:
-        filters.append(_drawtext(fontfile, footer_file,
-                                 max(10, round(height / 30)),
-                                 "(w-tw)/2", f"h-th-{margin}"))
+        footer_size = max(10, round(height * FOOTER_VH))
+        filters.append(_drawtext(
+            fontfile, footer_file, footer_size, "(w-tw)/2",
+            str(height - round(height * MARGIN_TOP_VH) - round(footer_size * LINE_HEIGHT))))
 
     return filters
 
 
-def _drawtext(fontfile, textfile, size, x, y):
-    # reload=1 rereads the file every frame, which is what lets the clock tick
-    # inside a single long-running decode. expansion=none because these files
-    # hold text somebody typed, or a time, and %{...} in either is just
-    # characters.
+def _drawtext(fontfile, textfile, size, x, y, alpha="0.92"):
+    """
+    One line, styled the way the browser player styles its chrome.
+
+    No box. A dark rectangle behind the time turns it into a subtitle, which is
+    not what this is -- it is a clock in the corner of a picture. The browser
+    keeps it legible with a blurred drop shadow instead; drawtext cannot blur,
+    so this is an offset shadow, which does the same job of holding the white
+    away from whatever is behind it.
+
+    reload=1 rereads the file every frame, which is what lets the clock tick
+    inside a single long-running decode. expansion=none because these files
+    hold text somebody typed, or a time, and %{...} in either is just
+    characters.
+    """
     return (f"drawtext=fontfile={fontfile}"
             f":textfile={drawtext_escape(textfile)}:reload=1:expansion=none"
-            f":fontsize={size}:fontcolor=white"
-            f":box=1:boxcolor=black@0.45:boxborderw={max(4, round(size / 4))}"
+            f":fontsize={size}:fontcolor=white@{alpha}"
+            f":shadowcolor=black@0.65:shadowx=0:shadowy={max(1, round(size / 18))}"
             f":x={x}:y={y}")
 
 

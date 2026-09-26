@@ -114,8 +114,8 @@ class PureHelpers(unittest.TestCase):
             {"clockPosition": "top-left"}, 1920, 1080, "/f/S.ttf",
             ["/c/0.txt", "/c/1.txt"], "/c/footer.txt")
         self.assertEqual(len(filters), 3)
-        self.assertTrue(filters[0].endswith(":x=38:y=38"),
-                        "top-left clock sits one margin in from both edges")
+        # 3vw in, 3vh down, matching player.css at 1920x1080.
+        self.assertTrue(filters[0].endswith(":x=58:y=32"), filters[0])
         # Every drawn string comes from a file, reread each frame so the clock
         # can tick inside one long decode.
         for f in filters:
@@ -123,11 +123,29 @@ class PureHelpers(unittest.TestCase):
             self.assertIn("expansion=none", f)
             self.assertIn("textfile=", f)
 
+    def test_the_clock_is_not_drawn_as_a_caption(self):
+        # A dark rectangle behind the time turns a clock into a subtitle. The
+        # browser player uses a drop shadow and no box, and the two screens are
+        # meant to look like one system.
+        filters = playout.overlay_filters(
+            {"clockPosition": "bottom-right"}, 1920, 1080, "/f/S.ttf",
+            ["/c/0.txt", "/c/1.txt"], "/c/footer.txt")
+        for f in filters:
+            self.assertNotIn("box=1", f)
+            self.assertNotIn("boxcolor", f)
+            self.assertIn("shadowcolor", f)
+        # And sized as the stylesheet sizes them: 3.4vh over 1.9vh, with the
+        # date set back to .78 opacity.
+        self.assertIn(":fontsize=37:", filters[0])
+        self.assertIn("white@0.92", filters[0])
+        self.assertIn(":fontsize=21:", filters[1])
+        self.assertIn("white@0.78", filters[1])
+
     def test_overlay_filters_respect_the_corner(self):
-        for corner, expected in (("top-left", "x=38"),
-                                 ("top-right", "x=w-tw-38"),
-                                 ("bottom-left", "x=38"),
-                                 ("bottom-right", "x=w-tw-38")):
+        for corner, expected in (("top-left", "x=58"),
+                                 ("top-right", "x=w-tw-58"),
+                                 ("bottom-left", "x=58"),
+                                 ("bottom-right", "x=w-tw-58")):
             filters = playout.overlay_filters(
                 {"clockPosition": corner}, 1920, 1080, "/f/S.ttf", ["/c/0.txt"])
             self.assertIn(":" + expected + ":", filters[0], corner)
@@ -135,6 +153,21 @@ class PureHelpers(unittest.TestCase):
         low = playout.overlay_filters({"clockPosition": "bottom-left"},
                                       1920, 1080, "/f/S.ttf", ["/c/0.txt"])[0]
         self.assertGreater(int(low.rsplit("y=", 1)[1]), 540)
+        high = playout.overlay_filters({"clockPosition": "top-left"},
+                                       1920, 1080, "/f/S.ttf", ["/c/0.txt"])[0]
+        self.assertLess(int(high.rsplit("y=", 1)[1]), 540)
+
+    def test_a_two_line_clock_sits_above_the_bottom_margin(self):
+        # The stylesheet pins the block's bottom edge, so a date line has to
+        # push the time UP rather than hang off the bottom of the screen.
+        one = playout.overlay_filters({"clockPosition": "bottom-right"},
+                                      1920, 1080, "/f/S.ttf", ["/c/0.txt"])
+        two = playout.overlay_filters({"clockPosition": "bottom-right"},
+                                      1920, 1080, "/f/S.ttf", ["/c/0.txt", "/c/1.txt"])
+        self.assertLess(int(two[0].rsplit("y=", 1)[1]),
+                        int(one[0].rsplit("y=", 1)[1]))
+        # and the last line still clears the bottom of the frame
+        self.assertLess(int(two[1].rsplit("y=", 1)[1]) + 21, 1080)
 
     def test_nothing_is_drawn_when_it_is_switched_off(self):
         # No clock files and no footer: the mode is off, so there is nothing
