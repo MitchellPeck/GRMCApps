@@ -114,7 +114,7 @@ class PureHelpers(unittest.TestCase):
             {"clockPosition": "top-left"}, 1920, 1080, "/f/S.ttf",
             ["/c/0.txt", "/c/1.txt"], "/c/footer.txt")
         self.assertEqual(len(filters), 3)
-        # 3vw in, 3vh down, matching player.css at 1920x1080.
+        # 3vw in, 3vh down, the insets player.css uses at 1920x1080.
         self.assertTrue(filters[0].endswith(":x=58:y=32"), filters[0])
         # Every drawn string comes from a file, reread each frame so the clock
         # can tick inside one long decode.
@@ -133,13 +133,36 @@ class PureHelpers(unittest.TestCase):
         for f in filters:
             self.assertNotIn("box=1", f)
             self.assertNotIn("boxcolor", f)
+            # Both, not either: drawtext cannot blur, so a lone offset shadow
+            # vanishes against a bright frame and the outline is what actually
+            # keeps white readable.
             self.assertIn("shadowcolor", f)
-        # And sized as the stylesheet sizes them: 3.4vh over 1.9vh, with the
-        # date set back to .78 opacity.
-        self.assertIn(":fontsize=37:", filters[0])
+            self.assertIn("bordercolor", f)
+        # The date is set back from the time, as in the stylesheet.
         self.assertIn("white@0.92", filters[0])
-        self.assertIn(":fontsize=21:", filters[1])
         self.assertIn("white@0.78", filters[1])
+        self.assertGreater(int(filters[0].split(":fontsize=")[1].split(":")[0]),
+                           int(filters[1].split(":fontsize=")[1].split(":")[0]))
+
+    def test_overlay_scale_moves_everything_together(self):
+        # How big is big enough can only be judged from across the narthex, so
+        # it is a knob rather than a number somebody has to edit and rebuild.
+        def size_of(f):
+            return int(f.split(":fontsize=")[1].split(":")[0])
+        plain = playout.overlay_filters({}, 1920, 1080, "/f/S.ttf",
+                                        ["/c/0.txt", "/c/1.txt"], "/c/f.txt")
+        big = playout.overlay_filters({}, 1920, 1080, "/f/S.ttf",
+                                      ["/c/0.txt", "/c/1.txt"], "/c/f.txt", scale=1.5)
+        for a, b in zip(plain, big):
+            self.assertGreater(size_of(b), size_of(a))
+
+    def test_the_command_line_offers_the_scale(self):
+        args = playout.build_parser().parse_args(
+            ["--url", "http://x/player?t=1", "--overlay-scale", "1.3"])
+        self.assertAlmostEqual(args.overlay_scale, 1.3)
+        self.assertAlmostEqual(
+            playout.build_parser().parse_args(["--url", "http://x/player?t=1"]).overlay_scale,
+            1.0)
 
     def test_overlay_filters_respect_the_corner(self):
         for corner, expected in (("top-left", "x=58"),

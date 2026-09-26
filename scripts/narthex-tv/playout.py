@@ -122,13 +122,14 @@ def fit_filter(fit, width, height, background="black"):
     return f"{geometry},setsar=1"
 
 
-# The browser player's own chrome, in the units its stylesheet uses, so the two
-# screens look like one system rather than two. See player.css: the clock is
-# 3.4vh over 1.9vh at 3vw from the side, 3vh from the top or 6vh from the
-# bottom, white with a soft drop shadow and NO box behind it.
-CLOCK_TIME_VH = 0.034
-CLOCK_DATE_VH = 0.019
-FOOTER_VH = 0.023
+# Sized in the units player.css uses, so the two screens stay recognisably the
+# same design -- but larger than the browser's, because a browser is read from
+# a desk and this is read from across a narthex. --overlay-scale moves all of
+# them together without a code change, which is the only honest way to settle
+# a question that can only be answered in the room.
+CLOCK_TIME_VH = 0.042
+CLOCK_DATE_VH = 0.024
+FOOTER_VH = 0.027
 LINE_HEIGHT = 1.35
 MARGIN_X_VW = 0.03
 MARGIN_TOP_VH = 0.03
@@ -209,7 +210,8 @@ def clock_lines(now, mode):
     return lines
 
 
-def overlay_filters(display, width, height, font, clock_files=(), footer_file=None):
+def overlay_filters(display, width, height, font, clock_files=(), footer_file=None,
+                    scale=1.0):
     """
     The clock and footer, as ffmpeg filters.
 
@@ -235,8 +237,8 @@ def overlay_filters(display, width, height, font, clock_files=(), footer_file=No
     filters = []
     fontfile = drawtext_escape(font)
     side = max(8, round(width * MARGIN_X_VW))
-    sizes = [max(12, round(height * CLOCK_TIME_VH)),
-             max(10, round(height * CLOCK_DATE_VH))]
+    sizes = [max(12, round(height * CLOCK_TIME_VH * scale)),
+             max(10, round(height * CLOCK_DATE_VH * scale))]
     # The two lines are faded differently in the browser; the date sits back.
     alphas = ["0.92", "0.78"]
 
@@ -257,7 +259,7 @@ def overlay_filters(display, width, height, font, clock_files=(), footer_file=No
             y += round(size * LINE_HEIGHT)
 
     if footer_file:
-        footer_size = max(10, round(height * FOOTER_VH))
+        footer_size = max(10, round(height * FOOTER_VH * scale))
         filters.append(_drawtext(
             fontfile, footer_file, footer_size, "(w-tw)/2",
             str(height - round(height * MARGIN_TOP_VH) - round(footer_size * LINE_HEIGHT))))
@@ -270,20 +272,25 @@ def _drawtext(fontfile, textfile, size, x, y, alpha="0.92"):
     One line, styled the way the browser player styles its chrome.
 
     No box. A dark rectangle behind the time turns it into a subtitle, which is
-    not what this is -- it is a clock in the corner of a picture. The browser
-    keeps it legible with a blurred drop shadow instead; drawtext cannot blur,
-    so this is an offset shadow, which does the same job of holding the white
-    away from whatever is behind it.
+    not what this is -- it is a clock in the corner of a picture.
 
-    reload=1 rereads the file every frame, which is what lets the clock tick
-    inside a single long-running decode. expansion=none because these files
-    hold text somebody typed, or a time, and %{...} in either is just
-    characters.
+    Legibility instead comes from two things together, because neither is
+    enough on its own. The browser blurs a drop shadow; drawtext cannot blur,
+    and a lone hard-offset shadow all but disappears against a bright frame.
+    So there is also a thin dark outline hugging the glyphs, which is what
+    every broadcast lower-third does and what keeps white readable over
+    anything. The shadow then reads as depth rather than doing all the work.
     """
+    # reload=1 rereads the file every frame, which is what lets the clock tick
+    # inside a single long-running decode. expansion=none because these files
+    # hold text somebody typed, or a time, and %{...} in either is just
+    # characters.
     return (f"drawtext=fontfile={fontfile}"
             f":textfile={drawtext_escape(textfile)}:reload=1:expansion=none"
             f":fontsize={size}:fontcolor=white@{alpha}"
-            f":shadowcolor=black@0.65:shadowx=0:shadowy={max(1, round(size / 18))}"
+            f":borderw={max(1, round(size / 20))}:bordercolor=black@0.7"
+            f":shadowcolor=black@0.85"
+            f":shadowx={max(1, round(size / 20))}:shadowy={max(2, round(size / 14))}"
             f":x={x}:y={y}")
 
 
@@ -473,6 +480,7 @@ class Playout:
         self.opened_at = 0.0
         self.codec = args.codec
         self.font = find_font()
+        self.overlay_scale = args.overlay_scale
         # Answered in run(), not here: asking means running ffmpeg, and a
         # constructor that shells out cannot be built in a test without one.
         self.can_draw = False
@@ -677,7 +685,8 @@ class Playout:
         # Black is black: no clock on a screen that is deliberately dark.
         overlays = [] if (frame is None or not self.can_draw) else overlay_filters(
             display, self.width, self.height, self.font,
-            self.clock_overlay_files(display), self.write_footer(display))
+            self.clock_overlay_files(display), self.write_footer(display),
+            self.overlay_scale)
 
         chain = [f"fps={rate_arg(self.fps)}"]
         chain.append(fit_filter(source.get("fit", "contain"),
@@ -981,6 +990,10 @@ def build_parser():
                         help="must be a mode the device supports. 1080p59.94 is "
                              "the one every television accepts; 1080p30 is a "
                              "legal mode that many sets handle badly.")
+    parser.add_argument("--overlay-scale", type=float, default=1.0,
+                        help="how large the clock and footer are, 1.0 being the "
+                             "default. Try 1.3 if the narthex is wide. Only "
+                             "judgeable in the room, hence a knob.")
     parser.add_argument("--codec", default="v210", choices=CODECS,
                         help="how frames are handed to the card. v210 is the one "
                              "that works; wrapped_avframe is accepted by the "

@@ -40,6 +40,10 @@
     <string>UltraStudio Express Monitor 3G</string>
     <string>--mode</string>
     <string>1920x1080@59.94</string>
+    <!-- How large the clock and footer are. Only judgeable from across the
+         narthex, so expect to change this once and then leave it. -->
+    <string>--overlay-scale</string>
+    <string>1.0</string>
     <string>--ffmpeg</string>
     <string>/Users/CHANGEME/.local/bin/ffmpeg-decklink</string>
   </array>
