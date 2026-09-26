@@ -169,9 +169,25 @@ and the TV would re-sync — a black flash between every photo. Instead:
   turns a clock into a subtitle. The type is larger than the browser's, since
   a browser is read from a desk and this from across a narthex, and
   `--overlay-scale` moves it all together (try `1.3` in a wide room). Two
-  things keep it legible: a thin dark outline hugging the glyphs, plus an
-  offset shadow -- both, because `drawtext` cannot blur and a lone hard shadow
-  disappears against a bright frame.
+  things keep it legible: a hairline dark outline hugging the glyphs, plus a
+  soft shadow straight down -- both, because `drawtext` cannot blur, a lone
+  shadow washes out over a bright frame and a heavier outline goes crunchy.
+
+**Judge it with `--preview`, not by reading the filter.** How this looks cannot
+be settled from a command line, and restarting the playout to see it costs a
+dark narthex and one look per attempt:
+
+```sh
+./playout.py --url '<player link>' --ffmpeg ~/.local/bin/ffmpeg-decklink \
+             --preview /tmp/look.png
+open /tmp/look.png
+```
+
+It draws the clock and footer over a bright, busy test pattern -- white text
+survives a dark photograph easily, and the corner of a bright one is where it
+fails -- then exits without touching the card, so it is safe to run while the
+screen is playing. The log line names the font it used, which is the first
+thing to check when the text looks wrong rather than merely misjudged.
 - Assets are cached on disk, so a server outage keeps the last schedule
   playing instead of going black.
 - **The card is always released on the way out.** An ffmpeg left holding the
