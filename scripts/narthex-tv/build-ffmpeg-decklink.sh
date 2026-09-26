@@ -305,11 +305,29 @@ fi
 
 cd "$WORK"
 
+# Reuse a checkout only when it is the version asked for. Keeping whatever was
+# cloned first made FFMPEG_TAG silently do nothing: a rebuild "at master"
+# produced 7.1 again, reported 7.1 in its own output, and was read as evidence
+# that a newer FFmpeg behaved no differently.
+HAVE_TAG=""
+if [[ -d FFmpeg ]]; then
+  HAVE_TAG="$(cat FFmpeg/.narthex-tag 2>/dev/null || echo unknown)"
+  if [[ "$HAVE_TAG" != "$FFMPEG_TAG" ]]; then
+    echo "Have FFmpeg ${HAVE_TAG}, want ${FFMPEG_TAG} -- refetching."
+    rm -rf FFmpeg
+  fi
+fi
+
 if [[ ! -d FFmpeg ]]; then
   echo "Fetching FFmpeg ${FFMPEG_TAG}..."
   git clone --depth 1 --branch "$FFMPEG_TAG" https://github.com/FFmpeg/FFmpeg.git
+  echo "$FFMPEG_TAG" > FFmpeg/.narthex-tag
 fi
 cd FFmpeg
+
+# Say which version is being built, so the binary's own Lavf/Lavc numbers can
+# be checked against what was asked for.
+echo "Building FFmpeg ${FFMPEG_TAG} ($(git rev-parse --short HEAD 2>/dev/null || echo '?'))"
 
 # Stock FFmpeg with no external libraries is everything this needs: it DECODES
 # H.264, MJPEG and PNG natively, scales and pads natively, and writes rawvideo.
