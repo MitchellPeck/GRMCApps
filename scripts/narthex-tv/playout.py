@@ -861,14 +861,21 @@ class Playout:
                     if self.outer is not None:
                         self.log("the device closed; reopening in 5s")
                         if time.time() - self.opened_at < 5:
-                            # It never really opened. By far the commonest
-                            # cause is a leftover ffmpeg from an earlier run
-                            # still holding the card, and the driver's own
-                            # message for that ("Could not enable video
-                            # output!") says nothing about it.
-                            self.log("it closed immediately. Check for a "
-                                     "leftover process holding the card: "
-                                     "pgrep -fl ffmpeg-decklink")
+                            # It never really opened. The card takes one owner
+                            # at a time and the driver's message for that
+                            # ("Could not enable video output!") names neither
+                            # the card nor the owner, so say where to look.
+                            # Media Express and Desktop Video Setup both hold
+                            # it just by being open, and an ffmpeg from an
+                            # earlier run outlives the run that started it.
+                            self.log("it closed immediately -- something else "
+                                     "is holding the card. Look for it with: "
+                                     "pgrep -fl -i 'blackmagic|media express|"
+                                     "davinci|resolve|obs|ffmpeg'  "
+                                     "(quit Media Express and Desktop Video "
+                                     "Setup fully, not just their windows). "
+                                     "If nothing turns up, unplug the "
+                                     "Thunderbolt cable for ten seconds.")
                         self.stopping.wait(5)
                         if self.stopping.is_set():
                             break
