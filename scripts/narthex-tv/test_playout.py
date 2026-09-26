@@ -72,6 +72,32 @@ class PureHelpers(unittest.TestCase):
             self.assertNotIn("format=uyvy422", chain)
             self.assertIn("setsar=1", chain)
 
+    def test_has_filter_reads_the_filter_listing(self):
+        # The whole point: an ffmpeg with no libfreetype has no drawtext, and a
+        # graph naming it fails the decode outright -- so a build without it
+        # would play nothing at all rather than just skip the clock.
+        listing = (
+            "Filters:\n"
+            "  T.. crop              V->V       Crop the input video.\n"
+            "  TS. drawtext          V->V       Draw text on top of video.\n"
+            "  ... scale             V->V       Scale the input video size.\n"
+        )
+        self.assertTrue(playout.has_filter("ffmpeg", "drawtext",
+                                           run=lambda cmd: listing))
+        self.assertFalse(playout.has_filter("ffmpeg", "drawtext",
+                                            run=lambda cmd: "Filters:\n  T.. crop V->V x\n"))
+        # A name that only appears inside a description is not the filter.
+        self.assertFalse(playout.has_filter(
+            "ffmpeg", "drawtext",
+            run=lambda cmd: "  T.. subtitles V->V  Like drawtext but for subs.\n"))
+
+    def test_has_filter_says_no_rather_than_raising(self):
+        # An ffmpeg that cannot even be run must not take the screen down; the
+        # caller treats False as "draw nothing" and carries on.
+        def explode(command):
+            raise OSError("no such file")
+        self.assertFalse(playout.has_filter("/nope/ffmpeg", "drawtext", run=explode))
+
     def test_clock_lines_match_the_browser_player(self):
         when = datetime.datetime(2026, 9, 26, 15, 7)
         self.assertEqual(playout.clock_lines(when, "off"), [])

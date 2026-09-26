@@ -136,6 +136,32 @@ FONT_CANDIDATES = (
 )
 
 
+def has_filter(ffmpeg, name, run=None):
+    """
+    Whether this ffmpeg was built with a given filter.
+
+    Worth asking, because the answer decides between a clock and a blank
+    screen. drawtext needs libfreetype, a stock build has no external
+    libraries at all, and a filter graph naming a filter that is not there
+    fails the whole decode -- so without this check an ffmpeg built the
+    ordinary way plays nothing whatsoever.
+    """
+    if run is None:
+        def run(command):
+            return subprocess.run(command, capture_output=True, text=True,
+                                  timeout=20).stdout
+    try:
+        listing = run([ffmpeg, "-hide_banner", "-filters"])
+    except (OSError, subprocess.SubprocessError):
+        return False
+    for line in listing.splitlines():
+        # " T.. drawtext         V->V       Draw text on top of video."
+        parts = line.split()
+        if len(parts) >= 2 and parts[1] == name:
+            return True
+    return False
+
+
 def find_font(candidates=FONT_CANDIDATES):
     """The first font that is actually present, or None."""
     for path in candidates:
@@ -420,6 +446,9 @@ class Playout:
         self.opened_at = 0.0
         self.codec = args.codec
         self.font = find_font()
+        # Answered in run(), not here: asking means running ffmpeg, and a
+        # constructor that shells out cannot be built in a test without one.
+        self.can_draw = False
         self.footer_file = os.path.join(self.cache_dir, "footer.txt")
         self.clock_files = [os.path.join(self.cache_dir, "clock-0.txt"),
                             os.path.join(self.cache_dir, "clock-1.txt")]
@@ -619,7 +648,7 @@ class Playout:
             display = (self.plan or {}).get("display") or {}
 
         # Black is black: no clock on a screen that is deliberately dark.
-        overlays = [] if frame is None else overlay_filters(
+        overlays = [] if (frame is None or not self.can_draw) else overlay_filters(
             display, self.width, self.height, self.font,
             self.clock_overlay_files(display), self.write_footer(display))
 
@@ -686,9 +715,15 @@ class Playout:
             rate = written / elapsed if elapsed > 0 else 0
             # The rate is only meaningful against the mode's own, and only the
             # reason says whether a low one is starvation or just a short clip.
+            code = inner.poll()
+            if written == 0 and code not in (None, 0):
+                # "source ended" is what an empty read looks like, but a
+                # decoder that exited non-zero did not reach the end of
+                # anything -- it failed, and saying otherwise sends whoever
+                # reads this log after the media instead of the command.
+                ended = f"the decoder failed (exit {code})"
             self.debug(f"item done after {written} frames in {elapsed:.1f}s "
-                       f"({rate:.1f} fps): {ended}; "
-                       f"decoder exit {inner.poll()}")
+                       f"({rate:.1f} fps): {ended}; decoder exit {code}")
             inner.kill()
             try:
                 inner.stdout.close()
@@ -779,7 +814,31 @@ class Playout:
         frames = plan.get("frames") or []
         return frames or [None]
 
+    def check_overlays(self):
+        """
+        Can this build draw the clock at all?
+
+        Asked once at startup rather than per item, and the answer decides
+        between a clock and a blank screen: drawtext needs libfreetype, a
+        stock ffmpeg has no external libraries, and a filter graph naming a
+        filter that is not there fails the whole decode. Without this an
+        ffmpeg built the ordinary way plays nothing whatsoever -- which is a
+        cosmetic feature taking the screen down, the worst trade there is.
+        """
+        self.can_draw = bool(self.font) and has_filter(self.ffmpeg, "drawtext")
+        if self.can_draw:
+            return
+        if not has_filter(self.ffmpeg, "drawtext"):
+            self.log("this ffmpeg has no drawtext filter, so the clock and "
+                     "footer will not be drawn. Everything else plays as "
+                     "normal. Rebuild with build-ffmpeg-decklink.sh to add "
+                     "them.")
+        else:
+            self.log("no usable font found, so the clock and footer will not "
+                     "be drawn. Everything else plays as normal.")
+
     def run(self):
+        self.check_overlays()
         threading.Thread(target=self.poll_forever, daemon=True).start()
         # Before anything decodes: drawtext fails outright on a textfile that
         # is not there, which would take the picture down rather than the

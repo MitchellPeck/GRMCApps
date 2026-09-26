@@ -374,9 +374,36 @@ open(path, "w").write(source.replace(anchor, shim, 1))
 PATCH
 fi
 
-# Stock FFmpeg with no external libraries is everything this needs: it DECODES
-# H.264, MJPEG and PNG natively, scales and pads natively, and writes rawvideo.
-# Nothing is encoded to a compressed format at playout, so no x264, no GPL.
+# Stock FFmpeg with no external libraries does nearly everything this needs: it
+# DECODES H.264, MJPEG and PNG natively, scales and pads natively, and writes
+# rawvideo. Nothing is encoded to a compressed format at playout, so no x264
+# and no GPL.
+#
+# The one exception is drawtext, which puts the clock and footer on the screen.
+# It needs libfreetype, and a stock build has no external libraries at all --
+# so without this the filter simply does not exist, and a graph naming it fails
+# the whole decode. playout.py checks and leaves the overlays off rather than
+# play nothing, but then there is no clock.
+TEXT_FLAGS=()
+if pkg-config --exists freetype2 2>/dev/null; then
+  TEXT_FLAGS+=(--enable-libfreetype)
+  # Optional, and only improves the shaping of the text that freetype draws.
+  pkg-config --exists harfbuzz 2>/dev/null && TEXT_FLAGS+=(--enable-libharfbuzz)
+  echo "freetype found: the clock and footer overlays will be available."
+else
+  cat >&2 <<'MSG'
+
+note: freetype was not found, so this build will have no drawtext filter and
+      the clock and footer will not appear on the screen. Everything else
+      works. To add them:
+
+          brew install freetype pkg-config
+
+      then run this script again.
+
+MSG
+fi
+
 echo "Configuring..."
 if ! ./configure \
   --prefix="$PREFIX" \
@@ -390,6 +417,9 @@ if ! ./configure \
   `# ffmpeg buffered and then stops forever, because the frame-completion` \
   `# callback never fires and ffmpeg's free-slot count never recovers.` \
   --disable-indev=decklink \
+  `# The guarded form: under set -u, bash 3.2 -- which is what macOS ships --` \
+  `# treats "${arr[@]}" on an EMPTY array as an unbound variable and aborts.` \
+  ${TEXT_FLAGS[@]+"${TEXT_FLAGS[@]}"} \
   --extra-cflags="-I$INCLUDE ${SYSROOT_FLAGS}" \
   --extra-cxxflags="-I$INCLUDE ${SYSROOT_FLAGS}" \
   --extra-ldflags="${SYSROOT_FLAGS}" \

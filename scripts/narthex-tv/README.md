@@ -146,6 +146,14 @@ and the TV would re-sync — a black flash between every photo. Instead:
   framing, so a cut landing mid-frame would shift every frame after it and tear
   the picture until somebody restarted it. `test_playout.py` checks that
   invariant.
+- **The clock and footer need `drawtext`, which needs freetype.** A stock
+  FFmpeg has no external libraries at all, so the filter does not exist -- and
+  a filter graph naming a filter that is not there fails the whole decode, so
+  an ffmpeg built without it plays *nothing*. `build-ffmpeg-decklink.sh` adds
+  `--enable-libfreetype` when `pkg-config` finds freetype (`brew install
+  freetype pkg-config`), and says so when it does not. playout.py checks at
+  startup and leaves the overlays off rather than take the screen down, so the
+  worst case is a screen with no clock.
 - **The clock and footer are burnt into the frames.** The browser player draws
   them as page elements; this program decodes pictures and video and draws
   nothing, so on this path they have to go through the filter chain or the
