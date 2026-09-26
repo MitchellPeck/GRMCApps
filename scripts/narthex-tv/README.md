@@ -168,10 +168,19 @@ and the TV would re-sync — a black flash between every photo. Instead:
   from `player.css` -- white with no box behind it, because a dark rectangle
   turns a clock into a subtitle. The type is larger than the browser's, since
   a browser is read from a desk and this from across a narthex, and
-  `--overlay-scale` moves it all together (try `1.3` in a wide room). Two
-  things keep it legible: a hairline dark outline hugging the glyphs, plus a
-  soft shadow straight down -- both, because `drawtext` cannot blur, a lone
-  shadow washes out over a bright frame and a heavier outline goes crunchy.
+  `--overlay-scale` moves it all together (try `1.3` in a wide room). The text
+  is **composited, not drawn into the picture**, because `drawtext` cannot
+  blur: everything it offers for legibility is hard-edged -- `borderw` traces
+  a solid outline round the glyphs and `shadowx/shadowy` stamps the same text
+  again a few pixels over. Neither is a drop shadow and both look like it.
+  Instead the text goes onto a transparent layer, a copy is flattened to
+  black, blurred and boosted back to opacity, and the sharp copy is laid over
+  it. The blur runs at quarter resolution, which costs about a sixteenth of
+  blurring the full frame and, if anything, looks smoother; the boost is what
+  makes it dense enough to hold white over a bright frame, since blurring
+  spreads the alpha thin. The clock also stacks above the footer rather than
+  sitting a fixed distance off the bottom, so scaling up never drives one
+  through the other.
 
 **Judge it with `--preview`, not by reading the filter.** How this looks cannot
 be settled from a command line, and restarting the playout to see it costs a
