@@ -301,14 +301,33 @@ def overlay_filters(display, width, height, font, clock_files=(), footer_file=No
 # back up -- which costs about a sixteenth of blurring the full frame and, if
 # anything, looks smoother for it. Note the sigma is in QUARTER-scale pixels:
 # the upscale multiplies the radius by four.
-SHADOW_SIGMA = 2.0
-# Blurring spreads the alpha thin, so the shadow is dense enough to hold white
-# over a bright frame only once it is boosted back up. Clipping at the top is
-# the point: it thickens the core while leaving the outer edge soft, which is
-# what a drop shadow looks like and what an outline never will.
-# colorchannelmixer caps aa at 2, so the boost is chained.
-SHADOW_BOOST = 3
+SHADOW_SIGMA = 1.3
+# Blurring spreads the alpha thin, so a little of it is put back. A LITTLE:
+# the browser player asks CSS for `0 1px 6px rgba(0,0,0,.65)`, and anything
+# much heavier stops reading as a shadow and starts reading as a dark smudge
+# round the letters -- which is what a gain of eight looked like on the wall,
+# even though it held up fine on a 1:1 crop of a neon test pattern. Judge this
+# at viewing size, not zoomed in.
+SHADOW_GAIN = 2.0
 SHADOW_DROP = 18
+
+
+def alpha_chain(gain):
+    """
+    A multiplier on the alpha channel, as filters.
+
+    colorchannelmixer caps aa at 2, so anything larger has to be chained --
+    which also means the gain cannot be read off a single number in the graph,
+    hence this rather than writing it out by hand.
+    """
+    parts = []
+    remaining = float(gain)
+    while remaining > 2:
+        parts.append("colorchannelmixer=aa=2")
+        remaining /= 2
+    if abs(remaining - 1.0) > 0.001:
+        parts.append(f"colorchannelmixer=aa={remaining:g}")
+    return "".join("," + part for part in parts)
 
 
 def overlay_graph(display, width, height, fps, base_chain, font,
@@ -342,8 +361,7 @@ def overlay_graph(display, width, height, fps, base_chain, font,
         # what gets blurred is the SHAPE of the letters.
         f"[cshadow]colorchannelmixer=rr=0:gg=0:bb=0,"
         f"scale={width // 4}:{height // 4},gblur=sigma={SHADOW_SIGMA},"
-        f"scale={width}:{height}"
-        + ",colorchannelmixer=aa=2" * SHADOW_BOOST + "[shadow]",
+        f"scale={width}:{height}" + alpha_chain(SHADOW_GAIN) + "[shadow]",
         f"[base][shadow]overlay=0:{drop}[lit]",
         "[lit][ctext]overlay=0:0,format=uyvy422[out]",
     ])

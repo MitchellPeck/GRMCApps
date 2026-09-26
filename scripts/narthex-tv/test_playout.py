@@ -148,13 +148,33 @@ class PureHelpers(unittest.TestCase):
         # Blurred small and scaled back up: a blur is the expensive filter
         # here and a shadow has no detail to lose.
         self.assertIn("scale=480:270,gblur", graph)
-        # Then boosted back to opacity, because blurring spreads the alpha too
-        # thin to hold white over a bright frame. Chained, since aa caps at 2.
-        self.assertEqual(graph.count("colorchannelmixer=aa=2"),
-                         playout.SHADOW_BOOST)
+        # Then given back a little opacity, because blurring spreads the
+        # alpha thin -- but only a little, or it reads as a smudge.
+        self.assertIn("colorchannelmixer=aa=", graph.split("[shadow]")[0])
         # Shadow under, sharp text over.
         self.assertLess(graph.index("[shadow]overlay"), graph.index("[ctext]overlay"))
         self.assertTrue(graph.endswith("format=uyvy422[out]"))
+
+    def test_alpha_chain_builds_a_gain_ffmpeg_will_accept(self):
+        # colorchannelmixer refuses aa above 2, so a larger gain has to be
+        # chained -- and a gain of 1 must add nothing at all rather than a
+        # filter that does nothing.
+        self.assertEqual(playout.alpha_chain(1), "")
+        self.assertEqual(playout.alpha_chain(2), ",colorchannelmixer=aa=2")
+        self.assertEqual(playout.alpha_chain(4),
+                         ",colorchannelmixer=aa=2,colorchannelmixer=aa=2")
+        self.assertEqual(playout.alpha_chain(3),
+                         ",colorchannelmixer=aa=2,colorchannelmixer=aa=1.5")
+        self.assertEqual(playout.alpha_chain(0.65), ",colorchannelmixer=aa=0.65")
+        for gain in (1, 1.4, 2, 3, 4, 8):
+            for part in playout.alpha_chain(gain).split(",")[1:]:
+                self.assertLessEqual(float(part.split("=")[-1]), 2.0)
+
+    def test_the_shadow_is_not_heavy_enough_to_smudge(self):
+        # A gain of eight looked fine on a 1:1 crop and like a dark smear
+        # round the letters on the wall. The browser asks CSS for .65 opacity;
+        # this stays near that rather than drifting back up.
+        self.assertLessEqual(playout.SHADOW_GAIN, 2.5)
 
     def test_no_chrome_means_no_graph_at_all(self):
         # Nothing to draw: no second layer, no blur, no compositing, and the

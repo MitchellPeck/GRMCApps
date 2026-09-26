@@ -176,9 +176,12 @@ and the TV would re-sync — a black flash between every photo. Instead:
   Instead the text goes onto a transparent layer, a copy is flattened to
   black, blurred and boosted back to opacity, and the sharp copy is laid over
   it. The blur runs at quarter resolution, which costs about a sixteenth of
-  blurring the full frame and, if anything, looks smoother; the boost is what
-  makes it dense enough to hold white over a bright frame, since blurring
-  spreads the alpha thin. The clock also stacks above the footer rather than
+  blurring the full frame and, if anything, looks smoother; a little of the alpha
+  is put back afterwards, since blurring spreads it thin. Only a little: the
+  browser asks CSS for `0 1px 6px rgba(0,0,0,.65)`, and much heavier stops
+  reading as a shadow and starts reading as a dark smudge round the letters.
+  `SHADOW_GAIN` and `SHADOW_SIGMA` are the two knobs, and both must be judged
+  from a full frame at viewing size -- a 1:1 crop makes a smudge look fine. The clock also stacks above the footer rather than
   sitting a fixed distance off the bottom, so scaling up never drives one
   through the other.
 
