@@ -135,13 +135,27 @@ MARGIN_X_VW = 0.03
 MARGIN_TOP_VH = 0.03
 MARGIN_BOTTOM_VH = 0.06
 
+# Plain .ttf first, and every .ttc last.
+#
+# A .ttc is a COLLECTION -- several faces in one file. drawtext gives freetype
+# no face index, so it takes face 0 sight unseen, and a collection that does
+# not hand back usable outlines draws every glyph as a filled rectangle. On
+# screen that reads as a solid black bar where the clock should be, and it
+# gets worse the heavier the outline, which makes it look like a styling
+# problem rather than the wrong file.
 FONT_CANDIDATES = (
-    "/System/Library/Fonts/Helvetica.ttc",
-    "/System/Library/Fonts/HelveticaNeue.ttc",
+    # macOS, and all genuinely single-face.
     "/System/Library/Fonts/Supplemental/Arial.ttf",
+    "/System/Library/Fonts/Supplemental/Helvetica.ttf",
+    "/System/Library/Fonts/Supplemental/Verdana.ttf",
+    "/System/Library/Fonts/Supplemental/Tahoma.ttf",
     "/Library/Fonts/Arial.ttf",
+    # Linux, for the tests and anyone running this elsewhere.
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    # Last resorts. Better than no clock, but see above.
+    "/System/Library/Fonts/Helvetica.ttc",
+    "/System/Library/Fonts/HelveticaNeue.ttc",
 )
 
 
@@ -172,7 +186,7 @@ def has_filter(ffmpeg, name, run=None):
 
 
 def find_font(candidates=FONT_CANDIDATES):
-    """The first font that is actually present, or None."""
+    """The first usable font present, preferring anything over a collection."""
     for path in candidates:
         if os.path.exists(path):
             return path
@@ -288,9 +302,12 @@ def _drawtext(fontfile, textfile, size, x, y, alpha="0.92"):
     return (f"drawtext=fontfile={fontfile}"
             f":textfile={drawtext_escape(textfile)}:reload=1:expansion=none"
             f":fontsize={size}:fontcolor=white@{alpha}"
-            f":borderw={max(1, round(size / 20))}:bordercolor=black@0.7"
-            f":shadowcolor=black@0.85"
-            f":shadowx={max(1, round(size / 20))}:shadowy={max(2, round(size / 14))}"
+            # A hairline outline to separate the glyphs from the picture, and
+            # a soft shadow straight down for depth. Chosen by rendering the
+            # alternatives and looking at them: a heavier outline goes crunchy
+            # and a shadow on its own washes out over a bright frame.
+            f":borderw={max(1, round(size / 40))}:bordercolor=black@0.85"
+            f":shadowcolor=black@0.55:shadowx=0:shadowy={max(2, round(size / 15))}"
             f":x={x}:y={y}")
 
 
@@ -873,6 +890,49 @@ class Playout:
             self.log("no usable font found, so the clock and footer will not "
                      "be drawn. Everything else plays as normal.")
 
+    def preview(self, path):
+        """
+        Write one frame with the overlays on it, and stop.
+
+        Because how this looks cannot be settled from a filter string. Restart
+        the whole playout to judge a font and you get one look per minute and a
+        dark narthex in between; this gives a picture to open. It draws over a
+        busy, bright test pattern on purpose -- white text survives a dark
+        photograph easily, and the corner of a bright one is where it fails.
+        """
+        with self.plan_lock:
+            display = (self.plan or {}).get("display") or {}
+        if not display:
+            # Not reachable, or nothing scheduled: still worth seeing the
+            # chrome, so ask for both lines and a sample footer.
+            display = {"clock": "time_date", "clockPosition": "bottom-right",
+                       "footerText": "Grace Resurrection Methodist Church"}
+
+        for file, line in zip(self.clock_files,
+                              clock_lines(self.now_in(display.get("timezone")),
+                                          display.get("clock") or "time_date")):
+            self.write_atomic(file, line)
+
+        self.check_overlays()
+        chain = [fit_filter("cover", self.width, self.height, self.background)]
+        chain += overlay_filters(display, self.width, self.height, self.font,
+                                 self.clock_files[:len(clock_lines(
+                                     self.now_in(display.get("timezone")),
+                                     display.get("clock") or "time_date"))],
+                                 self.write_footer(display), self.overlay_scale)
+        command = [
+            self.ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+            "-f", "lavfi", "-i", f"testsrc2=size={self.width}x{self.height}",
+            "-vf", ",".join(chain), "-frames:v", "1", path,
+        ]
+        self.debug("preview: " + " ".join(command))
+        result = subprocess.run(command)
+        if result.returncode != 0:
+            self.log("could not render the preview; the filter chain above is why")
+            return 1
+        self.log(f"wrote {path} using font {self.font or '(none)'}")
+        return 0
+
     def run(self):
         self.check_overlays()
         threading.Thread(target=self.poll_forever, daemon=True).start()
@@ -990,6 +1050,10 @@ def build_parser():
                         help="must be a mode the device supports. 1080p59.94 is "
                              "the one every television accepts; 1080p30 is a "
                              "legal mode that many sets handle badly.")
+    parser.add_argument("--preview", metavar="FILE.png",
+                        help="write one frame with the clock and footer drawn on "
+                             "a test pattern, then stop. For judging the look "
+                             "without restarting the screen.")
     parser.add_argument("--overlay-scale", type=float, default=1.0,
                         help="how large the clock and footer are, 1.0 being the "
                              "default. Try 1.3 if the narthex is wide. Only "
@@ -1019,6 +1083,11 @@ def main(argv=None):
     except ValueError as exc:
         # A mistyped URL or mode is a typo, not a crash — say so in one line.
         raise SystemExit(str(exc))
+    if args.preview:
+        # One frame and out: this never touches the card, so it can be run
+        # while the screen is playing.
+        return playout.preview(args.preview)
+
     signal.signal(signal.SIGTERM, playout.stop)
     signal.signal(signal.SIGINT, playout.stop)
     playout.run()
