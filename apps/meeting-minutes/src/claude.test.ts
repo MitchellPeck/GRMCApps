@@ -119,3 +119,22 @@ test("parseSpeakerMap tolerates fenced JSON and malformed output", () => {
 test("parseSpeakerMap tolerates a name echoed with its title", () => {
   assert.deepEqual(parseSpeakerMap('{"Speaker 1":"Alice Smith (Chair)"}', ORDER, NAMES), { SPEAKER_00: "Alice Smith" });
 });
+
+// The real failure: a long topic's reply was cut off mid-array, the JSON did
+// not parse, and the raw half-object was saved as the summary.
+test("parseSummary salvages a cut-off reply instead of saving raw JSON", () => {
+  const raw = '```json\n{\n  "summary": "The board discussed \\"three\\" topics.",\n  "actionItems": [\n'
+    + '    { "task": "Finance committee to report back", "owner": "Unassigned" },\n'
+    + '    { "task": "Look into shed storage", "owner": "Eddie Huffaker" },\n'
+    + '    { "task": "Return financial documents to David",\n      "owner": "Unass';
+  const r = parseSummary(raw);
+  assert.equal(r.summary, 'The board discussed "three" topics.');
+  assert.deepEqual(r.actionItems, [
+    { task: "Finance committee to report back", owner: "Unassigned" },
+    { task: "Look into shed storage", owner: "Eddie Huffaker" },
+  ]);
+});
+
+test("parseSummary refuses unreadable JSON rather than storing it as the summary", () => {
+  assert.throws(() => parseSummary('{ "summ'), /could not be read/);
+});

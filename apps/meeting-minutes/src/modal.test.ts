@@ -326,3 +326,27 @@ test("recording holds a screen wake lock and releases it on stop", { skip }, asy
   await tick();
   assert.equal(requests.length, 2, "no lock once recording has stopped");
 });
+
+// A processed meeting had no way back in: Retry only appears on error, so a
+// finished-but-wrong result (e.g. bad speakers) could never be reprocessed.
+test("a processed meeting recording can be reprocessed after confirming", { skip }, async () => {
+  const { w, doc, calls } = boot();
+  w.eval(`
+    state.meeting.recording_status = 'done';
+    state.meetingRecordings = [{ id: 7 }];
+    renderDetail(); renderMeetingRecUi();
+  `);
+  const btn = doc.getElementById("btn-mrec-reprocess");
+  assert.ok(btn, "reprocess button is shown once processed");
+
+  w.confirm = () => false;
+  btn.click();
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(calls.filter((c) => c.path.includes("/reprocess")).length, 0, "cancel does nothing");
+
+  w.confirm = () => true;
+  btn.click();
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(calls.filter((c) => c.path.includes("/reprocess")), [{ path: "/api/meeting-recordings/7/reprocess", method: "POST" }]);
+  assert.equal(w.eval("state.meeting.recording_status"), "queued");
+});
