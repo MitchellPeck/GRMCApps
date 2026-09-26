@@ -329,6 +329,45 @@ cd FFmpeg
 # be checked against what was asked for.
 echo "Building FFmpeg ${FFMPEG_TAG} ($(git rev-parse --short HEAD 2>/dev/null || echo '?'))"
 
+# ── shim IID_IUnknown when the Mac SDK does not define it ───────────────────
+# Current FFmpeg answers QueryInterface for IID_IUnknown properly; 7.1 refused
+# every interface with E_NOINTERFACE. Blackmagic's Mac SDK does not define that
+# identifier -- on macOS the value lives behind CFUUIDGetUUIDBytes(IUnknownUUID)
+# -- so the build stops with:
+#
+#     decklink_enc.cpp:120: error: use of undeclared identifier 'IID_IUnknown'
+#
+# Supply it rather than drop back to a version that cannot answer the query. A
+# file-scope constant, because DECKLINK_IsEqualIID takes the address of both
+# operands and a temporary has none.
+ENC="libavdevice/decklink_enc.cpp"
+if grep -q "IID_IUnknown" "$ENC" 2>/dev/null &&
+   ! grep -rq "IID_IUnknown" "$INCLUDE" 2>/dev/null; then
+  echo "SDK does not define IID_IUnknown; adding it to ${ENC}."
+  python3 - "$ENC" <<'PATCH'
+import sys
+path = sys.argv[1]
+source = open(path).read()
+if "GRMC_IID_IUnknown" in source:
+    sys.exit(0)
+anchor = '#include "decklink_enc.h"'
+if anchor not in source:
+    sys.exit("could not find %s in %s" % (anchor, path))
+shim = anchor + """
+
+/* Added by GRMCApps build-ffmpeg-decklink.sh: Blackmagic's Mac SDK does not
+   define IID_IUnknown. On macOS it is the bytes of the CFPlugIn IUnknown UUID,
+   and it must be an object with an address, because DECKLINK_IsEqualIID
+   compares &a with &b. */
+#if !defined(_WIN32) && !defined(IID_IUnknown)
+static const REFIID GRMC_IID_IUnknown = CFUUIDGetUUIDBytes(IUnknownUUID);
+#define IID_IUnknown GRMC_IID_IUnknown
+#endif
+"""
+open(path, "w").write(source.replace(anchor, shim, 1))
+PATCH
+fi
+
 # Stock FFmpeg with no external libraries is everything this needs: it DECODES
 # H.264, MJPEG and PNG natively, scales and pads natively, and writes rawvideo.
 # Nothing is encoded to a compressed format at playout, so no x264, no GPL.
