@@ -350,3 +350,28 @@ test("a processed meeting recording can be reprocessed after confirming", { skip
   assert.deepEqual(calls.filter((c) => c.path.includes("/reprocess")), [{ path: "/api/meeting-recordings/7/reprocess", method: "POST" }]);
   assert.equal(w.eval("state.meeting.recording_status"), "queued");
 });
+
+// One short quote was not enough to tell voices apart: each speaker row now
+// offers several longer samples, each playable from the meeting recording.
+test("meeting speaker rows offer playable samples", { skip }, () => {
+  const { w, doc } = boot();
+  w.eval(`
+    state.meeting.recording_status = 'done';
+    state.meetingRecordings = [{ id: 7 }];
+    state.meetingSpeakerStats = [{ speaker: 'SPEAKER_00', label: 'Speaker 1', seconds: 30, share: 1,
+      sample: 'Good evening', samples: [
+        { text: 'Good evening everyone, let us begin.', start: 3, end: 9 },
+        { text: 'The <b>finance</b> committee met twice.', start: 3700, end: 3712 },
+      ] }];
+    renderDetail(); renderMeetingSpeakerPanel();
+  `);
+  const more = doc.querySelector("#meeting-speakers .spk-more");
+  assert.ok(more, "samples are offered");
+  assert.match(more.querySelector("summary").textContent, /2 samples of Speaker 1/);
+  const items = more.querySelectorAll("li");
+  assert.equal(items.length, 2);
+  assert.match(items[1].textContent, /61:40 The <b>finance<\/b> committee/); // escaped, not HTML
+  const play = items[0].querySelector(".spk-play");
+  assert.equal(play.getAttribute("data-rec"), "7");
+  assert.equal(play.getAttribute("data-start"), "3");
+});

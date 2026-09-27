@@ -59,6 +59,18 @@ export function absorbMicroTurns(
 }
 
 const SAMPLE_MAX_CHARS = 80;
+// "Who is speaking?" also offers several longer excerpts per voice — one
+// quote of a few words is rarely enough to tell who it is.
+export const SAMPLE_COUNT = 8;
+const EXCERPT_MAX_CHARS = 500;
+
+// One contiguous stretch of a voice speaking, on the transcript's timeline
+// (seconds from the start of its recording) so it can be played back.
+export interface SpeakerExcerpt {
+  text: string;
+  start: number;
+  end: number;
+}
 
 // Per-voice talk time and a representative quote. Rendered in the "Who is
 // speaking?" rows so several near-identical "Speaker N" entries can be told
@@ -70,6 +82,7 @@ export interface SpeakerStat {
   seconds: number;
   share: number;    // 0..1 of total labelled speaking time
   sample: string;
+  samples: SpeakerExcerpt[]; // the voice's longest turns, in the order spoken
 }
 
 export function speakerStats(segments: DiarizedSegment[]): SpeakerStat[] {
@@ -84,12 +97,34 @@ export function speakerStats(segments: DiarizedSegment[]): SpeakerStat[] {
     if (s.text.length > best.length) longest.set(s.speaker, s.text);
   }
   const total = [...seconds.values()].reduce((a, b) => a + b, 0);
+  // Whole turns (consecutive segments of one voice), not single segments:
+  // a turn is what a person said before someone else spoke.
+  const excerpts = new Map<string, (SpeakerExcerpt & { words: number })[]>();
+  for (const t of buildTurns(segments)) {
+    if (!t.speaker) continue;
+    const text = t.indexes.map((i) => segments[i].text).join(" ").replace(/\s+/g, " ").trim();
+    if (!text) continue;
+    const list = excerpts.get(t.speaker) ?? [];
+    list.push({
+      text: text.length > EXCERPT_MAX_CHARS ? `${text.slice(0, EXCERPT_MAX_CHARS)}…` : text,
+      start: t.start, end: t.end, words: text.split(" ").length,
+    });
+    excerpts.set(t.speaker, list);
+  }
+  const samplesFor = (speaker: string): SpeakerExcerpt[] =>
+    (excerpts.get(speaker) ?? [])
+      .slice().sort((a, b) => b.words - a.words).slice(0, SAMPLE_COUNT)
+      .sort((a, b) => a.start - b.start)
+      .map(({ text, start, end }) => ({ text, start, end }));
   return order
     .map((speaker) => {
       const raw = longest.get(speaker) ?? "";
       const sample = raw.length > SAMPLE_MAX_CHARS ? `${raw.slice(0, SAMPLE_MAX_CHARS)}…` : raw;
       const secs = seconds.get(speaker) ?? 0;
-      return { speaker, label: friendlyLabel(speaker, order), seconds: secs, share: total > 0 ? secs / total : 0, sample };
+      return {
+        speaker, label: friendlyLabel(speaker, order), seconds: secs,
+        share: total > 0 ? secs / total : 0, sample, samples: samplesFor(speaker),
+      };
     })
     .sort((a, b) => b.seconds - a.seconds);
 }

@@ -9,6 +9,7 @@ import {
 } from "../claude";
 import { hasAudioExtension } from "../whisper";
 import { speakerStats } from "../speakers";
+import { extractClip } from "../chunking";
 import {
   createMeeting, listMeetings, getMeeting, updateMeeting, deleteMeeting,
   setAttendees, getAttendeeIds, replaceAgendaItems, addAgendaItem,
@@ -392,6 +393,29 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
     reply.header("content-type", rec.mime_type || "application/octet-stream");
     reply.header("content-disposition", `attachment; filename="${safeName}"`);
     return reply.send(createReadStream(rec.storage_path));
+  });
+
+  // A few seconds of a whole-meeting recording, for listening to one speaker
+  // sample in "Who spoke in this meeting?". start/end are seconds from the
+  // start of the recording (the transcript's timeline); capped server-side.
+  app.get("/api/meeting-recordings/:rid/clip", async (req, reply) => {
+    const rid = Number((req.params as { rid: string }).rid);
+    const q = req.query as { start?: string; end?: string };
+    const start = Number(q.start), end = Number(q.end);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || start < 0) {
+      reply.code(400); return { ok: false, error: "Give a start and end time." };
+    }
+    const rec = Number.isFinite(rid) ? await getMeetingRecording(pool, rid) : null;
+    if (!rec || !rec.storage_path) { reply.code(404); return { ok: false, error: "Recording not found." }; }
+    if (!existsSync(rec.storage_path)) { reply.code(404); return { ok: false, error: "Recording file is missing." }; }
+    try {
+      const wav = await extractClip(rec.storage_path, start, end - start);
+      reply.header("content-type", "audio/wav");
+      reply.header("cache-control", "private, max-age=3600");
+      return reply.send(wav);
+    } catch (e) {
+      reply.code(500); return { ok: false, error: (e as Error).message };
+    }
   });
 
   // Summarize a single agenda item with Claude.

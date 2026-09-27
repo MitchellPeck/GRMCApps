@@ -139,6 +139,34 @@ function runFfmpeg(args: string[]): Promise<string> {
   });
 }
 
+// Longest excerpt served for playback.
+export const MAX_CLIP_SECONDS = 45;
+
+// A short stretch of a stored recording as 16 kHz mono WAV, for listening to
+// one speaker sample. Plain WAV plays in every browser. Read-only on the file.
+export function extractClip(inputPath: string, start: number, seconds: number): Promise<Buffer> {
+  const from = Math.max(0, start);
+  const dur = Math.min(MAX_CLIP_SECONDS, Math.max(0.5, seconds));
+  return new Promise((resolve, reject) => {
+    let child;
+    try {
+      child = spawn("ffmpeg", [
+        "-hide_banner", "-nostats", "-nostdin", "-loglevel", "error",
+        "-ss", from.toFixed(2), "-i", inputPath, "-t", dur.toFixed(2),
+        "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", "-f", "wav", "pipe:1",
+      ], { stdio: ["ignore", "pipe", "pipe"] });
+    } catch (e) { reject(e); return; }
+    const out: Buffer[] = [], err: Buffer[] = [];
+    child.stdout.on("data", (c: Buffer) => out.push(c));
+    child.stderr.on("data", (c: Buffer) => err.push(c));
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) resolve(Buffer.concat(out));
+      else reject(new Error(`Could not cut the clip: ${Buffer.concat(err).toString("utf8").trim().split("\n").pop()}`));
+    });
+  });
+}
+
 export interface AudioPart { path: string; offset: number }
 
 // Decode `inputPath` to WAV and cut it into parts in `workDir`. Returns the

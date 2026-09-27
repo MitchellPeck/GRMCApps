@@ -157,3 +157,11 @@ body.has-rec-banner{padding-top:44px}
     position: absolute; left: 0; top: 0; width: 100%; margin: 0; padding: 0;
   }
 }
+
+/* Speaker samples: several longer excerpts per voice, collapsed by default. */
+.spk-row .spk-more { flex-basis: 100%; font-size: 12px; padding-left: 4px; }
+.spk-row .spk-more summary { cursor: pointer; color: var(--navy, #1e3a5f); font-weight: 600; }
+.spk-excerpts { margin: 6px 0 4px; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; }
+.spk-excerpts li { line-height: 1.45; color: var(--text, inherit); }
+.spk-excerpts .spk-at { font-variant-numeric: tabular-nums; color: var(--muted, #64748b); margin-right: 2px; }
+.spk-excerpts .spk-play { padding: 1px 7px; margin-right: 6px; font-size: 11px; line-height: 1.4; }

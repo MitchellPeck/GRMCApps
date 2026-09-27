@@ -180,3 +180,19 @@ test("a split recording without speaker matching fails instead of saving phantom
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("extractClip returns just the requested stretch as WAV, capped", { skip: !hasFfmpeg }, async () => {
+  const { extractClip, MAX_CLIP_SECONDS } = await import("./chunking");
+  const dir = mkdtempSync(join(tmpdir(), "chunk-test-"));
+  try {
+    const input = makeRecording(dir);
+    const before = sha(input);
+    const wav = await extractClip(input, 600, 12);
+    assert.ok(Math.abs(wavDurationSeconds(wav) - 12) < 0.1, `got ${wavDurationSeconds(wav)}`);
+    const long = await extractClip(input, 0, 600);
+    assert.ok(Math.abs(wavDurationSeconds(long) - MAX_CLIP_SECONDS) < 0.1);
+    assert.equal(sha(input), before);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

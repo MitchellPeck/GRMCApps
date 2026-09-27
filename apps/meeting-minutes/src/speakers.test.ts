@@ -175,3 +175,30 @@ test("assignPresenterToDominant is a no-op without a presenter or segments", () 
   assert.deepEqual(assignPresenterToDominant(segs, {}, "  "), {});
   assert.deepEqual(assignPresenterToDominant([], {}, "Alice Smith"), {});
 });
+
+test("speakerStats offers several whole-turn samples per voice, in spoken order", () => {
+  const segs = [
+    seg("Good evening everyone.", "SPEAKER_00", 0, 2),
+    seg("Let's start with the budget.", "SPEAKER_00", 2, 4), // same turn as above
+    seg("Thanks.", "SPEAKER_01", 4, 5),
+    seg("The finance committee met twice this month and reviewed every line.", "SPEAKER_00", 5, 12),
+    seg("Okay.", "SPEAKER_01", 12, 13),
+  ];
+  const [s0, s1] = speakerStats(segs);
+  assert.deepEqual(s0.samples, [
+    { text: "Good evening everyone. Let's start with the budget.", start: 0, end: 4 },
+    { text: "The finance committee met twice this month and reviewed every line.", start: 5, end: 12 },
+  ]);
+  assert.deepEqual(s1.samples.map((x) => x.text), ["Thanks.", "Okay."]);
+});
+
+test("speakerStats keeps only the longest turns as samples", () => {
+  const segs: ReturnType<typeof seg>[] = [];
+  for (let i = 0; i < 20; i++) {
+    segs.push(seg("word ".repeat(i + 1).trim(), "SPEAKER_00", i * 10, i * 10 + 5));
+    segs.push(seg("ok", "SPEAKER_01", i * 10 + 5, i * 10 + 6));
+  }
+  const s0 = speakerStats(segs).find((s) => s.speaker === "SPEAKER_00")!;
+  assert.equal(s0.samples.length, 8);
+  assert.deepEqual(s0.samples.map((x) => x.start), [120, 130, 140, 150, 160, 170, 180, 190]);
+});

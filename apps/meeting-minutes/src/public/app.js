@@ -880,6 +880,7 @@ function renderSpeakerMap(it){
           +'<span class="spk-share">'+pct+'%</span>'
           +'<select data-spk="'+esc(st.speaker)+'">'+opts(cur)+'</select>'
           +(st.sample?'<div class="spk-sample">&ldquo;'+esc(st.sample)+'&rdquo;</div>':'')
+          +speakerSamplesHtml(st, null)
           +'</div>';
       }).join('')
     + '</div><div class="hint">Voices are listed by how much they spoke. Several rows can be the same person — set them to the same name and their lines merge. Remapping relabels the transcript.</div>';
@@ -902,6 +903,50 @@ function renderSpeakerMap(it){
   });
 }
 
+// Several longer excerpts per voice, collapsed under the row: one quote of a
+// few words is rarely enough to tell who is speaking. With a recording id each
+// excerpt gets a play button that fetches just that stretch of audio.
+function speakerSamplesHtml(st, recId){
+  var list=st.samples||[];
+  if(!list.length) return '';
+  return '<details class="spk-more"><summary>'+list.length+' sample'+(list.length===1?'':'s')+' of '+esc(st.label)+'</summary>'
+    +'<ol class="spk-excerpts">'
+    + list.map(function(x){
+        var play = recId
+          ? '<button type="button" class="btn-sm spk-play" data-rec="'+recId+'" data-start="'+x.start+'" data-end="'+x.end+'" title="Play this clip">&#9654;</button>'
+          : '';
+        return '<li>'+play+'<span class="spk-at">'+fmtClock(x.start)+'</span> '+esc(x.text)+'</li>';
+      }).join('')
+    +'</ol></details>';
+}
+
+// One player for every sample button on the page. A second click on the
+// playing clip stops it.
+var samplePlayer=null, samplePlayingBtn=null;
+function stopSample(){
+  if(samplePlayer){ try { samplePlayer.pause(); } catch(e){} }
+  if(samplePlayingBtn){ samplePlayingBtn.innerHTML='&#9654;'; samplePlayingBtn=null; }
+}
+document.addEventListener('click', function(e){
+  var btn=e.target && e.target.closest ? e.target.closest('.spk-play') : null;
+  if(!btn) return;
+  e.preventDefault();
+  if(samplePlayingBtn===btn){ stopSample(); return; }
+  stopSample();
+  if(!samplePlayer){
+    samplePlayer=new Audio();
+    samplePlayer.addEventListener('ended', stopSample);
+  }
+  // Pad the turn slightly: diarization boundaries clip the first syllable.
+  var start=Math.max(0, Number(btn.getAttribute('data-start'))-0.3);
+  var end=Math.min(Number(btn.getAttribute('data-end'))+0.3, start+45);
+  samplePlayer.src='/api/meeting-recordings/'+btn.getAttribute('data-rec')+'/clip?start='+start.toFixed(2)+'&end='+end.toFixed(2);
+  samplePlayingBtn=btn;
+  btn.innerHTML='&#9632;';
+  var p=samplePlayer.play();
+  if(p && p['catch']) p['catch'](function(){ if(samplePlayingBtn===btn) stopSample(); });
+});
+
 // Meeting-wide speaker naming: one set of voices for the whole recording.
 // Saving rewrites every meeting-sourced topic's transcript server-side.
 var savingMspk=false; // true only while a PUT .../speaker-map is in flight (blocks double-submit)
@@ -910,6 +955,9 @@ function renderMeetingSpeakerPanel(){
   var stats=state.meetingSpeakerStats||[];
   if(!stats.length){ el.innerHTML=''; return; }
   var map=(state.meeting && state.meeting.speaker_map)||{};
+  // Samples are on the processed recording's timeline, so they can be played.
+  var recs=state.meetingRecordings||[];
+  var recId=recs.length ? recs[recs.length-1].id : null;
   var attendees=state.attendeeIds.map(function(id){ return state.peopleById[id]; }).filter(Boolean);
   var opts=function(sel){
     var o='<option value="">— unlabeled —</option>';
@@ -927,6 +975,7 @@ function renderMeetingSpeakerPanel(){
           +'<span class="spk-share">'+pct+'%</span>'
           +'<select data-mspk="'+esc(st.speaker)+'">'+opts(cur)+'</select>'
           +(st.sample?'<div class="spk-sample">&ldquo;'+esc(st.sample)+'&rdquo;</div>':'')
+          +speakerSamplesHtml(st, recId)
           +'</div>';
       }).join('')
     +'</div>'
