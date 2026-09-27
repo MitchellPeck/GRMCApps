@@ -1481,10 +1481,12 @@
     samsungBox.appendChild(keyField);
     samsungBox.appendChild(el("div", "hint", when === "on"
       // Worth saying here rather than in a support call on a Sunday.
-      ? "A Samsung stops answering on the network the moment it is off, so this "
-        + "can only turn it ON if \u201cPower On with Mobile\u201d is enabled on the TV. "
-        + "If it will not wake, use Wake-on-LAN for opening and Samsung for closing."
-      : "Sent over the paired connection below."));
+      ? "Needs \u201cPower On with Mobile\u201d enabled on the TV, or a set that is "
+        + "properly asleep will not answer. Prefer \u201cPower on\u201d over the toggle "
+        + "if your model has it: a toggle sent to a TV that is already on turns it OFF."
+      : "Sent over the paired connection below. Prefer \u201cPower off\u201d over the "
+        + "toggle if your model has it: a toggle sent to a TV that is already off "
+        + "turns it ON, and it stays on all night."));
     box.appendChild(samsungBox);
 
     function sync() {

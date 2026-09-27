@@ -37,6 +37,7 @@ export async function tickPower(pool: Pool, deps: RunnerDeps): Promise<void> {
 
   const previous = await getSetting(pool, LAST_STATE_KEY);
   if (previous === want) return;
+  deps.log(`narthex-tv: boundary — screen was "${previous || "(unrecorded)"}", now "${want}"`);
 
   await setSetting(pool, LAST_STATE_KEY, want);
   if (!previous) {
@@ -52,6 +53,11 @@ export async function tickPower(pool: Pool, deps: RunnerDeps): Promise<void> {
   }
   if (parsed.action.kind === "none") {
     deps.log(`narthex-tv: screen ${want} (blanking only, no power action configured)`);
+    // Recorded, not just logged. "Nothing happened" is the hardest outcome to
+    // diagnose from the settings screen, because it looks exactly like a
+    // boundary that never came -- and the only other place it is written down
+    // is a container log nobody thinks to read.
+    await recordPowerEvent(pool, want, true, "No power action configured; the screen only blanks.");
     return;
   }
 
