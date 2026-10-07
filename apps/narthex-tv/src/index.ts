@@ -18,6 +18,8 @@ import { powerRoutes, takeoverRoutes } from "./routes/power";
 import { realDeps as powerActionDeps } from "./power-actions";
 import { pressKey } from "./samsung-pairing";
 import { noticeRoutes } from "./routes/notices";
+import { uploadRoutes } from "./routes/uploads";
+import { stagingRoot, sweepStale } from "./uploads";
 import { startPowerRunner } from "./power-runner";
 
 const app = Fastify({ logger: true, bodyLimit: 2 * 1024 * 1024 });
@@ -29,6 +31,7 @@ app.register(fastifyStatic, { root: join(__dirname, "public"), prefix: "/" });
 
 app.register(meRoutes);
 app.register(mediaRoutes);
+app.register(uploadRoutes);
 app.register(playlistRoutes);
 app.register(scheduleRoutes);
 app.register(screenRoutes);
@@ -59,6 +62,10 @@ async function start(): Promise<void> {
   powerActionDeps.samsung = (key) => pressKey(pool, key);
 
   await mkdir(join(config.dataDir, "media"), { recursive: true });
+  // Half-sent uploads from a closed tab or a restart. A day is far longer than
+  // any real upload takes.
+  const swept = await sweepStale(stagingRoot(config.dataDir), 24 * 60 * 60 * 1000);
+  if (swept) app.log.info(`cleared ${swept} abandoned upload(s)`);
   await ensureSchema();
   await resumePending(queue, pool, (m) => app.log.info(m));
   // Watches the operating-hours clock and fires the configured power hook on

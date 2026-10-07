@@ -930,26 +930,77 @@
     }
   }
 
+  // One file at a time, in pieces the server sizes for us (see
+  // routes/uploads.ts): a single request over 100 MB never gets past
+  // Cloudflare, and a slow one is cut off by Traefik after a minute.
+  async function sendFile(file, report) {
+    var start = await api("POST", "/api/uploads", { fileName: file.name, size: file.size, type: file.type });
+    var id = encodeURIComponent(start.uploadId);
+    var offset = 0;
+    var failures = 0;
+    try {
+      while (offset < file.size) {
+        report(offset / file.size);
+        var res, data;
+        try {
+          res = await fetch("/api/uploads/" + id + "?offset=" + offset, {
+            method: "PUT",
+            headers: { "content-type": "application/octet-stream" },
+            body: file.slice(offset, offset + start.chunkBytes),
+            credentials: "same-origin"
+          });
+          data = await res.json().catch(function () { return {}; });
+        } catch (e) {
+          res = null;
+          data = {};
+        }
+        if (res && res.ok && data.ok !== false) {
+          offset = data.received;
+          failures = 0;
+          continue;
+        }
+        // A dropped connection or a piece the server already has: carry on from
+        // wherever it says it got to. Anything else is a real refusal.
+        var retryable = !res || res.status === 409 || res.status >= 500;
+        if (!retryable || ++failures > 5) throw new Error(data.error || "The upload kept breaking off. Try again.");
+        if (typeof data.received === "number") offset = data.received;
+        await new Promise(function (r) { setTimeout(r, 1000 * failures); });
+      }
+      report(1);
+      return (await api("POST", "/api/uploads/" + id + "/complete")).media;
+    } catch (e) {
+      fetch("/api/uploads/" + id, { method: "DELETE", credentials: "same-origin" }).catch(function () {});
+      throw e;
+    }
+  }
+
   async function upload(files) {
     if (!files || !files.length) return;
-    var form = new FormData();
-    for (var i = 0; i < files.length; i++) form.append("file" + i, files[i]);
+    files = Array.prototype.slice.call(files);
+    var created = 0;
+    var rejected = [];
 
-    msg("upload-progress", "Uploading " + files.length + " file" + (files.length === 1 ? "" : "s") + "…", "info");
-    try {
-      var res = await fetch("/api/media", { method: "POST", body: form, credentials: "same-origin" });
-      var data = await res.json().catch(function () { return {}; });
-      if (!res.ok || data.ok === false) throw new Error(data.error || "That upload didn't work.");
-
-      var note = (data.media || []).length + " uploaded. Converting now — they'll be playable in a moment.";
-      if (data.rejected && data.rejected.length) {
-        note += " Skipped: " + data.rejected.map(function (r) { return r.fileName; }).join(", ") + ".";
+    for (var i = 0; i < files.length; i++) {
+      var file = files[i];
+      var prefix = files.length > 1 ? "(" + (i + 1) + " of " + files.length + ") " : "";
+      try {
+        await sendFile(file, function (fraction) {
+          msg("upload-progress", prefix + "Uploading " + file.name + "\u2026 " + Math.floor(fraction * 100) + "%", "info");
+        });
+        created++;
+      } catch (e) {
+        rejected.push(file.name + " (" + e.message + ")");
       }
-      msg("upload-progress", note, "ok");
-      await loadMedia();
-    } catch (e) {
-      msg("upload-progress", e.message, "err");
     }
+
+    if (!created) {
+      msg("upload-progress", rejected.length === 1 ? rejected[0] : "Nothing uploaded. " + rejected.join("; "), "err");
+      return;
+    }
+    var note = created + " uploaded. Converting now — they'll be playable in a moment.";
+    if (rejected.length) note += " Skipped: " + rejected.join("; ") + ".";
+    msg("upload-progress", note, rejected.length ? "info" : "ok");
+    await loadMedia();
   }
 
   // ── announcements ───────────────────────────────────────────────────────

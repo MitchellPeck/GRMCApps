@@ -23,11 +23,11 @@ export const config = {
   // larger than every row the other apps store put together, and the player
   // needs byte-range requests over it.
   dataDir: process.env.NARTHEXTV_DATA_DIR || "/data",
-  // A single upload. Big enough for a long 1080p announcement loop.
-  maxFileBytes: Number(process.env.NARTHEXTV_MAX_FILE_MB || 512) * 1024 * 1024,
+  // A single upload. Five minutes of 4K60 phone video is a little over 2 GB.
+  maxFileBytes: Number(process.env.NARTHEXTV_MAX_FILE_MB || 3072) * 1024 * 1024,
   maxFiles: Number(process.env.NARTHEXTV_MAX_FILES || 20),
   // How long one conversion may take before the queue gives up on it.
-  convertTimeoutMs: Number(process.env.NARTHEXTV_CONVERT_TIMEOUT_MS || 20 * 60 * 1000),
+  convertTimeoutMs: Number(process.env.NARTHEXTV_CONVERT_TIMEOUT_MS || 45 * 60 * 1000),
   // The loopback port docker-compose publishes so the playout script on this
   // same machine can reach the player without leaving the box. Surfaced in
   // Screens purely so nobody has to hand-assemble that URL; it grants nothing

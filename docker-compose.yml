@@ -292,9 +292,9 @@ services:
       # the screen. Over the internal network with the user's identity
       # forwarded, never by reaching into the approvals database.
       APPROVALS_URL: "http://approvals:3000"
-      NARTHEXTV_MAX_FILE_MB: "${NARTHEXTV_MAX_FILE_MB:-512}"
+      NARTHEXTV_MAX_FILE_MB: "${NARTHEXTV_MAX_FILE_MB:-3072}"
       NARTHEXTV_MAX_FILES: "${NARTHEXTV_MAX_FILES:-20}"
-      NARTHEXTV_CONVERT_TIMEOUT_MS: "${NARTHEXTV_CONVERT_TIMEOUT_MS:-1200000}"
+      NARTHEXTV_CONVERT_TIMEOUT_MS: "${NARTHEXTV_CONVERT_TIMEOUT_MS:-2700000}"
       # Only so Screens can show the playout script the right loopback URL.
       NARTHEXTV_LOCAL_PORT: "${NARTHEXTV_LOCAL_PORT:-3010}"
       BASE_DOMAIN: "${BASE_DOMAIN}"
