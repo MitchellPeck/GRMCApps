@@ -216,28 +216,48 @@ test("stopping a meeting recording clears the recording bar immediately", { skip
   assert.equal(doc.body.classList.contains("has-rec-banner"), false);
 });
 
-// A whole-meeting recording writes transcripts straight onto every topic it
-// covered, so those topics never pass through queued/processing and the poller
-// never treated them as "settled" — nothing was ever summarized.
-test("a finished meeting recording summarizes every topic", { skip }, async () => {
-  const { w, calls } = boot();
+// Summaries are written on the server now, so a finished meeting recording
+// needs nothing from the page — but the page must keep polling until they land.
+test("the page keeps polling while summaries are queued on the server", { skip }, () => {
+  const { w } = boot();
+  w.eval("state.items[0].summarize_status = 'queued'; state.report = { status: 'idle', changes: [] };");
+  assert.equal(w.eval("anyPendingWork()"), true);
+  w.eval("state.items[0].summarize_status = 'idle'; state.report = { status: 'pending', changes: [] };");
+  assert.equal(w.eval("anyPendingWork()"), true, "a pending report also keeps the poll alive");
+  w.eval("state.report = { status: 'idle', changes: [] };");
+  assert.equal(w.eval("anyPendingWork()"), false);
+});
+
+test("guests are offered as speakers and everyone not present is listed absent", { skip }, () => {
+  const { w, doc } = boot();
   w.eval(`
-    state.items = [
-      { id: 1, title: 'Budget', description: '', transcript: 'Alice: numbers', notes: '',
-        transcript_segments: [], speaker_map: {}, speaker_stats: [], recordings: [],
-        presenter_ids: [], action_items: [], summary: '', transcribe_status: 'idle',
-        transcribe_error: '', transcript_source: 'meeting' },
-      { id: 2, title: 'Missions', description: '', transcript: 'Bob: report', notes: '',
-        transcript_segments: [], speaker_map: {}, speaker_stats: [], recordings: [],
-        presenter_ids: [], action_items: [], summary: '', transcribe_status: 'idle',
-        transcribe_error: '', transcript_source: 'meeting' }
-    ];
-    state.meeting.recording_status = 'done';
+    state.people = [{ id: 9, name: 'Alice', active: true }, { id: 10, name: 'Bob', active: true },
+                    { id: 11, name: 'Old', active: false }];
+    state.peopleById = { 9: state.people[0], 10: state.people[1], 11: state.people[2] };
+    state.attendeeIds = [9];
+    state.guests = [{ id: 1, meeting_id: 42, name: 'Gina', title: 'Architect' }];
+    state.items[0].transcript_segments = [{ text: 'hello', speaker: 'SPEAKER_00', start: 0, end: 1 }];
+    state.items[0].speaker_stats = [{ speaker: 'SPEAKER_00', label: 'Speaker 1', seconds: 1, share: 1, sample: 'hello' }];
     renderDetail();
   `);
-  await w.eval("summarizeAllItems()");
-  const summarized = calls.filter((c) => /\/summarize$/.test(c.path)).map((c) => c.path);
-  assert.deepEqual(summarized, ["/api/items/1/summarize", "/api/items/2/summarize"]);
+  const options = [...doc.querySelectorAll("select[data-spk] option")].map((o: any) => o.value);
+  assert.deepEqual(options, ["", "Alice", "Gina"]);
+  assert.equal(doc.getElementById("absent-line").textContent, "Absent: Bob");
+  assert.match(doc.getElementById("guest-chips").textContent, /Gina/);
+});
+
+test("an out-of-date report says what changed and offers Docs and PDF", { skip }, () => {
+  const { w, doc } = boot();
+  w.eval(`
+    state.meeting.report = '# April Board Meeting';
+    state.report = { status: 'idle', error: '', generatedAt: null, changes: ['Summary changed: Budget'] };
+    renderDetail();
+  `);
+  assert.match(doc.getElementById("report-stale").textContent, /out of date.*Summary changed: Budget/s);
+  assert.equal(doc.getElementById("report-actions").style.display, "");
+  assert.equal(doc.getElementById("btn-report-gdoc").getAttribute("href"), "/api/meetings/42/google-doc");
+  assert.ok(doc.getElementById("btn-report-print"));
+  assert.equal(doc.getElementById("btn-report-dl"), null, "the Markdown download is gone");
 });
 
 test("changing a speaker assignment rewrites that item's summary", { skip }, async () => {

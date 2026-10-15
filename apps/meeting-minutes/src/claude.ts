@@ -4,8 +4,8 @@ import { SpeakerMap } from "./transcript";
 
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 const MODEL = "claude-sonnet-4-6";
-// Generous for a report over a long meeting, short enough that a wedged
-// request cannot hold the shared transcription queue for the rest of the day.
+// Generous for a summary of a long topic, short enough that a wedged request
+// cannot hold a serial queue for the rest of the day.
 const CLAUDE_TIMEOUT_MS = 4 * 60 * 1000;
 
 // A single Anthropic content block (text, image, or document). `content` may be
@@ -28,8 +28,8 @@ async function callClaude(
   const key = await getSetting(pool, "anthropic_api_key");
   if (!key) throw new Error("No Anthropic API key. Add one in Settings.");
 
-  // Every Claude call runs on the shared serial transcription queue, so one
-  // request that never returns would stall every later job. Bound it.
+  // Every Claude call runs on a serial queue (transcription or AI work), so
+  // one request that never returns would stall every later job. Bound it.
   let res: Response;
   try {
     res = await fetch(ANTHROPIC_URL, {
@@ -237,79 +237,6 @@ export async function summarizeItem(pool: Pool, input: SummarizeInput): Promise<
   // A long topic (a whole-meeting recording can put an hour under one item)
   // yields a long summary and a dozen-plus action items; 1024 tokens cut it off.
   return parseSummary(await callClaude(pool, SUMMARIZE_SYSTEM, parts.join("\n"), 4096));
-}
-
-export interface ReportItem {
-  title: string;
-  presenters: string[];
-  summary: string;
-  notes: string;
-  transcript: string;
-  actionItems: ActionItem[];
-}
-
-export interface ReportInput {
-  title: string;
-  meetingDate: string;
-  location: string;
-  attendees: string[];
-  items: ReportItem[];
-}
-
-const REPORT_SYSTEM = `You are a meeting-minutes assistant. Produce clean,
-professional meeting minutes in Markdown from the structured meeting data
-provided. Structure exactly:
-  # <Meeting title>
-  A line with date, location, and attendees.
-  ## Agenda
-  For each item: a "### <n>. <title>" heading, who presented it, and a short
-  summary of the discussion and any decisions.
-  ## Action Items
-  A single consolidated checklist (- [ ] style) of EVERY action item across the
-  whole meeting. Each line: the task, the owner in **bold** (or **Unassigned**),
-  and the agenda item it came from in parentheses.
-
-You are given each item's already-extracted action items — include ALL of them,
-none dropped. ALSO re-read each transcript and typed notes and ADD any further
-action items you find that were phrased conversationally (e.g. "we need to…",
-"someone should…", "I'll handle…", "can you follow up…", "by next week…") and
-were not already listed. Merge duplicates. Attribute owners from the named
-speakers when possible.
-
-Base everything strictly on the provided material. Never invent attendees,
-decisions, or action items. If, after all this, there are truly no action
-items, write "None recorded." under the Action Items heading.`;
-
-// Generate a full meeting report from all item summaries + action items.
-export async function generateReport(pool: Pool, input: ReportInput): Promise<string> {
-  const lines: string[] = [
-    `Meeting title: ${input.title}`,
-    input.meetingDate ? `Date: ${input.meetingDate}` : "",
-    input.location ? `Location: ${input.location}` : "",
-    `Attendees: ${input.attendees.length ? input.attendees.join(", ") : "(none recorded)"}`,
-    "",
-    "Agenda items:",
-  ].filter(Boolean);
-
-  input.items.forEach((it, i) => {
-    lines.push("");
-    lines.push(`${i + 1}. ${it.title}`);
-    lines.push(`   Presented by: ${it.presenters.length ? it.presenters.join(", ") : "unspecified"}`);
-    if (it.summary) lines.push(`   Summary: ${it.summary}`);
-    if (it.actionItems.length) {
-      lines.push(`   Action items already extracted for this item:`);
-      it.actionItems.forEach((a) => lines.push(`     - ${a.task} (owner: ${a.owner})`));
-    }
-    if (it.notes) lines.push(`   Typed notes: ${it.notes}`);
-    if (it.transcript) lines.push(`   Transcript (speakers labeled by name where known):\n${indent(it.transcript)}`);
-    if (!it.summary && !it.notes && !it.transcript) lines.push("   (no notes recorded)");
-  });
-
-  return (await callClaude(pool, REPORT_SYSTEM, lines.join("\n"), 3072)).trim();
-}
-
-function indent(text: string): string {
-  return text.split("\n").map((l) => "     " + l).join("\n");
 }
 
 export interface ReconcileInput {

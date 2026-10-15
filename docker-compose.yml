@@ -191,6 +191,12 @@ services:
       # are matched across parts with a speaker-embedding model baked into the
       # image (SPEAKER_EMBEDDING_MODEL overrides its path).
       MINUTES_DATA_DIR: "/data"
+      # "Open in Google Docs" reuses the hub's Google OAuth client. That client
+      # must list https://minutes.<BASE_DOMAIN>/api/google/callback as an
+      # authorized redirect URI, and its project must have the Drive API on.
+      BASE_DOMAIN: "${BASE_DOMAIN}"
+      GOOGLE_CLIENT_ID: "${GOOGLE_CLIENT_ID}"
+      GOOGLE_CLIENT_SECRET: "${GOOGLE_CLIENT_SECRET}"
     volumes:
       - minutesdata:/data
     depends_on:

@@ -394,3 +394,52 @@ test("rewriteMeetingSpeakerMap renames every meeting-sourced topic with meeting-
   await reset(pool);
   await pool.end();
 });
+
+test("guests, absentees and the report's out-of-date check", { skip: !url }, async () => {
+  const pool = new Pool({ connectionString: url });
+  await reset(pool);
+  const { addGuest, listGuests, removeGuest, presentPeople, getMeeting: get } = await import("./meetings");
+  const { reportInput, reportState } = await import("./minutesWork");
+  const { buildReport } = await import("./report");
+
+  const a = await addPerson(pool, "Alice", "", "Chair");
+  const b = await addPerson(pool, "Bob", "", "");
+  assert.ok(a.ok && b.ok);
+  const m = await createMeeting(pool, { title: "Board", meetingDate: "", location: "", description: "", email: "", name: "" });
+  assert.ok(m.ok);
+  const mid = (m as any).id;
+  await setAttendees(pool, mid, [(a as any).id]);
+
+  // Guests: required name, no duplicates, present by definition.
+  assert.equal((await addGuest(pool, mid, "  ", "")).ok, false);
+  const g = await addGuest(pool, mid, "Gina", "Architect");
+  assert.ok(g.ok);
+  assert.equal((await addGuest(pool, mid, "gina", "")).ok, false, "same name twice is refused");
+  assert.deepEqual(await presentPeople(pool, mid), [
+    { name: "Alice", title: "Chair" }, { name: "Gina", title: "Architect" },
+  ]);
+
+  const it = await addAgendaItem(pool, mid, "Budget", "");
+  assert.ok(it.ok);
+  await updateAgendaItem(pool, (it as any).id, { notes: "numbers", summary: "Reviewed.", actionItems: [] });
+
+  let meeting = (await get(pool, mid))!;
+  const input = await reportInput(pool, meeting, await listAgendaItems(pool, mid));
+  assert.deepEqual(input.present, ["Alice"]);
+  assert.deepEqual(input.absent, ["Bob"]);
+  assert.deepEqual(input.guests, [{ name: "Gina", title: "Architect" }]);
+
+  const built = buildReport(input);
+  await saveReport(pool, mid, built.markdown, built.sources);
+  meeting = (await get(pool, mid))!;
+  assert.equal(meeting.report_status, "idle");
+  assert.deepEqual((await reportState(pool, meeting)).changes, []);
+
+  await updateAgendaItem(pool, (it as any).id, { summary: "Reviewed again." });
+  await removeGuest(pool, (g as any).id);
+  assert.deepEqual(await listGuests(pool, mid), []);
+  assert.deepEqual((await reportState(pool, meeting)).changes, [
+    "Attendance or guests changed", "Summary changed: Budget",
+  ]);
+  await pool.end();
+});

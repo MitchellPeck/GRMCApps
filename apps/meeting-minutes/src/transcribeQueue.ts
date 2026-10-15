@@ -9,6 +9,7 @@ import {
   TranscribeStatus, getAgendaItem, getAttendeeIds, getMeeting, listUnfinishedTranscriptions,
   setTranscribeStatus, updateAgendaItem, MeetingRecordingStatus, setMeetingRecordingStatus,
   listUnfinishedMeetingProcessing, listTopicMarkers, setMeetingSpeakerMap, listAgendaItems, addAgendaItem,
+  presentPeople,
 } from "./meetings";
 import { getRecording, latestRecording, getMeetingRecording, latestMeetingRecording } from "./recordings";
 import { segmentByMarkers, chronologicalSpeakerOrder, TopicMarker } from "./segmentation";
@@ -16,6 +17,8 @@ import { readFile } from "node:fs/promises";
 import { transcribeLongAudio } from "./chunking";
 import { embedSpeaker } from "./speakerEmbedding";
 import { config } from "./config";
+import { createQueue, Queue, QueueTask } from "./queue";
+import { advanceReport, itemHasContent, requestSummary } from "./minutesWork";
 
 export interface TranscribeJob {
   itemId: number;
@@ -35,77 +38,9 @@ export interface QueueDeps {
   log(message: string): void; // must not throw; the queue guards every call site anyway
 }
 
-// ── The generic serial queue ────────────────────────────────────────────────
-
-// One unit of work on the shared queue. Item transcription and whole-meeting
-// transcription both reduce to {label, run, fail} so they can share one
-// serial runner and can never run concurrently.
-export interface QueueTask {
-  label: string;
-  run(): Promise<void>;
-  fail(message: string): Promise<void>;
-}
-
-export interface Queue {
-  enqueue(task: QueueTask): void;
-  size(): number;
-  idle(): Promise<void>;
-}
-
-// A single-consumer FIFO. One task runs at a time: concurrent transcriptions
-// would split the whisper container's thread budget and slow every one of
-// them. Generic over `{label, run, fail}` so every job kind (per-item,
-// whole-meeting) can share this one runner.
-export function createQueue(log: (message: string) => void): Queue {
-  const pending: QueueTask[] = [];
-  const idleWaiters: Array<() => void> = [];
-  let running = false;
-
-  function releaseIdle(): void {
-    while (idleWaiters.length) idleWaiters.shift()!();
-  }
-
-  // `log` is documented as must-not-throw, but we guard anyway: a throwing
-  // logger (e.g. EPIPE on stdout) must never be mistaken for a job failure or
-  // escape as an unhandled rejection.
-  function safeLog(message: string): void {
-    try { log(message); } catch { /* logging must never break the queue */ }
-  }
-
-  async function drain(): Promise<void> {
-    if (running) return;
-    running = true;
-    try {
-      while (pending.length) {
-        const task = pending.shift()!;
-        try {
-          await task.run();
-        } catch (e) {
-          const message = (e as Error).message || `${task.label} failed.`;
-          safeLog(`${task.label} failed: ${message}`);
-          try { await task.fail(message); } catch { /* nothing left to do */ }
-        }
-      }
-    } finally {
-      running = false;
-      releaseIdle();
-    }
-  }
-
-  return {
-    enqueue(task: QueueTask): void {
-      pending.push(task);
-      void drain();
-    },
-    size(): number {
-      return pending.length + (running ? 1 : 0);
-    },
-    idle(): Promise<void> {
-      if (!running && !pending.length) return Promise.resolve();
-      return new Promise<void>((resolve) => { idleWaiters.push(resolve); });
-    },
-  };
-}
+// The generic serial queue lives in queue.ts; re-exported for existing callers.
+export { createQueue } from "./queue";
+export type { Queue, QueueTask } from "./queue";
 
 // ── Job timing ──────────────────────────────────────────────────────────────
 
@@ -245,19 +180,21 @@ function realLog(message: string): void {
 
 export const transcribeQueue: Queue = createQueue(realLog);
 
+// Everyone present, library attendees and guests alike, as the "Name (Title)"
+// strings speaker reconciliation chooses from.
+async function presentLabels(meetingId: number): Promise<string[]> {
+  return (await presentPeople(pool, meetingId)).map((p) => (p.title ? `${p.name} (${p.title})` : p.name));
+}
+
 async function realReconcile(job: TranscribeJob, segments: DiarizedSegment[]): Promise<SpeakerMap> {
   const item = await getAgendaItem(pool, job.itemId);
   if (!item) return {};
   const order = distinctSpeakers(segments);
   if (order.length < 2) return {};
   const meeting = await getMeeting(pool, item.meeting_id);
-  const attendeeIds = await getAttendeeIds(pool, item.meeting_id);
   const people = await listPeople(pool, true);
   const byId = new Map(people.map((p) => [p.id, p]));
-  const attendees = attendeeIds
-    .map((id) => byId.get(id))
-    .filter((p): p is NonNullable<typeof p> => !!p)
-    .map((p) => (p.title ? `${p.name} (${p.title})` : p.name));
+  const attendees = await presentLabels(item.meeting_id);
   if (!attendees.length) return {};
   const presenters = item.presenter_ids.map((id) => byId.get(id)?.name ?? "").filter(Boolean);
   return reconcileSpeakers(pool, {
@@ -328,7 +265,16 @@ const realItemDeps: QueueDeps = {
     return transcribeAudio({ fileName: job.fileName, mimeType: job.mimeType, buffer });
   },
   reconcile: realReconcile,
-  setStatus: (itemId, status, error) => setTranscribeStatus(pool, itemId, status, error ?? ""),
+  setStatus: async (itemId, status, error) => {
+    await setTranscribeStatus(pool, itemId, status, error ?? "");
+    // The new transcript needs a summary; a failure may be what a requested
+    // report was waiting on.
+    if (status === "done") await requestSummary(itemId);
+    if (status === "error") {
+      const item = await getAgendaItem(pool, itemId);
+      if (item) await advanceReport(item.meeting_id);
+    }
+  },
   saveResult: (job, segments, map) => saveTranscriptionResult(job.itemId, segments, map),
   log: realLog,
 };
@@ -385,13 +331,9 @@ async function realMeetingReconcile(job: MeetingJob, segments: DiarizedSegment[]
   if (!meeting) return {};
   const order = distinctSpeakers(segments);
   if (order.length < 2) return {};
-  const attendeeIds = await getAttendeeIds(pool, job.meetingId);
   const people = await listPeople(pool, true);
   const byId = new Map(people.map((p) => [p.id, p]));
-  const attendees = attendeeIds
-    .map((id) => byId.get(id))
-    .filter((p): p is NonNullable<typeof p> => !!p)
-    .map((p) => (p.title ? `${p.name} (${p.title})` : p.name));
+  const attendees = await presentLabels(job.meetingId);
   if (!attendees.length) return {};
   const items = await listAgendaItems(pool, job.meetingId);
   const presenters = [...new Set(
@@ -446,10 +388,19 @@ const realMeetingDeps: MeetingDeps = {
   }, {
     // Never report more voices than people marked present — and, when no one
     // is marked present, still no more than a page can sensibly show.
-    maxSpeakers: (await getAttendeeIds(pool, job.meetingId)).length || 12,
+    maxSpeakers: (await presentPeople(pool, job.meetingId)).length || 12,
   }),
   reconcile: realMeetingReconcile,
-  setStatus: (meetingId, status, error) => setMeetingRecordingStatus(pool, meetingId, status, error ?? ""),
+  setStatus: async (meetingId, status, error) => {
+    await setMeetingRecordingStatus(pool, meetingId, status, error ?? "");
+    if (status === "done") {
+      // Every topic the recording covered has a fresh, unsummarized transcript.
+      for (const it of await listAgendaItems(pool, meetingId)) {
+        if (it.transcript_source === "meeting" && itemHasContent(it) && !it.summary.trim()) await requestSummary(it.id);
+      }
+    }
+    if (status === "error") await advanceReport(meetingId);
+  },
   loadMarkers: (recordingId) => listTopicMarkers(pool, recordingId),
   fallbackItemId,
   presenterFor: (itemId) => presenterNameForItem(itemId),

@@ -32,4 +32,12 @@ export const config = {
   // volume. Recordings are kept for the life of the meeting so a transcription
   // can always be retried or the original audio downloaded.
   dataDir: process.env.MINUTES_DATA_DIR || "/data",
+  // "Open in Google Docs" reuses the hub's Google OAuth client to ask each
+  // user, once, for the drive.file scope. Unset means the button explains
+  // that export is not configured. The client must list
+  // <publicUrl>/api/google/callback as an authorized redirect URI.
+  googleClientId: process.env.GOOGLE_CLIENT_ID || "",
+  googleClientSecret: process.env.GOOGLE_CLIENT_SECRET || "",
+  publicUrl: process.env.MINUTES_PUBLIC_URL
+    || (process.env.BASE_DOMAIN ? `https://minutes.${process.env.BASE_DOMAIN}` : ""),
 };

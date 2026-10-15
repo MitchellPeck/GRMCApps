@@ -180,7 +180,12 @@ function renderMarkdown(md){
     var h=ln.match(/^(#{1,3})\s+(.*)$/);
     if(h){ closeList(); out.push('<h'+h[1].length+'>'+inline(h[2])+'</h'+h[1].length+'>'); continue; }
     var b=ln.match(/^\s*[-*]\s+(.*)$/);
-    if(b){ if(!inList){ out.push('<ul>'); inList=true; } out.push('<li>'+inline(b[1])+'</li>'); continue; }
+    if(b){
+      if(!inList){ out.push('<ul>'); inList=true; }
+      var box=b[1].match(/^\[ \]\s+(.*)$/);
+      out.push(box ? '<li class="todo">&#9744; '+inline(box[1])+'</li>' : '<li>'+inline(b[1])+'</li>');
+      continue;
+    }
     if(ln.trim()===''){ closeList(); continue; }
     closeList(); out.push('<p>'+inline(ln)+'</p>');
   }
@@ -206,7 +211,7 @@ document.querySelectorAll('.tab').forEach(function(t){
 });
 function showList(){
   stopRecording();
-  stopPolling(); state.reportPending=false;
+  stopPolling();
   // Summarize the item left open, so nothing is lost on the way out.
   if(state.openItemId && state.items){
     var open=state.items.filter(function(x){return x.id===state.openItemId;})[0];
@@ -358,7 +363,7 @@ function personName(id){ var p=state.peopleById[id]; return p ? p.name : '#'+id;
 
 function openMeeting(id){
   stopRecording();
-  stopPolling(); state.reportPending=false;
+  stopPolling();
   showDetail();
   document.getElementById('detail-body').innerHTML='<div class="empty">Loading&hellip;</div>';
   Promise.all([ api('/api/people?all=1'), api('/api/meetings/'+id) ]).then(function(r){
@@ -371,6 +376,8 @@ function openMeeting(id){
     state.items = det.items;
     state.meetingRecordings = det.meetingRecordings || [];
     state.meetingSpeakerStats = det.meetingSpeakerStats || [];
+    state.guests = det.guests || [];
+    state.report = det.report || null;
     renderDetail();
     if(anyPendingWork()) startPolling();
   });
@@ -387,8 +394,17 @@ function renderDetail(){
 
   // Attendees
   h+='<div class="card"><div class="ct">Who is present?</div>'
-    +'<div class="hint" style="margin-bottom:8px">Select attendees from the people library (add more under the People tab). Attendees become selectable as presenters below.</div>'
-    +'<div class="chips" id="attendee-chips"></div></div>';
+    +'<div class="hint" style="margin-bottom:8px">Select who is present from the people library (add more under the People tab). Anyone not selected is recorded as absent. Attendees become selectable as presenters below.</div>'
+    +'<div class="chips" id="attendee-chips"></div>'
+    +'<div class="hint" id="absent-line" style="margin-top:8px"></div>'
+    +'<div class="sublbl">Guests</div>'
+    +'<div class="hint" style="margin-bottom:6px">Visitors for this meeting only. Guests count as present and can be named as speakers.</div>'
+    +'<div class="chips" id="guest-chips"></div>'
+    +'<div id="guest-msg"></div>'
+    +'<div class="guest-add"><input type="text" id="g-name" placeholder="Guest name">'
+    +'<input type="text" id="g-title" placeholder="Role (optional)">'
+    +'<button class="btn-sm" id="btn-add-guest" data-default="Add guest">Add guest</button></div>'
+    +'</div>';
 
   // Meeting recording
   h+='<div class="card"><div class="ct">Meeting recording</div>'
@@ -419,16 +435,21 @@ function renderDetail(){
   // Report
   h+='<hr class="hr"><div class="section-title">Report</div>'
     +'<div id="report-msg"></div>'
-    +'<div class="btn-row"><button class="btn btn-gold" id="btn-report" data-default="'+(m.report?'Regenerate report':'Generate report')+'">'+(m.report?'Regenerate report':'Generate report')+'</button>'
-    +'<span id="report-actions"'+(m.report?'':' style="display:none"')+'>'
-    +'<a class="btn btn-secondary" id="btn-report-dl" href="/api/meetings/'+m.id+'/report.md" download>Download .md</a> '
-    +'<button class="btn btn-secondary" id="btn-report-print" data-default="Print / PDF">Print / PDF</button>'
+    +'<div id="report-stale"></div>'
+    +'<div class="btn-row"><button class="btn btn-gold" id="btn-report" data-default="Generate report">Generate report</button>'
+    +'<span id="report-actions" style="display:none">'
+    // A plain link in a new tab: the server sends it through Google consent
+    // if needed, then on to the new Doc, with no popup blocker involved.
+    +'<a class="btn btn-secondary" id="btn-report-gdoc" href="/api/meetings/'+m.id+'/google-doc" target="_blank" rel="noopener">Open in Google Docs</a> '
+    +'<button class="btn btn-secondary" id="btn-report-print">Print PDF</button>'
     +'</span></div>'
+    +'<div class="hint" id="report-hint">The report waits for any transcription and summaries still in progress, then writes itself. You can close this page meanwhile.</div>'
     +'<div id="report-box" style="margin-top:14px">'+(m.report?'<div class="report">'+renderMarkdown(m.report)+'</div>':'')+'</div>';
 
   document.getElementById('detail-body').innerHTML=h;
 
   renderAttendeeChips();
+  renderGuests();
   renderItems();
   renderMeetingRecUi();
   renderMeetingSpeakerPanel();
@@ -439,6 +460,10 @@ function renderDetail(){
   document.getElementById('btn-meeting-rec').addEventListener('click', toggleMeetingRecording);
   document.getElementById('btn-report').addEventListener('click', generateReport);
   document.getElementById('btn-report-print').addEventListener('click', function(){ window.print(); });
+  document.getElementById('btn-add-guest').addEventListener('click', addGuest);
+  document.getElementById('g-name').addEventListener('keydown', function(e){ if(e.key==='Enter') addGuest(); });
+  document.getElementById('g-title').addEventListener('keydown', function(e){ if(e.key==='Enter') addGuest(); });
+  renderReportState();
 }
 
 function editMeeting(){
@@ -466,6 +491,7 @@ function editMeeting(){
         document.getElementById('d-title-txt').textContent=m.title;
         document.getElementById('d-meta-txt').innerHTML=[m.meeting_date,m.location].filter(Boolean).map(esc).join(' &middot; ');
         done(null);
+        refreshReportSoon();
       }).catch(function(e){ done(e.message); });
     },
     danger: {
@@ -495,11 +521,72 @@ function renderAttendeeChips(){
   el.querySelectorAll('.chip[data-pid]').forEach(function(c){
     c.addEventListener('click', function(){ toggleAttendee(Number(c.getAttribute('data-pid'))); });
   });
+  var absent=state.people.filter(function(p){ return p.active && state.attendeeIds.indexOf(p.id)<0; });
+  var al=document.getElementById('absent-line');
+  if(al) al.textContent = absent.length ? 'Absent: '+absent.map(function(p){ return p.name; }).join(', ') : 'Everyone is present.';
+}
+
+// ── Guests ──────────────────────────────────────────────────────────────────
+function renderGuests(){
+  var el=document.getElementById('guest-chips'); if(!el) return;
+  var guests=state.guests||[];
+  el.innerHTML = guests.length ? guests.map(function(g){
+    return '<span class="chip on guest">'+esc(g.name)+(g.title?' <span class="guest-title">'+esc(g.title)+'</span>':'')
+      +' <button class="chip-x" data-gid="'+g.id+'" title="Remove '+esc(g.name)+'" aria-label="Remove '+esc(g.name)+'">&times;</button></span>';
+  }).join('') : '<span class="chip empty-hint">No guests.</span>';
+  el.querySelectorAll('[data-gid]').forEach(function(b){
+    b.addEventListener('click', function(){ removeGuest(Number(b.getAttribute('data-gid'))); });
+  });
+}
+// Guests are speaker choices, so every speaker dropdown follows the list.
+function guestsChanged(){
+  renderGuests();
+  refreshReportSoon();
+  state.items.forEach(function(it){ renderSpeakerMap(it); });
+  renderMeetingSpeakerPanel();
+}
+function addGuest(){
+  var name=v('g-name'), title=v('g-title');
+  if(!name){ msg('guest-msg','err','Enter the guest’s name.'); return; }
+  var mid=state.meeting.id;
+  setBtn('btn-add-guest', true, 'Adding…');
+  api('/api/meetings/'+mid+'/guests', { method:'POST', body:{ name:name, title:title } }).then(function(res){
+    setBtn('btn-add-guest', false);
+    if(!state.meeting || state.meeting.id!==mid) return;
+    if(!res.ok){ msg('guest-msg','err',res.error); return; }
+    msg('guest-msg','','');
+    document.getElementById('g-name').value=''; document.getElementById('g-title').value='';
+    state.guests=res.guests||[];
+    guestsChanged();
+  });
+}
+function removeGuest(gid){
+  api('/api/guests/'+gid, { method:'DELETE' }).then(function(res){
+    if(!res.ok){ msg('guest-msg','err',res.error); return; }
+    state.guests=(state.guests||[]).filter(function(g){ return g.id!==gid; });
+    guestsChanged();
+  });
+}
+
+// Names a voice can be given: attendees, then guests, each name once.
+function speakerChoices(){
+  var names=[];
+  state.attendeeIds.forEach(function(id){ var p=state.peopleById[id]; if(p && names.indexOf(p.name)<0) names.push(p.name); });
+  (state.guests||[]).forEach(function(g){ if(names.indexOf(g.name)<0) names.push(g.name); });
+  return names;
+}
+function speakerOptions(sel){
+  var names=speakerChoices();
+  var o='<option value="">— unlabeled —</option>';
+  names.forEach(function(n){ o+='<option value="'+esc(n)+'"'+(sel===n?' selected':'')+'>'+esc(n)+'</option>'; });
+  // Keep a currently-set name that is no longer offered as an option too.
+  if(sel && names.indexOf(sel)<0) o+='<option value="'+esc(sel)+'" selected>'+esc(sel)+'</option>';
+  return o;
 }
 function toggleAttendee(pid){
   var i=state.attendeeIds.indexOf(pid);
   if(i>=0) state.attendeeIds.splice(i,1); else state.attendeeIds.push(pid);
-  api('/api/meetings/'+state.meeting.id+'/attendees', { method:'PUT', body:{ personIds:state.attendeeIds } });
+  api('/api/meetings/'+state.meeting.id+'/attendees', { method:'PUT', body:{ personIds:state.attendeeIds } }).then(refreshReportSoon);
   renderAttendeeChips();
   // Both presenter chips and the speaker dropdowns are built from the attendee
   // list, so both have to be rebuilt the moment it changes.
@@ -559,6 +646,7 @@ function editItem(it){
           it.title=v.title.trim(); it.description=v.desc.trim();
           done(null);
           renderItems();
+          refreshReportSoon();
         }).catch(function(e){ done(e.message); });
     }
   });
@@ -619,7 +707,8 @@ function syncItems(fresh){
     if(!tx || document.activeElement!==tx) it.transcript=f.transcript;
     var nt=document.getElementById('nt-'+it.id);
     if(!nt || document.activeElement!==nt) it.notes=f.notes;
-    if(!it._summarizing && !it._dirty){ it.summary=f.summary; it.action_items=f.action_items; }
+    it.summary=f.summary; it.action_items=f.action_items;
+    it.summarize_status=f.summarize_status; it.summarize_error=f.summarize_error;
     refreshItemView(it);
     renderPresenterChips(it);
   });
@@ -654,7 +743,7 @@ function itemHtml(it, idx){
       +'<textarea id="tx-'+it.id+'" placeholder="Record or upload audio to transcribe. Speakers are labeled once you record; you can also edit this text." style="margin-top:6px">'+esc(it.transcript)+'</textarea>'
       +'<div class="sublbl">Notes (typed)</div>'
       +'<textarea id="nt-'+it.id+'" placeholder="Optional manual notes">'+esc(it.notes)+'</textarea>'
-      +'<div class="hint" style="margin-top:8px">The summary is generated automatically when you collapse this item or open another. Editing the transcript or notes clears it so it regenerates.</div>'
+      +'<div class="hint" style="margin-top:8px">The summary is written on the server when you close this item, or a couple of minutes after your last edit &mdash; even if you leave the page.</div>'
       +'<div class="btn-row">'
         +'<button class="btn-sm" data-edit-item="'+it.id+'">Edit item</button>'
         +'<button class="btn btn-danger btn-sm" data-del-item="'+it.id+'">Remove item</button>'
@@ -678,9 +767,10 @@ function itemBadgeInner(it){
   if(it.transcribe_status==='queued') return '<span class="badge b-pending">Queued to transcribe</span>';
   if(it.transcribe_status==='processing') return '<span class="badge b-pending"><span class="spin" style="border-top-color:var(--pending-fg)"></span> Transcribing&hellip;</span>';
   if(it.transcribe_status==='error') return '<span class="badge b-rejected">Transcription failed</span>';
-  if(it._summarizing) return '<span class="badge b-pending"><span class="spin" style="border-top-color:var(--pending-fg)"></span> Summarizing&hellip;</span>';
-  if(it._summaryError) return '<span class="badge b-rejected">Summary failed</span>';
-  if(it.summary && !it._dirty) return '<span class="badge b-approved">Summary ready</span>';
+  if(it.summarize_status==='processing') return '<span class="badge b-pending"><span class="spin" style="border-top-color:var(--pending-fg)"></span> Summarizing&hellip;</span>';
+  if(it.summarize_status==='queued') return '<span class="badge b-pending">Summary queued</span>';
+  if(it.summarize_status==='error') return '<span class="badge b-rejected" title="'+esc(it.summarize_error)+'">Summary failed</span>';
+  if(it.summary) return '<span class="badge b-approved">Summary ready</span>';
   if(itemHasContent(it)) return '<span class="badge b-changes_requested">Needs summary</span>';
   return '';
 }
@@ -691,6 +781,7 @@ function refreshBadge(it){
 // Rendered summary + action-item list for an item.
 function summaryHtml(it){
   var h='';
+  if(it.summarize_status==='error' && it.summarize_error) h+='<div class="alert alert-err" style="margin-top:8px">'+esc(it.summarize_error)+'</div>';
   if(it.summary) h+='<div class="sublbl">Summary</div><div class="summary-box">'+esc(it.summary)+'</div>';
   h+=actionItemsHtml(it.action_items);
   return h;
@@ -746,27 +837,31 @@ function collapseItem(it){
   summarizeIfNeeded(it);
 }
 
-// Content changed → the existing summary is stale. Clear it (locally + server)
-// and mark the item so it regenerates when collapsed / another item opens.
+// Content changed → the existing summary is stale. The server clears it and
+// queues a fresh one when it saves the change; mirror that here at once.
 function invalidateSummary(it){
-  it._dirty=true; it._summaryError=false;
-  if(it.summary || (it.action_items && it.action_items.length)){
-    it.summary=''; it.action_items=[];
-    var sumEl=document.getElementById('sum-'+it.id); if(sumEl) sumEl.innerHTML='';
-    saveItemField(it, { summary:'', actionItems:[], status:'pending' });
-  }
+  it.summary=''; it.action_items=[]; it.summarize_status='queued'; it.summarize_error='';
+  var sumEl=document.getElementById('sum-'+it.id); if(sumEl) sumEl.innerHTML='';
   refreshBadge(it);
+  startPolling();
 }
 
-// Generate the summary when there is something to summarize AND no
-// transcription is pending for this item. A queued or in-flight transcription
-// always wins: summarizing now would describe a transcript about to change.
+// Ask the server to summarize now rather than after the edit delay. A queued
+// or in-flight transcription always wins: the server summarizes once it lands.
 function summarizeIfNeeded(it){
   if(isTranscribing(it) || meetingProcessing()) return Promise.resolve();
   if(!itemHasContent(it)) return Promise.resolve();
-  if(it.summary && !it._dirty) return Promise.resolve();
-  if(it._summarizing) return it._summarizing;
-  return autoSummarize(it);
+  if(it.summary || it.summarize_status==='processing') return Promise.resolve();
+  it.summarize_status='queued'; refreshBadge(it);
+  var mid=state.meeting && state.meeting.id;
+  return api('/api/items/'+it.id+'/summarize', { method:'POST' }).then(function(res){
+    if(!state.meeting || state.meeting.id!==mid) return;
+    if(!res.ok){
+      it.summarize_status='error'; it.summarize_error=res.error||'Could not queue the summary.';
+      refreshItemView(it); return;
+    }
+    startPolling();
+  });
 }
 
 // Speaker assignments arrive one dropdown at a time, so wait for the user to
@@ -784,43 +879,6 @@ function scheduleSummarize(it, delayMs){
 function clearScheduledSummaries(){
   Object.keys(summarizeTimers).forEach(function(k){ clearTimeout(summarizeTimers[k]); });
   summarizeTimers={};
-}
-
-// Summarize every item that has content, one at a time so a ten-topic agenda
-// queues against the API rather than firing ten calls at once. Items whose
-// summary is still current are skipped by summarizeIfNeeded.
-function summarizeAllItems(){
-  clearScheduledSummaries();
-  var ids=(state.items||[]).map(function(it){ return it.id; });
-  var chain=Promise.resolve();
-  ids.forEach(function(id){
-    chain=chain.then(function(){
-      var live=(state.items||[]).filter(function(x){ return x.id===id; })[0];
-      return live ? summarizeIfNeeded(live) : null;
-    });
-  });
-  return chain;
-}
-
-// Generate the summary + action items for one item. Returns a promise and
-// stores it on it._summarizing so concurrent triggers coalesce.
-function autoSummarize(it){
-  it._summarizing = saveItemField(it, { transcript: it.transcript, notes: it.notes })
-    .then(function(){ refreshBadge(it); return api('/api/items/'+it.id+'/summarize', { method:'POST' }); })
-    .then(function(res){
-      it._summarizing=null;
-      if(!res.ok){ it._summaryError=true; refreshBadge(it); var im=document.getElementById('imsg-'+it.id); if(im) im.innerHTML='<span style="color:var(--rej-fg);font-size:12px">'+esc(res.error)+'</span>'; return; }
-      it.summary=res.summary; it.action_items=res.actionItems||[]; it._dirty=false; it._summaryError=false; it.status='done';
-      var sumEl=document.getElementById('sum-'+it.id); if(sumEl) sumEl.innerHTML=summaryHtml(it);
-      // Auto-linked people from action items may have joined the meeting / this item.
-      if(res.attendeeIds){ state.attendeeIds=res.attendeeIds; renderAttendeeChips(); }
-      if(res.presenterIds){ it.presenter_ids=res.presenterIds; }
-      state.items.forEach(function(x){ renderPresenterChips(x); });
-      refreshBadge(it);
-    })
-    .catch(function(e){ it._summarizing=null; it._summaryError=true; refreshBadge(it); });
-  refreshBadge(it);
-  return it._summarizing;
 }
 
 // ── Speaker → person mapping ────────────────────────────────────────────────
@@ -864,14 +922,7 @@ function renderSpeakerMap(it){
   }
   var stats=it.speaker_stats||[];
   if(!stats.length){ el.innerHTML=''; return; }
-  var attendees=state.attendeeIds.map(function(id){ return state.peopleById[id]; }).filter(Boolean);
-  var opts=function(sel){
-    var o='<option value="">— unlabeled —</option>';
-    attendees.forEach(function(p){ o+='<option value="'+esc(p.name)+'"'+(sel===p.name?' selected':'')+'>'+esc(p.name)+'</option>'; });
-    // Keep a currently-set name that isn't in the attendee list as an option too.
-    if(sel && attendees.every(function(p){return p.name!==sel;})) o+='<option value="'+esc(sel)+'" selected>'+esc(sel)+'</option>';
-    return o;
-  };
+  var opts=speakerOptions;
   el.innerHTML='<div class="sublbl">Who is speaking?</div><div class="spk-rows">'
     + stats.map(function(st){
         var cur=(it.speaker_map||{})[st.speaker]||'';
@@ -958,13 +1009,7 @@ function renderMeetingSpeakerPanel(){
   // Samples are on the processed recording's timeline, so they can be played.
   var recs=state.meetingRecordings||[];
   var recId=recs.length ? recs[recs.length-1].id : null;
-  var attendees=state.attendeeIds.map(function(id){ return state.peopleById[id]; }).filter(Boolean);
-  var opts=function(sel){
-    var o='<option value="">— unlabeled —</option>';
-    attendees.forEach(function(p){ o+='<option value="'+esc(p.name)+'"'+(sel===p.name?' selected':'')+'>'+esc(p.name)+'</option>'; });
-    if(sel && attendees.every(function(p){return p.name!==sel;})) o+='<option value="'+esc(sel)+'" selected>'+esc(sel)+'</option>';
-    return o;
-  };
+  var opts=speakerOptions;
   el.innerHTML='<div class="card"><div class="ct">Who spoke in this meeting?</div>'
     +'<div id="mspk-msg"></div>'
     +'<div class="spk-rows">'
@@ -1006,12 +1051,10 @@ function renderMeetingSpeakerPanel(){
             syncItems(det.items);
           }
           renderMeetingSpeakerPanel();
-          msg('mspk-msg','ok','Speakers saved — transcripts updated. Rewriting summaries…');
-          // Saving the map rewrote every meeting-sourced transcript server-side
-          // and cleared their summaries, so regenerate them all now.
-          return summarizeAllItems().then(function(){
-            if(state.meeting && state.meeting.id===mid) msg('mspk-msg','ok','Speakers saved — transcripts and summaries updated.');
-          });
+          // The server cleared every meeting-sourced summary and queued them
+          // again; the poll shows them landing.
+          msg('mspk-msg','ok','Speakers saved — transcripts updated. Summaries are being rewritten.');
+          startPolling();
         });
       })['catch'](function(e){ savingMspk=false; setBtn('btn-save-mspk', false); msg('mspk-msg','err',e.message); });
   });
@@ -1059,7 +1102,7 @@ function renderPresenterChips(it){
       var pid=Number(c.getAttribute('data-pp'));
       var i=it.presenter_ids.indexOf(pid);
       if(i>=0) it.presenter_ids.splice(i,1); else it.presenter_ids.push(pid);
-      saveItemField(it, { presenterIds: it.presenter_ids });
+      saveItemField(it, { presenterIds: it.presenter_ids }).then(refreshReportSoon);
       renderPresenterChips(it);
     });
   });
@@ -1077,6 +1120,7 @@ function removeItem(it){
     if(!res || !res.ok){ msg('imsg-'+it.id,'err',(res && res.error) || 'Could not remove the item.'); return; }
     state.items=state.items.filter(function(x){ return x.id!==it.id; });
     renderItems();
+    refreshReportSoon();
   })['catch'](function(e){ msg('imsg-'+it.id,'err',e.message); });
 }
 
@@ -1473,6 +1517,10 @@ function finalizeMeetingRecording(){
 // ── Status polling ──────────────────────────────────────────────────────────
 // Runs only while a meeting is open AND something is queued or transcribing.
 var pollTimer=null, pollGen=0;
+// Extra rounds after something settles: the server queues the follow-on
+// summary a moment after the transcription finishes, and the poll must not
+// stop in that gap.
+var pollGrace=0;
 
 function anyTranscribing(){
   return state.items.some(function(it){ return isTranscribing(it); });
@@ -1483,14 +1531,18 @@ function meetingProcessing(){
   var m=state.meeting;
   return !!m && (m.recording_status==='queued' || m.recording_status==='processing');
 }
-function anyPendingWork(){ return anyTranscribing() || meetingProcessing(); }
+function anySummarizing(){
+  return state.items.some(function(it){ return it.summarize_status==='queued' || it.summarize_status==='processing'; });
+}
+function reportPending(){ return !!(state.report && state.report.status==='pending'); }
+function anyPendingWork(){ return anyTranscribing() || meetingProcessing() || anySummarizing() || reportPending() || pollGrace>0; }
 
 // Bumping pollGen invalidates every in-flight poll response: openMeeting and
 // showList both call this on navigation, so a fetch started for the meeting
 // you just left can never re-arm the timer or clobber the meeting you're
 // looking at now with stale data.
 function stopPolling(){
-  pollGen++;
+  pollGen++; pollGrace=0;
   if(pollTimer){ clearTimeout(pollTimer); pollTimer=null; }
   // Both callers are navigations. A debounced summarize queued against the
   // meeting being left must not fire against the one being opened.
@@ -1516,16 +1568,28 @@ function pollOnce(){
     }
     var meetingSettled = wasMeetingBusy && !meetingProcessing();
     if(res.meeting && state.meeting) renderMeetingRecUi();
-    var settled=[];
+    if(pollGrace>0) pollGrace--;
+    var settled=[], summariesLanded=false;
     res.items.forEach(function(s){
       var it=state.items.filter(function(x){ return x.id===s.id; })[0];
       if(!it) return;
       var was=it.transcribe_status;
       it.transcribe_status=s.transcribeStatus;
       it.transcribe_error=s.transcribeError;
+      var wasSummarizing=it.summarize_status==='queued' || it.summarize_status==='processing';
+      it.summarize_status=s.summarizeStatus;
+      it.summarize_error=s.summarizeError;
+      if(wasSummarizing && s.summarizeStatus!=='queued' && s.summarizeStatus!=='processing') summariesLanded=true;
       if((was==='queued'||was==='processing') && !isTranscribing(it)) settled.push(it);
       else refreshItemView(it);
     });
+    if(res.guests && JSON.stringify(res.guests)!==JSON.stringify(state.guests||[])){
+      state.guests=res.guests; guestsChanged();
+    }
+    var reportWasPending=reportPending();
+    if(res.report){ state.report=res.report; }
+    var reportLanded=reportWasPending && !reportPending();
+    if(!reportLanded) renderReportState();
     // Attendees can change behind our back: another user, or auto-linked people
     // from action items. Keep the chips and the speaker dropdowns honest.
     if(res.attendeeIds && res.attendeeIds.join(',')!==state.attendeeIds.join(',')){
@@ -1533,9 +1597,10 @@ function pollOnce(){
       renderAttendeeChips();
       state.items.forEach(function(x){ renderPresenterChips(x); renderSpeakerMap(x); });
     }
-    if(!settled.length && !meetingSettled){ afterPollRound(); return; }
-    // Something finished — pull the full detail so we get segments, speaker map
-    // and the rendered transcript, then decide about summaries.
+    if(settled.length || meetingSettled) pollGrace=2;
+    if(!settled.length && !meetingSettled && !summariesLanded && !reportLanded){ afterPollRound(); return; }
+    // Something finished — pull the full detail so we get segments, speaker
+    // map, rendered transcripts, new summaries, and any finished report.
     return api('/api/meetings/'+state.meeting.id).then(function(det){
       if(gen!==pollGen) return;
       if(det.ok){
@@ -1545,78 +1610,99 @@ function pollOnce(){
         syncItems(det.items);
         renderMeetingRecUi();
         if(typeof renderMeetingSpeakerPanel==='function') renderMeetingSpeakerPanel();
+        state.guests = det.guests || state.guests;
+        if(det.report) state.report = det.report;
+        if(reportLanded && state.report.status==='idle' && det.meeting.report){
+          showReport(det.meeting.report);
+          msg('report-msg','ok','Report generated.');
+        }
+        renderReportState();
         settled.forEach(function(it){
           var live=state.items.filter(function(x){ return x.id===it.id; })[0];
-          if(live) onTranscriptionSettled(live);
+          if(live) refreshItemView(live);
         });
-        // A whole-meeting recording writes transcripts straight to every topic
-        // it covered, without those topics ever passing through queued /
-        // processing — so none of them appear in `settled` and nothing above
-        // summarizes them. Summarize the whole agenda once processing lands.
-        if(meetingSettled && state.meeting.recording_status==='done'){
-          summarizeAllItems();
-        }
+        // Summaries of the new transcripts are queued by the server itself.
       }
       afterPollRound();
     });
   }).catch(function(){ if(gen===pollGen && anyPendingWork()) startPolling(); });
 }
 
-// Keep polling while work remains; once the queue drains, honour a pending
-// "Generate report" click by re-invoking it automatically.
+// Keep polling while work remains on the server.
 function afterPollRound(){
-  if(anyPendingWork()){ startPolling(); return; }
-  if(state.reportPending){ state.reportPending=false; generateReport(); }
-}
-
-// A transcription just finished. Its content is new, so any old summary is
-// stale. If the topic is CLOSED, summarize it now — this is the deferred
-// auto-summary the user asked for. If it is open, leave it: closing it will.
-function onTranscriptionSettled(it){
-  if(it.transcribe_status==='error'){ refreshItemView(it); return; }
-  it._dirty=true; it._summaryError=false;
-  refreshItemView(it);
-  if(state.openItemId!==it.id) summarizeIfNeeded(it);
+  if(anyPendingWork()) startPolling();
 }
 
 // ── Report ──────────────────────────────────────────────────────────────────
 // Every item with content must be summarized first. Collapse the open item and
 // summarize any pending items, then write the report.
 function generateReport(){
-  setBtn('btn-report', true, 'Preparing…');
   if(state.openItemId){ var open=state.items.filter(function(x){return x.id===state.openItemId;})[0]; if(open) collapseItem(open); }
-  var busy=state.items.filter(function(it){ return isTranscribing(it); });
-  if(busy.length || meetingProcessing()){
-    // Wait for the queue: the poller re-invokes generateReport once the last
-    // transcription settles, so the user clicks once and the report follows.
-    msg('report-msg','info','Waiting for processing to finish&hellip;');
-    setBtn('btn-report', true, 'Waiting…');
-    state.reportPending=true;
-    startPolling();
-    return;
-  }
-  var pending=state.items.filter(function(it){ return itemHasContent(it) && (!it.summary || it._dirty || it._summarizing); });
-  if(pending.length) msg('report-msg','info','Summarizing '+pending.length+' item'+(pending.length===1?'':'s')+' before the report…');
-  var chain=Promise.resolve();
-  pending.forEach(function(it){ chain=chain.then(function(){ return summarizeIfNeeded(it); }); });
-  chain.then(function(){
-    // Bail if any item still failed to summarize.
-    var failed=state.items.filter(function(it){ return it._summaryError; });
-    if(failed.length){ setBtn('btn-report', false); msg('report-msg','err','Some items could not be summarized. Fix those, then try again.'); return null; }
+  setBtn('btn-report', true, 'Starting…');
+  var mid=state.meeting.id;
+  api('/api/meetings/'+mid+'/report', { method:'POST' }).then(function(res){
+    if(!state.meeting || state.meeting.id!==mid) return;
+    if(!res.ok){ setBtn('btn-report', false); msg('report-msg','err',res.error); return; }
+    state.report=res.report;
+    if(typeof res.markdown==='string'){ showReport(res.markdown); msg('report-msg','ok','Report generated.'); }
+    renderReportState();
+    if(reportPending()) startPolling();
+  });
+}
+
+function showReport(markdown){
+  state.meeting.report=markdown;
+  document.getElementById('report-box').innerHTML='<div class="report">'+renderMarkdown(markdown)+'</div>';
+}
+
+// The report controls follow the server: generating, failed, or ready — and,
+// when ready, whether it still matches the item summaries.
+// Edits that change what the report would say (attendance, guests, titles,
+// presenters) re-check whether the saved report is still current. Debounced:
+// a run of chip clicks costs one request.
+var reportRefreshTimer=null;
+function refreshReportSoon(){
+  if(!state.meeting || !state.meeting.report) return;
+  if(reportRefreshTimer) clearTimeout(reportRefreshTimer);
+  var mid=state.meeting.id;
+  reportRefreshTimer=setTimeout(function(){
+    reportRefreshTimer=null;
+    api('/api/meetings/'+mid+'/status').then(function(res){
+      if(!res.ok || !state.meeting || state.meeting.id!==mid || !res.report) return;
+      state.report=res.report; renderReportState();
+    });
+  }, 600);
+}
+
+function renderReportState(){
+  var btn=document.getElementById('btn-report'); if(!btn || !state.meeting) return;
+  var r=state.report||{ status:'idle', error:'', changes:[] };
+  var has=!!state.meeting.report;
+  var ra=document.getElementById('report-actions'); if(ra) ra.style.display = has ? '' : 'none';
+  btn.setAttribute('data-default', has ? 'Regenerate report' : 'Generate report');
+  if(r.status==='pending'){
     setBtn('btn-report', true, 'Generating…');
-    msg('report-msg','info','Writing the meeting report with AI…');
-    return api('/api/meetings/'+state.meeting.id+'/report', { method:'POST' });
-  }).then(function(res){
-    if(!res){ return; }
+    var waiting=state.items.filter(function(it){ return isTranscribing(it) || it.summarize_status==='queued' || it.summarize_status==='processing'; }).length;
+    msg('report-msg','info', meetingProcessing() ? 'Waiting for the meeting recording to finish processing…'
+      : waiting ? 'Waiting for '+waiting+' item'+(waiting===1?'':'s')+' to finish transcribing or summarizing…'
+      : 'Writing the report…');
+  } else {
     setBtn('btn-report', false);
-    if(!res.ok){ msg('report-msg','err',res.error); return; }
-    msg('report-msg','ok','Report generated.');
-    state.meeting.report=res.report;
-    document.getElementById('report-box').innerHTML='<div class="report">'+renderMarkdown(res.report)+'</div>';
-    document.getElementById('btn-report').setAttribute('data-default','Regenerate report');
-    document.getElementById('btn-report').textContent='Regenerate report';
-    var ra=document.getElementById('report-actions'); if(ra) ra.style.display='';
-  }).catch(function(e){ setBtn('btn-report', false); msg('report-msg','err',e.message); });
+    var cur=document.getElementById('report-msg');
+    if(r.status==='error') msg('report-msg','err',r.error||'The report could not be generated.');
+    else if(cur && /alert-(info|err)/.test(cur.innerHTML)) msg('report-msg','','');
+  }
+  var st=document.getElementById('report-stale');
+  if(st){
+    var changes=(has && r.status!=='pending') ? (r.changes||[]) : [];
+    st.innerHTML = changes.length
+      ? '<div class="alert alert-warn"><strong>This report is out of date.</strong> Since it was generated'
+        +(r.generatedAt?' ('+esc(fmtDate(r.generatedAt))+')':'')+':<ul>'
+        +changes.map(function(c){ return '<li>'+esc(c)+'</li>'; }).join('')
+        +'</ul>Regenerate it to bring it up to date.</div>'
+      : (has && r.status!=='pending' ? '<div class="hint report-current">Up to date with the agenda item summaries'
+        +(r.generatedAt?' &middot; generated '+esc(fmtDate(r.generatedAt)):'')+'.</div>' : '');
+  }
 }
 
 // ── Boot ────────────────────────────────────────────────────────────────────

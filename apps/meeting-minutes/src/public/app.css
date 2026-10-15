@@ -165,3 +165,14 @@ body.has-rec-banner{padding-top:44px}
 .spk-excerpts li { line-height: 1.45; color: var(--text, inherit); }
 .spk-excerpts .spk-at { font-variant-numeric: tabular-nums; color: var(--muted, #64748b); margin-right: 2px; }
 .spk-excerpts .spk-play { padding: 1px 7px; margin-right: 6px; font-size: 11px; line-height: 1.4; }
+
+/* Guests: per-meeting attendees outside the people library. */
+.chip.guest{cursor:default}
+.chip.guest .guest-title{opacity:.75;font-size:11.5px}
+.chip-x{border:none;background:none;color:inherit;cursor:pointer;font-size:15px;line-height:1;padding:0 0 0 2px;opacity:.8}
+.chip-x:hover{opacity:1}
+.guest-add{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;align-items:center}
+.guest-add input{flex:1 1 160px;min-width:0}
+.report li.todo{list-style:none;margin-left:-18px}
+.report-current{margin-bottom:6px}
+.alert ul{margin:6px 0 6px 18px}

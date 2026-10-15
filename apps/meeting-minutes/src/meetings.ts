@@ -22,6 +22,9 @@ export interface MeetingRow {
   recording_status: MeetingRecordingStatus;
   recording_error: string;
   speaker_map: SpeakerMap;
+  report_status: ReportStatus;
+  report_error: string;
+  report_sources: Record<string, string>;
   created_by_email: string;
   created_by_name: string;
   created_at: string;
@@ -29,6 +32,8 @@ export interface MeetingRow {
 }
 
 export type TranscribeStatus = "idle" | "queued" | "processing" | "done" | "error";
+export type SummarizeStatus = "idle" | "queued" | "processing" | "error";
+export type ReportStatus = "idle" | "pending" | "error";
 
 export interface AgendaItem {
   id: number;
@@ -45,6 +50,8 @@ export interface AgendaItem {
   action_items: ActionItem[];
   transcribe_status: TranscribeStatus;
   transcribe_error: string;
+  summarize_status: SummarizeStatus;
+  summarize_error: string;
   speaker_stats: SpeakerStat[];
   transcript_source: string;
   presenter_ids: number[];
@@ -66,6 +73,8 @@ function mapItemRow(row: any, presenterIds: number[]): AgendaItem {
     action_items: Array.isArray(row.action_items) ? row.action_items : [],
     transcribe_status: (row.transcribe_status ?? "idle") as TranscribeStatus,
     transcribe_error: row.transcribe_error ?? "",
+    summarize_status: (row.summarize_status ?? "idle") as SummarizeStatus,
+    summarize_error: row.summarize_error ?? "",
     speaker_stats: speakerStats(Array.isArray(row.transcript_segments) ? row.transcript_segments : []),
     transcript_source: row.transcript_source ?? "",
     presenter_ids: presenterIds,
@@ -116,6 +125,9 @@ export async function getMeeting(pool: Pool, id: number): Promise<MeetingRow | n
     recording_status: (row.recording_status ?? "idle") as MeetingRecordingStatus,
     recording_error: row.recording_error ?? "",
     speaker_map: row.speaker_map && typeof row.speaker_map === "object" ? row.speaker_map : {},
+    report_status: (row.report_status ?? "idle") as ReportStatus,
+    report_error: row.report_error ?? "",
+    report_sources: row.report_sources && typeof row.report_sources === "object" ? row.report_sources : {},
   };
 }
 
@@ -178,6 +190,63 @@ export async function setAttendees(pool: Pool, meetingId: number, personIds: num
 export async function getAttendeeIds(pool: Pool, meetingId: number): Promise<number[]> {
   const r = await pool.query("SELECT person_id FROM meeting_attendees WHERE meeting_id = $1", [meetingId]);
   return r.rows.map((row) => Number(row.person_id));
+}
+
+// ── Guests ──────────────────────────────────────────────────────────────────
+
+export interface Guest {
+  id: number;
+  meeting_id: number;
+  name: string;
+  title: string;
+}
+
+export async function listGuests(pool: Pool, meetingId: number): Promise<Guest[]> {
+  const r = await pool.query(
+    "SELECT id, meeting_id, name, title FROM meeting_guests WHERE meeting_id = $1 ORDER BY id",
+    [meetingId]
+  );
+  return r.rows.map((row) => ({ id: Number(row.id), meeting_id: Number(row.meeting_id), name: row.name, title: row.title }));
+}
+
+export async function addGuest(
+  pool: Pool,
+  meetingId: number,
+  name: string,
+  title: string
+): Promise<Result<{ id: number }>> {
+  const n = name.trim();
+  if (!n) return { ok: false, status: 400, error: "A guest name is required." };
+  const dup = await pool.query(
+    "SELECT 1 FROM meeting_guests WHERE meeting_id = $1 AND lower(name) = lower($2)",
+    [meetingId, n]
+  );
+  if (dup.rows[0]) return { ok: false, status: 400, error: `${n} is already a guest at this meeting.` };
+  const r = await pool.query(
+    "INSERT INTO meeting_guests (meeting_id, name, title) VALUES ($1, $2, $3) RETURNING id",
+    [meetingId, n, title.trim()]
+  );
+  await pool.query("UPDATE meetings SET updated_at = now() WHERE id = $1", [meetingId]);
+  return { ok: true, status: 200, id: Number(r.rows[0].id) };
+}
+
+export async function removeGuest(pool: Pool, guestId: number): Promise<void> {
+  await pool.query("DELETE FROM meeting_guests WHERE id = $1", [guestId]);
+}
+
+// Everyone who can be named as a speaker: library attendees, then guests, as
+// "Name (Title)" strings. A guest sharing an attendee's name is listed once.
+export async function presentPeople(pool: Pool, meetingId: number): Promise<Array<{ name: string; title: string }>> {
+  const attendeeIds = new Set(await getAttendeeIds(pool, meetingId));
+  const people = (await listPeople(pool, true)).filter((p) => attendeeIds.has(p.id));
+  const out = people.map((p) => ({ name: p.name, title: p.title }));
+  const seen = new Set(out.map((p) => p.name.trim().toLowerCase()));
+  for (const g of await listGuests(pool, meetingId)) {
+    if (seen.has(g.name.trim().toLowerCase())) continue;
+    seen.add(g.name.trim().toLowerCase());
+    out.push({ name: g.name, title: g.title });
+  }
+  return out;
 }
 
 // ── Agenda items ────────────────────────────────────────────────────────────
@@ -369,11 +438,53 @@ export function reportFileName(title: string, meetingDate: string): string {
   return `${parts.join("-")}-minutes.md`;
 }
 
-export async function saveReport(pool: Pool, meetingId: number, report: string): Promise<void> {
+export async function saveReport(
+  pool: Pool,
+  meetingId: number,
+  report: string,
+  sources: Record<string, string> = {}
+): Promise<void> {
   await pool.query(
-    "UPDATE meetings SET report = $2, report_generated_at = now(), status = 'completed', updated_at = now() WHERE id = $1",
-    [meetingId, report]
+    `UPDATE meetings
+        SET report = $2, report_sources = $3, report_generated_at = now(), status = 'completed',
+            report_status = 'idle', report_error = '', updated_at = now()
+      WHERE id = $1`,
+    [meetingId, report, JSON.stringify(sources)]
   );
+}
+
+// Any status other than `error` clears the stored error message.
+export async function setReportStatus(pool: Pool, meetingId: number, status: ReportStatus, error = ""): Promise<void> {
+  await pool.query(
+    "UPDATE meetings SET report_status = $2, report_error = CASE WHEN $2 = 'error' THEN $3 ELSE '' END WHERE id = $1",
+    [meetingId, status, error]
+  );
+}
+
+export async function listPendingReports(pool: Pool): Promise<number[]> {
+  const r = await pool.query("SELECT id FROM meetings WHERE report_status = 'pending' ORDER BY id");
+  return r.rows.map((row) => Number(row.id));
+}
+
+// ── Summary job state ───────────────────────────────────────────────────────
+
+export async function setSummarizeStatus(
+  pool: Pool,
+  itemId: number,
+  status: SummarizeStatus,
+  error = ""
+): Promise<void> {
+  await pool.query(
+    "UPDATE agenda_items SET summarize_status = $2, summarize_error = CASE WHEN $2 = 'error' THEN $3 ELSE '' END WHERE id = $1",
+    [itemId, status, error]
+  );
+}
+
+export async function listUnfinishedSummaries(pool: Pool): Promise<number[]> {
+  const r = await pool.query(
+    "SELECT id FROM agenda_items WHERE summarize_status IN ('queued','processing') ORDER BY id"
+  );
+  return r.rows.map((row) => Number(row.id));
 }
 
 // ── Transcription job state ─────────────────────────────────────────────────
@@ -411,9 +522,12 @@ export async function listUnfinishedTranscriptions(pool: Pool): Promise<number[]
 export async function listItemStatuses(
   pool: Pool,
   meetingId: number
-): Promise<Array<{ id: number; transcribeStatus: TranscribeStatus; transcribeError: string; hasSummary: boolean }>> {
+): Promise<Array<{
+  id: number; transcribeStatus: TranscribeStatus; transcribeError: string; hasSummary: boolean;
+  summarizeStatus: SummarizeStatus; summarizeError: string;
+}>> {
   const r = await pool.query(
-    `SELECT id, transcribe_status, transcribe_error, (summary <> '') AS has_summary
+    `SELECT id, transcribe_status, transcribe_error, (summary <> '') AS has_summary, summarize_status, summarize_error
        FROM agenda_items WHERE meeting_id = $1 ORDER BY position, id`,
     [meetingId]
   );
@@ -422,6 +536,8 @@ export async function listItemStatuses(
     transcribeStatus: (row.transcribe_status ?? "idle") as TranscribeStatus,
     transcribeError: row.transcribe_error ?? "",
     hasSummary: !!row.has_summary,
+    summarizeStatus: (row.summarize_status ?? "idle") as SummarizeStatus,
+    summarizeError: row.summarize_error ?? "",
   }));
 }
 

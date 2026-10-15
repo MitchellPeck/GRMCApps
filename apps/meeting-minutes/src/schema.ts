@@ -129,4 +129,44 @@ CREATE TABLE IF NOT EXISTS topic_markers (
 CREATE INDEX IF NOT EXISTS topic_markers_recording_idx ON topic_markers (recording_id, at_seconds);
 
 CREATE INDEX IF NOT EXISTS agenda_items_meeting_idx ON agenda_items (meeting_id, position);
+
+-- Summaries and the report are produced on the server, so they finish whether
+-- or not anyone still has the meeting open.
+ALTER TABLE agenda_items ADD COLUMN IF NOT EXISTS summarize_status text NOT NULL DEFAULT 'idle';
+ALTER TABLE agenda_items ADD COLUMN IF NOT EXISTS summarize_error text NOT NULL DEFAULT '';
+ALTER TABLE meetings ADD COLUMN IF NOT EXISTS report_status text NOT NULL DEFAULT 'idle';
+ALTER TABLE meetings ADD COLUMN IF NOT EXISTS report_error text NOT NULL DEFAULT '';
+-- Fingerprints of what the saved report was built from (see report.ts).
+ALTER TABLE meetings ADD COLUMN IF NOT EXISTS report_sources jsonb NOT NULL DEFAULT '{}';
+
+-- People at one meeting who are not in the library: visitors, speakers.
+-- Guests are present by definition.
+CREATE TABLE IF NOT EXISTS meeting_guests (
+  id          bigserial PRIMARY KEY,
+  meeting_id  bigint NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+  name        text NOT NULL,
+  title       text NOT NULL DEFAULT '',
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS meeting_guests_meeting_idx ON meeting_guests (meeting_id, id);
+
+-- Google Drive access per signed-in user, for "Open in Google Docs". The
+-- drive.file scope only reaches files this app created.
+CREATE TABLE IF NOT EXISTS google_tokens (
+  email          text PRIMARY KEY,
+  refresh_token  text NOT NULL,
+  access_token   text NOT NULL DEFAULT '',
+  expires_at     timestamptz,
+  updated_at     timestamptz NOT NULL DEFAULT now()
+);
+
+-- The Doc last exported from each user's copy of a report, so opening it again
+-- does not make a duplicate until the report is regenerated.
+CREATE TABLE IF NOT EXISTS report_docs (
+  meeting_id    bigint NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+  email         text NOT NULL,
+  doc_url       text NOT NULL,
+  report_at     timestamptz NOT NULL,
+  PRIMARY KEY (meeting_id, email)
+);
 `;

@@ -3,19 +3,25 @@ import { createReadStream, existsSync } from "node:fs";
 import { extname } from "node:path";
 import { pool } from "../db";
 import { getIdentity } from "../identity";
-import { listPeople, peopleNamedIn } from "../people";
+import { config } from "../config";
+import { extractAgendaItems, isSupportedAgendaType } from "../claude";
+import { reportHtml } from "../report";
 import {
-  extractAgendaItems, isSupportedAgendaType, summarizeItem, generateReport,
-} from "../claude";
+  EDIT_SUMMARY_DELAY_MS, itemHasContent, reportState, requestReport, requestSummary,
+} from "../minutesWork";
+import {
+  GoogleClient, NeedsConsentError, accessToken, consentUrl, createDoc, exchangeCode, finishConsent, startConsent,
+} from "../google";
 import { hasAudioExtension } from "../whisper";
 import { speakerStats } from "../speakers";
 import { extractClip } from "../chunking";
 import {
   createMeeting, listMeetings, getMeeting, updateMeeting, deleteMeeting,
   setAttendees, getAttendeeIds, replaceAgendaItems, addAgendaItem,
-  listAgendaItems, getAgendaItem, updateAgendaItem, deleteAgendaItem, saveReport,
+  listAgendaItems, getAgendaItem, updateAgendaItem, deleteAgendaItem,
   setTranscribeStatus, listItemStatuses, reportFileName,
   setMeetingRecordingStatus, addTopicMarker, rewriteMeetingSpeakerMap,
+  listGuests, addGuest, removeGuest,
 } from "../meetings";
 import { enqueueTranscription, enqueueStoredRecording, enqueueMeetingProcessing } from "../transcribeQueue";
 import {
@@ -49,10 +55,25 @@ function uploadErrorResponse(reply: FastifyReply, e: unknown): { ok: false; erro
   return { ok: false, error: (e as Error).message };
 }
 
-// Names for a set of person ids, in library order — used to build AI prompts.
-async function nameMap(): Promise<Map<number, string>> {
-  const people = await listPeople(pool, true);
-  return new Map(people.map((p) => [p.id, p.name]));
+function googleClient(): GoogleClient | null {
+  if (!config.googleClientId || !config.googleClientSecret || !config.publicUrl) return null;
+  return {
+    clientId: config.googleClientId,
+    clientSecret: config.googleClientSecret,
+    redirectUri: `${config.publicUrl}/api/google/callback`,
+  };
+}
+
+// A minimal page for the Google Docs tab when something goes wrong: that tab
+// was opened just for the export, so a JSON error there would be a dead end.
+function messagePage(reply: FastifyReply, status: number, title: string, text: string): FastifyReply {
+  const e = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return reply.code(status).type("text/html; charset=utf-8").send(
+    `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${e(title)}</title>`
+    + `<link rel="stylesheet" href="/assets/grmc.css"></head>`
+    + `<body style="padding:32px;max-width:640px;margin:auto"><h2>${e(title)}</h2><p>${e(text)}</p>`
+    + `<p><a href="/">Back to Meeting Minutes</a></p></body></html>`
+  );
 }
 
 export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
@@ -82,6 +103,8 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
       items: withRecordings,
       meetingRecordings: await listMeetingRecordings(pool, id),
       meetingSpeakerStats,
+      guests: await listGuests(pool, id),
+      report: await reportState(pool, meeting),
     };
   });
 
@@ -138,6 +161,23 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
     return { ok: true };
   });
 
+  // Guests: people at this one meeting who are not in the library.
+  app.post("/api/meetings/:id/guests", async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    if (!Number.isFinite(id) || !(await getMeeting(pool, id))) { reply.code(404); return { ok: false, error: "Meeting not found." }; }
+    const b = (req.body ?? {}) as { name?: string; title?: string };
+    const r = await addGuest(pool, id, b.name ?? "", b.title ?? "");
+    if (!r.ok) { reply.code(r.status); return r; }
+    return { ok: true, id: r.id, guests: await listGuests(pool, id) };
+  });
+
+  app.delete("/api/guests/:gid", async (req, reply) => {
+    const gid = Number((req.params as { gid: string }).gid);
+    if (!Number.isSafeInteger(gid) || gid <= 0) { reply.code(400); return { ok: false, error: "Invalid guest id." }; }
+    await removeGuest(pool, gid);
+    return { ok: true };
+  });
+
   // Save the meeting-wide speaker→name map and re-render every meeting-sourced
   // topic against it (one transaction; see rewriteMeetingSpeakerMap).
   app.put("/api/meetings/:id/speaker-map", async (req, reply) => {
@@ -152,6 +192,10 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
       return { ok: false, error: "speakerMap must be an object." };
     }
     await rewriteMeetingSpeakerMap(pool, id, b.speakerMap as Record<string, unknown>);
+    // The rewrite cleared every meeting-sourced summary; write them again.
+    for (const it of await listAgendaItems(pool, id)) {
+      if (it.transcript_source === "meeting" && itemHasContent(it)) await requestSummary(it.id);
+    }
     return { ok: true };
   });
 
@@ -192,6 +236,17 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
   app.patch("/api/items/:itemId", async (req, reply) => {
     const itemId = Number((req.params as { itemId: string }).itemId);
     const b = (req.body ?? {}) as any;
+    const existing = await getAgendaItem(pool, itemId);
+    if (!existing) { reply.code(404); return { ok: false, error: "Agenda item not found." }; }
+    // New words or new speaker names make the summary stale. Clear it and
+    // summarize again once the edits settle, whether or not the page stays open.
+    const contentChanged =
+      (typeof b.transcript === "string" && b.transcript !== existing.transcript)
+      || (typeof b.notes === "string" && b.notes !== existing.notes)
+      || (typeof b.appendTranscript === "string" && !!b.appendTranscript.trim())
+      || (!!b.speakerMap && typeof b.speakerMap === "object"
+        && JSON.stringify(b.speakerMap) !== JSON.stringify(existing.speaker_map));
+    if (contentChanged) { b.summary = ""; b.actionItems = []; b.status = "pending"; }
     const r = await updateAgendaItem(pool, itemId, {
       title: b.title,
       description: b.description,
@@ -204,8 +259,9 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
       actionItems: Array.isArray(b.actionItems) ? b.actionItems : undefined,
       presenterIds: b.presenterIds ? (b.presenterIds as any[]).map(Number) : undefined,
     });
-    if (!r.ok) reply.code(r.status);
-    return r;
+    if (!r.ok) { reply.code(r.status); return r; }
+    if (contentChanged) await requestSummary(itemId, EDIT_SUMMARY_DELAY_MS);
+    return { ...r, summaryQueued: contentChanged };
   });
 
   app.delete("/api/items/:itemId", async (req, reply) => {
@@ -358,7 +414,9 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
       ok: true,
       items: await listItemStatuses(pool, id),
       attendeeIds: await getAttendeeIds(pool, id),
+      guests: await listGuests(pool, id),
       meeting: { recordingStatus: meeting.recording_status, recordingError: meeting.recording_error },
+      report: await reportState(pool, meeting),
     };
   });
 
@@ -418,80 +476,98 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
-  // Summarize a single agenda item with Claude.
+  // Summarize one agenda item now (the browser asks when an item is closed).
+  // Queued on the server; the status poll reports when it lands.
   app.post("/api/items/:itemId/summarize", async (req, reply) => {
+    const itemId = Number((req.params as { itemId: string }).itemId);
+    const item = Number.isFinite(itemId) ? await getAgendaItem(pool, itemId) : null;
+    if (!item) { reply.code(404); return { ok: false, error: "Agenda item not found." }; }
+    if (!itemHasContent(item)) return { ok: true, status: "idle" };
+    await requestSummary(itemId);
+    reply.code(202);
+    return { ok: true, status: "queued" };
+  });
+
+  // Generate (or regenerate) the report. It waits on the server for any
+  // transcription and summaries still to come, then writes itself.
+  app.post("/api/meetings/:id/report", async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    const meeting = Number.isFinite(id) ? await getMeeting(pool, id) : null;
+    if (!meeting) { reply.code(404); return { ok: false, error: "Meeting not found." }; }
+    const items = await listAgendaItems(pool, id);
+    if (!items.length) { reply.code(422); return { ok: false, error: "Add agenda items before generating a report." }; }
+    await requestReport(id);
+    const after = await getMeeting(pool, id);
+    if (!after) { reply.code(404); return { ok: false, error: "Meeting not found." }; }
+    return {
+      ok: true,
+      report: await reportState(pool, after),
+      markdown: after.report_status === "idle" ? after.report : undefined,
+    };
+  });
+
+  // "Open in Google Docs": opened in its own tab. Sends the user through
+  // Google consent the first time, then creates the Doc and redirects to it.
+  app.get("/api/meetings/:id/google-doc", async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    const meeting = Number.isFinite(id) ? await getMeeting(pool, id) : null;
+    if (!meeting) return messagePage(reply, 404, "Meeting not found", "That meeting no longer exists.");
+    if (!meeting.report || !meeting.report_generated_at) {
+      return messagePage(reply, 404, "No report yet", "Generate the report first, then open it in Google Docs.");
+    }
+    const client = googleClient();
+    if (!client) {
+      return messagePage(reply, 503, "Google Docs export is not set up",
+        "The server needs GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET and BASE_DOMAIN. Ask the administrator.");
+    }
+    const { email } = getIdentity(req);
+    if (!email) return messagePage(reply, 401, "Not signed in", "Sign in through the GRMC hub and try again.");
+
+    // The same report opened twice goes to the same Doc.
+    const existing = await pool.query(
+      "SELECT doc_url FROM report_docs WHERE meeting_id = $1 AND email = $2 AND report_at = $3",
+      [id, email, meeting.report_generated_at]
+    );
+    if (existing.rows[0]) return reply.redirect(existing.rows[0].doc_url);
+
     try {
-      const itemId = Number((req.params as { itemId: string }).itemId);
-      const item = await getAgendaItem(pool, itemId);
-      if (!item) { reply.code(404); return { ok: false, error: "Agenda item not found." }; }
-      const meeting = await getMeeting(pool, item.meeting_id);
-      const names = await nameMap();
-      const result = await summarizeItem(pool, {
-        meetingTitle: meeting?.title ?? "",
-        itemTitle: item.title,
-        itemDescription: item.description,
-        presenters: item.presenter_ids.map((pid) => names.get(pid) ?? "").filter(Boolean),
-        notes: item.notes,
-        transcript: item.transcript,
-      });
-
-      // Link people named in the action items: if an action item names someone
-      // in the library, ensure they're a meeting attendee and a presenter of
-      // this item.
-      const people = await listPeople(pool, true);
-      const named = new Set<number>();
-      for (const ai of result.actionItems) {
-        peopleNamedIn(`${ai.owner} ${ai.task}`, people).forEach((pid) => named.add(pid));
-      }
-      let attendeeIds = await getAttendeeIds(pool, item.meeting_id);
-      let presenterIds = item.presenter_ids.slice();
-      if (named.size) {
-        const attSet = new Set(attendeeIds);
-        named.forEach((pid) => attSet.add(pid));
-        if (attSet.size !== attendeeIds.length) { attendeeIds = [...attSet]; await setAttendees(pool, item.meeting_id, attendeeIds); }
-        const presSet = new Set(presenterIds);
-        named.forEach((pid) => presSet.add(pid));
-        presenterIds = [...presSet];
-      }
-
-      await updateAgendaItem(pool, itemId, { summary: result.summary, actionItems: result.actionItems, status: "done", presenterIds });
-      return { ok: true, summary: result.summary, actionItems: result.actionItems, attendeeIds, presenterIds };
+      const token = await accessToken(pool, client, email);
+      const name = [meeting.title, "Minutes", meeting.meeting_date].filter(Boolean).join(" — ");
+      const url = await createDoc(token, name, reportHtml(meeting.report, name));
+      await pool.query(
+        `INSERT INTO report_docs (meeting_id, email, doc_url, report_at) VALUES ($1, $2, $3, $4)
+         ON CONFLICT (meeting_id, email) DO UPDATE SET doc_url = $3, report_at = $4`,
+        [id, email, url, meeting.report_generated_at]
+      );
+      return reply.redirect(url);
     } catch (e) {
-      reply.code(400);
-      return { ok: false, error: (e as Error).message };
+      if (e instanceof NeedsConsentError) return reply.redirect(consentUrl(client, startConsent(email, id), email));
+      req.log.error(e, `google doc export failed for meeting ${id}`);
+      return messagePage(reply, 502, "Could not create the Google Doc", (e as Error).message);
     }
   });
 
-  // Generate (or regenerate) the full meeting report.
-  app.post("/api/meetings/:id/report", async (req, reply) => {
-    try {
-      const id = Number((req.params as { id: string }).id);
-      const meeting = await getMeeting(pool, id);
-      if (!meeting) { reply.code(404); return { ok: false, error: "Meeting not found." }; }
-      const items = await listAgendaItems(pool, id);
-      if (!items.length) { reply.code(422); return { ok: false, error: "Add agenda items before generating a report." }; }
-      const names = await nameMap();
-      const attendeeIds = await getAttendeeIds(pool, id);
-      const report = await generateReport(pool, {
-        title: meeting.title,
-        meetingDate: meeting.meeting_date,
-        location: meeting.location,
-        attendees: attendeeIds.map((pid) => names.get(pid) ?? "").filter(Boolean),
-        items: items.map((it) => ({
-          title: it.title,
-          presenters: it.presenter_ids.map((pid) => names.get(pid) ?? "").filter(Boolean),
-          summary: it.summary,
-          notes: it.notes,
-          transcript: it.transcript,
-          actionItems: it.action_items,
-        })),
-      });
-      await saveReport(pool, id, report);
-      return { ok: true, report };
-    } catch (e) {
-      reply.code(400);
-      return { ok: false, error: (e as Error).message };
+  // Google sends the user back here after consent.
+  app.get("/api/google/callback", async (req, reply) => {
+    const q = req.query as { code?: string; state?: string; error?: string };
+    const client = googleClient();
+    if (!client) return messagePage(reply, 503, "Google Docs export is not set up", "Ask the administrator.");
+    const { email } = getIdentity(req);
+    const meetingId = q.state ? finishConsent(q.state, email) : null;
+    if (q.error) {
+      return messagePage(reply, 400, "Google Drive access was not granted",
+        "Without it the report cannot be saved to Google Docs. Close this tab, or try the button again.");
     }
+    if (meetingId === null || !q.code) {
+      return messagePage(reply, 400, "That sign-in link has expired", "Close this tab and click “Open in Google Docs” again.");
+    }
+    try {
+      await exchangeCode(pool, client, email, q.code);
+    } catch (e) {
+      req.log.error(e, "google consent exchange failed");
+      return messagePage(reply, 502, "Could not connect Google Drive", (e as Error).message);
+    }
+    return reply.redirect(`/api/meetings/${meetingId}/google-doc`);
   });
 
   // Download the generated report as a Markdown file.

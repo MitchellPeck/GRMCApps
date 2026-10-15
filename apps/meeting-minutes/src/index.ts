@@ -10,6 +10,7 @@ import { peopleRoutes } from "./routes/people";
 import { meetingsRoutes } from "./routes/meetings";
 import { recoverPendingJobs, recoverPendingMeetingJobs } from "./transcribeQueue";
 import { warmUpWhisper } from "./whisper";
+import { recoverMinutesWork } from "./minutesWork";
 
 const app = Fastify({ logger: true, trustProxy: true, bodyLimit: 2 * 1024 * 1024 });
 
@@ -30,6 +31,8 @@ async function start() {
   if (recovered || recoveredMeetings) {
     app.log.info(`re-queued ${recovered} item and ${recoveredMeetings} meeting transcription job(s)`);
   }
+  const recoveredAi = await recoverMinutesWork();
+  if (recoveredAi) app.log.info(`resumed ${recoveredAi} summary/report job(s)`);
   await app.listen({ host: "0.0.0.0", port: config.port });
   app.log.info(`meeting-minutes listening on ${config.port}`);
 
