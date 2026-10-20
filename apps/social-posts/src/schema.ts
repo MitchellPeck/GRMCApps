@@ -163,4 +163,16 @@ ALTER TABLE media_assets ADD COLUMN IF NOT EXISTS approval_title text NOT NULL D
 CREATE INDEX IF NOT EXISTS media_assets_gather_date_idx ON media_assets (gather_date);
 CREATE INDEX IF NOT EXISTS media_assets_item_idx ON media_assets (content_item_id);
 CREATE INDEX IF NOT EXISTS media_assets_status_idx ON media_assets (status);
+
+-- Drafting profiles (docs/superpowers/specs/2026-10-20-pipeline-as-main-app-design.md):
+-- an event's profile, and the overrides a recurring post or a post may carry.
+ALTER TABLE events ADD COLUMN IF NOT EXISTS drafting jsonb NOT NULL DEFAULT '{}';
+ALTER TABLE recurrences ADD COLUMN IF NOT EXISTS drafting jsonb NOT NULL DEFAULT '{}';
+ALTER TABLE content_items ADD COLUMN IF NOT EXISTS drafting jsonb NOT NULL DEFAULT '{}';
+-- The source item a post was drafted from (a campaign, an episode, or pasted text).
+ALTER TABLE content_items ADD COLUMN IF NOT EXISTS source_ref jsonb;
+ALTER TABLE content_items ADD COLUMN IF NOT EXISTS phase text NOT NULL DEFAULT '';
+-- Draft history: which post a draft belongs to.
+ALTER TABLE post_drafts ADD COLUMN IF NOT EXISTS content_item_id text;
+CREATE INDEX IF NOT EXISTS post_drafts_item_idx ON post_drafts (content_item_id);
 `;

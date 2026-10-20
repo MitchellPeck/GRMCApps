@@ -13,6 +13,7 @@ import {
 import { propagate } from "./recurring";
 import { describeRule } from "./recurrence";
 import { captionWarnings, imageRuleError } from "./platforms";
+import { Override, Profile, SourceRef } from "./drafting";
 
 // Hand `date` columns back as "YYYY-MM-DD" strings. pg's default turns them
 // into a JS Date at local midnight — exactly the one-day drift these calendar
@@ -29,6 +30,7 @@ export interface EventRow {
   id: string; name: string; kind: string; color: string;
   startDate: string | null; endDate: string | null; seriesId: string | null;
   ownerEmail: string; notes: string; archived: boolean;
+  drafting: Profile;
   itemCount?: number;
 }
 
@@ -37,6 +39,7 @@ export interface ContentRow {
   platforms: string[]; publishDate: string | null; publishTime: string | null; status: ContentStatus;
   ownerEmail: string; brief: string; caption: string; noMediaNeeded: boolean;
   captionMode: "same" | "separate"; captions: Record<string, string>;
+  drafting: Override; sourceRef: SourceRef | null; phase: string;
   seriesId: string | null; postIdx: number | null; draftId: number | null; draftKey: string;
   mediaTotal: number; mediaDone: number;
   recurrenceId: string | null; occurrenceDate: string | null; detached: boolean;
@@ -55,6 +58,7 @@ function eventOf(r: any): EventRow {
     id: r.id, name: r.name, kind: r.kind, color: r.color,
     startDate: r.start_date, endDate: r.end_date, seriesId: r.series_id,
     ownerEmail: r.owner_email, notes: r.notes, archived: r.archived,
+    drafting: r.drafting || {},
   };
   if (r.item_count != null) e.itemCount = Number(r.item_count);
   return e;
@@ -69,7 +73,8 @@ function contentOf(r: any): ContentRow {
     eventName: r.event_name || "", eventColor: r.event_color || "", eventKind: r.event_kind || "",
     platforms: r.platforms || [], publishDate: r.publish_date, publishTime: hhmm(r.publish_time),
     status: r.status, ownerEmail: r.owner_email, brief: r.brief, caption: r.caption,
-    noMediaNeeded: r.no_media_needed, captionMode: r.caption_mode || "same", captions: r.captions || {}, seriesId: r.series_id,
+    noMediaNeeded: r.no_media_needed, captionMode: r.caption_mode || "same", captions: r.captions || {},
+    drafting: r.drafting || {}, sourceRef: r.source_ref ?? null, phase: r.phase || "", seriesId: r.series_id,
     postIdx: r.post_idx == null ? null : Number(r.post_idx),
     draftId: r.draft_id == null ? null : Number(r.draft_id), draftKey: r.draft_key,
     mediaTotal: Number(r.media_total || 0), mediaDone: Number(r.media_done || 0),
@@ -122,7 +127,7 @@ function setClause(patch: Record<string, unknown>, columns: Record<string, strin
 
 const EVENT_COLUMNS: Record<string, string> = {
   name: "name", kind: "kind", color: "color", startDate: "start_date", endDate: "end_date",
-  ownerEmail: "owner_email", notes: "notes", archived: "archived",
+  ownerEmail: "owner_email", notes: "notes", archived: "archived", drafting: "drafting",
 };
 
 export async function nextEventColor(db: Db): Promise<string> {
@@ -257,6 +262,7 @@ const CONTENT_COLUMNS: Record<string, string> = {
   title: "title", eventId: "event_id", platforms: "platforms", publishDate: "publish_date",
   publishTime: "publish_time", status: "status", ownerEmail: "owner_email", brief: "brief",
   caption: "caption", noMediaNeeded: "no_media_needed", captionMode: "caption_mode", captions: "captions",
+  drafting: "drafting", sourceRef: "source_ref", phase: "phase",
 };
 
 async function eventExists(db: Db, id: string | null | undefined): Promise<boolean> {
@@ -275,18 +281,19 @@ export async function createContent(db: Db, input: ContentInput, createdBy: stri
   if (!gate.ok) return gate;
   const r = await db.query(
     `INSERT INTO content_items (title, event_id, platforms, publish_date, publish_time, status, owner_email,
-                                brief, caption, no_media_needed, caption_mode, captions, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
+                                brief, caption, no_media_needed, caption_mode, captions, drafting, source_ref, phase, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id`,
     [input.title, input.eventId ?? null, input.platforms ?? DEFAULT_PLATFORMS, input.publishDate ?? null,
      input.publishTime ?? null, status, input.ownerEmail || "", input.brief || "", input.caption || "",
-     !!input.noMediaNeeded, input.captionMode || "same", input.captions || {}, createdBy],
+     !!input.noMediaNeeded, input.captionMode || "same", input.captions || {}, input.drafting || {},
+     input.sourceRef ?? null, input.phase || "", createdBy],
   );
   return { ok: true, value: (await getContentRow(db, r.rows[0].id))! };
 }
 
 // Fields a recurring post's template sets. Changing one on a single
 // occurrence detaches it, so later series-wide edits leave it alone.
-const TEMPLATE_KEYS: Array<keyof ContentInput> = ["title", "brief", "eventId", "platforms", "ownerEmail", "publishTime", "noMediaNeeded", "publishDate"];
+const TEMPLATE_KEYS: Array<keyof ContentInput> = ["title", "brief", "eventId", "platforms", "ownerEmail", "publishTime", "noMediaNeeded", "publishDate", "drafting"];
 
 /**
  * scope "future" (recurring posts only): the template fields in this change
@@ -322,7 +329,7 @@ export async function updateContent(
       for (const k of TEMPLATE_KEYS) if (k !== "publishDate" && k in input) tpl[k] = (input as Record<string, unknown>)[k];
       const map: Record<string, string> = {
         title: "title", brief: "brief", eventId: "event_id", platforms: "platforms", ownerEmail: "owner_email",
-        publishTime: "publish_time", noMediaNeeded: "no_media_needed",
+        publishTime: "publish_time", noMediaNeeded: "no_media_needed", drafting: "drafting",
       };
       const keys = Object.keys(tpl);
       if (keys.length) {

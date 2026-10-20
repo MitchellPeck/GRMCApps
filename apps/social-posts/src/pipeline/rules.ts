@@ -4,6 +4,7 @@
 // status or date the server accepts is exactly what these functions accept.
 import { addDays } from "../dates";
 import { PLATFORMS } from "./config";
+import { Override, Profile, SourceRef, parseOverride, parseProfile, parseSourceRef } from "./drafting";
 
 export const CONTENT_STATUSES = ["idea", "planned", "drafted", "ready", "scheduled", "published", "cancelled"] as const;
 export const MEDIA_STATUSES = ["needed", "scheduled", "captured", "edited"] as const;
@@ -100,6 +101,7 @@ export interface ContentInput {
   /** "same": `caption` goes everywhere. "separate": `captions[platform]` each. */
   captionMode?: typeof CAPTION_MODES[number];
   captions?: Record<string, string>;
+  drafting?: Override; sourceRef?: SourceRef | null; phase?: string;
 }
 
 export function parseContentInput(raw: unknown, mode: "create" | "patch"): Result<ContentInput> {
@@ -148,6 +150,9 @@ export function parseContentInput(raw: unknown, mode: "create" | "patch"): Resul
     ["eventId", eventId],
     ["captionMode", optEnum(body, "captionMode", "Caption mode", CAPTION_MODES)],
     ["captions", captions],
+    ["drafting", "drafting" in body ? parseOverride(body.drafting) : undefined],
+    ["sourceRef", "sourceRef" in body ? parseSourceRef(body.sourceRef) : undefined],
+    ["phase", optText(body, "phase", "Phase", 200)],
     ["platforms", platforms],
     ["publishDate", optDate(body, "publishDate", "Publish date")],
     ["publishTime", publishTime],
@@ -235,6 +240,7 @@ export function resolveMediaStatus(
 export interface EventInput {
   name?: string; kind?: string; color?: string; startDate?: string | null; endDate?: string | null;
   ownerEmail?: string; notes?: string; archived?: boolean;
+  drafting?: Profile;
 }
 
 export function parseEventInput(raw: unknown, mode: "create" | "patch"): Result<EventInput> {
@@ -254,6 +260,7 @@ export function parseEventInput(raw: unknown, mode: "create" | "patch"): Result<
     ["ownerEmail", optEmail(body, "ownerEmail", "Owner")],
     ["notes", optText(body, "notes", "Notes")],
     ["archived", optBool(body, "archived", "Archived")],
+    ["drafting", "drafting" in body ? parseProfile(body.drafting) : undefined],
   ]);
   if (err) return fail(err);
   if (("name" in out || mode === "create") && !out.name) return fail("Give the event a name.");

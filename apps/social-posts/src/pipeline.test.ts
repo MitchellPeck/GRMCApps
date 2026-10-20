@@ -6,7 +6,7 @@ import { savePostDrafts } from "./drafts";
 import { createSeries, getSeriesPosts, updateSeriesPostField, updateSeriesMeta } from "./series";
 import {
   createContent, createEvent, createMedia, dashboardGaps, deleteContent, deleteEvent, getContent,
-  getEvent, listContent, listMedia, updateContent, updateMedia,
+  getEvent, listContent, listMedia, updateContent, updateEvent, updateMedia,
 } from "./pipeline/repo";
 import { BACKFILL_SETTING, backfillOnce, markSentToMetricool, recordRunDrafts } from "./pipeline/sync";
 import { RUN_EVENTS } from "./pipeline/config";
@@ -431,4 +431,25 @@ test("Draft with Claude writes one caption per platform and keeps X under 280", 
     globalThis.fetch = realFetch;
     await pool.query("DELETE FROM settings WHERE key = 'anthropic_api_key'");
   }
+});
+
+test("profiles and overrides are stored, and a recurrence's override reaches its posts", async () => {
+  const ev = await createEvent(pool, { name: "Newsletter", kind: "department" });
+  const upd = await updateEvent(pool, ev.id, { drafting: { source: { kind: "mailchimp", subjectContains: "youth news", cutoff: "postDate" }, instructions: "Tease it." } });
+  assert.ok(upd.ok);
+  assert.deepEqual(upd.value.drafting.source, { kind: "mailchimp", subjectContains: "youth news", cutoff: "postDate" });
+
+  const post = await createContent(pool, { title: "Youth news", publishDate: "2026-11-06", eventId: ev.id, platforms: ["facebook"],
+    drafting: { instructions: "Just this one." }, sourceRef: { kind: "manual", content: "Pasted" }, phase: "Part 1" }, "me@x.org");
+  assert.ok(post.ok);
+  assert.equal(post.value.drafting.instructions, "Just this one.");
+  assert.equal(post.value.sourceRef?.kind, "manual");
+  assert.equal(post.value.phase, "Part 1");
+
+  const r = await createRecurrence(pool, { title: "Saturday invite", platforms: ["facebook"], drafting: { instructions: "Invite." }, rule: weekly([6]) }, "me@x.org", REF);
+  assert.ok(r.ok);
+  const first = (await occ(r.value.id))[0];
+  assert.deepEqual(first.drafting, { instructions: "Invite." }, "copied onto each occurrence");
+  await updateRecurrence(pool, r.value.id, { drafting: { instructions: "Invite warmly." } }, REF);
+  assert.deepEqual((await occ(r.value.id))[0].drafting, { instructions: "Invite warmly." }, "series edits reach untouched posts");
 });

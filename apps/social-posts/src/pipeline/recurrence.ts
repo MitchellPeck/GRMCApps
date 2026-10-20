@@ -4,6 +4,7 @@
 import { addDays } from "../dates";
 import { isIsoDate, MEDIA_TYPES, Result } from "./rules";
 import { PLATFORMS } from "./config";
+import { Override, parseOverride } from "./drafting";
 
 export const FREQS = ["weekly", "monthly_date", "monthly_weekday"] as const;
 export type Freq = typeof FREQS[number];
@@ -124,6 +125,7 @@ export interface RecurrenceInput {
   title?: string; brief?: string; eventId?: string | null; platforms?: string[];
   publishTime?: string | null; ownerEmail?: string; noMediaNeeded?: boolean;
   mediaTemplate?: MediaTemplateItem[]; active?: boolean;
+  drafting?: Override;
   rule?: Rule;
 }
 
@@ -202,6 +204,11 @@ export function parseRecurrenceInput(raw: unknown, mode: "create" | "patch"): Re
       items.push({ description: description.slice(0, 500), type: m.type, assigneeEmail, offsetDays });
     }
     out.mediaTemplate = items;
+  }
+  if ("drafting" in b) {
+    const d = parseOverride(b.drafting);
+    if (!d.ok) return d;
+    out.drafting = d.value;
   }
   if ("rule" in b || mode === "create") {
     const rule = parseRule(b.rule);
