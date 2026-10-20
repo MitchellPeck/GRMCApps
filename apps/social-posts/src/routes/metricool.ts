@@ -6,12 +6,15 @@ import { getMetricoolCreds, listBrands, normalizeMedia, schedulePost, buildSched
 import { logSend } from "../metricool-sends";
 import { listApprovedImages, getApprovedImageBytes } from "../approvals-client";
 import { decodeImageDataUrl, getR2Creds, uploadPublic } from "../r2";
+import { markSentToMetricool } from "../pipeline/sync";
 
 interface SendBody {
   text: string; networks: string[]; dateTime: string; timezone: string;
   imageUrl?: string; approvedImageId?: string; sourceType?: string; sourceRef?: string;
   /** A browser-uploaded image, as a `data:image/...;base64,...` URL. */
   imageData?: string;
+  /** The pipeline post this text came from, so a successful send can mark it Scheduled. */
+  contentItemId?: string;
 }
 
 // What went into the send log's image column: the approved-image id, the pasted
@@ -77,6 +80,8 @@ export async function metricoolRoutes(app: FastifyInstance): Promise<void> {
         networks: networks.join(","), imageRef: imageRefOf(b), r2Url: mediaUrl,
         scheduledFor: b.dateTime, timezone: b.timezone, metricoolPostId: postId, status: "sent", error: "", createdBy: email,
       });
+      // Pipeline bookkeeping must never turn a successful send into an error.
+      if (b.contentItemId) await markSentToMetricool(pool, b.contentItemId, b.dateTime).catch((e) => req.log.warn(e));
       return { ok: true, metricoolPostId: postId, scheduledFor: b.dateTime, warnings, note, autoPublish: payload.autoPublish };
     } catch (e) {
       await logSend(pool, {

@@ -56,4 +56,67 @@ CREATE TABLE IF NOT EXISTS metricool_sends (
   created_by        text NOT NULL DEFAULT '',
   created_at        timestamptz NOT NULL DEFAULT now()
 );
+
+-- Content pipeline (docs/superpowers/specs/2026-10-20-content-pipeline-design.md).
+-- Purely additive: nothing above is altered. Dates are plain calendar dates so
+-- a post never slides a day through a timezone conversion.
+CREATE TABLE IF NOT EXISTS events (
+  id          text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  name        text NOT NULL,
+  kind        text NOT NULL DEFAULT 'event' CHECK (kind IN ('event','department','series')),
+  color       text NOT NULL DEFAULT '#092D3E',
+  start_date  date,
+  end_date    date,
+  series_id   text UNIQUE REFERENCES series(id) ON DELETE SET NULL,
+  owner_email text NOT NULL DEFAULT '',
+  notes       text NOT NULL DEFAULT '',
+  archived    boolean NOT NULL DEFAULT false,
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS content_items (
+  id              text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  title           text NOT NULL,
+  event_id        text REFERENCES events(id) ON DELETE SET NULL,
+  platforms       text[] NOT NULL DEFAULT '{}',
+  publish_date    date,
+  publish_time    time,
+  status          text NOT NULL DEFAULT 'idea'
+                  CHECK (status IN ('idea','planned','drafted','ready','scheduled','published','cancelled')),
+  owner_email     text NOT NULL DEFAULT '',
+  brief           text NOT NULL DEFAULT '',
+  caption         text NOT NULL DEFAULT '',
+  no_media_needed boolean NOT NULL DEFAULT false,
+  series_id       text,
+  post_idx        integer,
+  draft_id        bigint REFERENCES post_drafts(id) ON DELETE SET NULL,
+  draft_key       text NOT NULL DEFAULT '',
+  created_by      text NOT NULL DEFAULT '',
+  created_at      timestamptz NOT NULL DEFAULT now(),
+  updated_at      timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (series_id, post_idx),
+  FOREIGN KEY (series_id, post_idx) REFERENCES series_posts(series_id, post_idx) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS content_items_publish_date_idx ON content_items (publish_date);
+CREATE INDEX IF NOT EXISTS content_items_event_idx ON content_items (event_id);
+CREATE INDEX IF NOT EXISTS content_items_status_idx ON content_items (status);
+
+CREATE TABLE IF NOT EXISTS media_assets (
+  id              text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  content_item_id text NOT NULL REFERENCES content_items(id) ON DELETE CASCADE,
+  description     text NOT NULL,
+  type            text NOT NULL DEFAULT 'photo'
+                  CHECK (type IN ('photo','video','graphic','audio','interview','other')),
+  gather_date     date,
+  gather_location text NOT NULL DEFAULT '',
+  assignee_email  text NOT NULL DEFAULT '',
+  status          text NOT NULL DEFAULT 'needed' CHECK (status IN ('needed','scheduled','captured','edited')),
+  file_link       text NOT NULL DEFAULT '',
+  notes           text NOT NULL DEFAULT '',
+  created_at      timestamptz NOT NULL DEFAULT now(),
+  updated_at      timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS media_assets_gather_date_idx ON media_assets (gather_date);
+CREATE INDEX IF NOT EXISTS media_assets_item_idx ON media_assets (content_item_id);
+CREATE INDEX IF NOT EXISTS media_assets_status_idx ON media_assets (status);
 `;

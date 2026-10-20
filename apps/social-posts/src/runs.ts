@@ -6,6 +6,7 @@ import { savePostDrafts } from "./drafts";
 import { podcastScheduleDates, scheduleDatesFor } from "./schedule";
 import { Episode, getEpisode } from "./buzzsprout";
 import { anglesBlock, jsonKeysHint, selectAngles } from "./podcast-angles";
+import { recordRunDrafts } from "./pipeline/sync";
 
 // What the UI needs to caption a fetched campaign without re-deriving it.
 function campaignSummary(c: CampaignContent | null) {
@@ -14,6 +15,23 @@ function campaignSummary(c: CampaignContent | null) {
     status: c.status, isDraft: c.isDraft, dateLine: c.dateLine,
     issueDate: c.issueDate, sentAt: c.sentAt, createdAt: c.createdAt,
   };
+}
+
+// Each run's drafts also land in the content pipeline as Drafted items. That is
+// bookkeeping on top of the run, so a failure there is reported, never fatal —
+// the drafts themselves are already saved and returned.
+async function landInPipeline(
+  pool: Pool, run: string, posts: Record<string, string>, ids: Record<string, number>,
+  dates: Record<string, string>, titles: Record<string, string>, createdBy: string,
+): Promise<{ items: Record<string, string>; pipelineError: string | null }> {
+  try {
+    const drafts = Object.keys(posts).map((key) => ({
+      key, text: posts[key], date: dates[key] || "", draftId: ids[key], title: titles[key] || key,
+    }));
+    return { items: await recordRunDrafts(pool, run, drafts, createdBy), pipelineError: null };
+  } catch (e) {
+    return { items: {}, pipelineError: (e as Error).message };
+  }
 }
 
 export async function draftWedPosts(pool: Pool, params: any, createdBy: string): Promise<any> {
@@ -39,11 +57,13 @@ export async function draftWedPosts(pool: Pool, params: any, createdBy: string):
       "Anticipatory invite for " + sundayLabel + " service. Warm, specific to what is happening. Should make someone who has not been in a while feel welcomed back."];
     const sys = 'You draft social media posts for Grace Resurrection Methodist Church (GRMC) in Marietta, GA. Return ONLY a JSON object with keys "wednesday" and "saturday" each a string. No markdown fences, just valid JSON.';
     const posts = JSON.parse(stripJsonFences(await callClaude(pool, sys, lines.join("\n"))));
-    await savePostDrafts(pool, "wednesday", params.sundayDate || "", posts, createdBy);
+    const ids = await savePostDrafts(pool, "wednesday", params.sundayDate || "", posts, createdBy);
+    const dates = await scheduleDatesFor(pool, Object.keys(posts));
+    const titles = { wednesday: subject ? "Grace Notes: " + subject : "Grace Notes", saturday: "Sunday invite & preview" };
     return {
       ok: true, posts, mailchimpFetched: !!graceNotes, mailchimpError, archiveUrl, subject,
-      campaign: campaignSummary(graceNotes),
-      dates: await scheduleDatesFor(pool, Object.keys(posts)),
+      campaign: campaignSummary(graceNotes), dates,
+      ...(await landInPipeline(pool, "wednesday", posts, ids, dates, titles, createdBy)),
     };
   } catch (e) { return { ok: false, error: (e as Error).message }; }
 }
@@ -72,11 +92,14 @@ export async function draftFridayPost(pool: Pool, params: any, createdBy: string
     ];
     const sys = 'You draft social media posts for Grace Resurrection Methodist Church (GRMC) in Marietta, GA. Return ONLY a JSON object with key "friday" containing the post text string. No markdown fences, just valid JSON.';
     const posts = JSON.parse(stripJsonFences(await callClaude(pool, sys, lines.join("\n"))));
-    await savePostDrafts(pool, "friday", params.date || "", posts, createdBy);
+    const ids = await savePostDrafts(pool, "friday", params.date || "", posts, createdBy);
+    const dates = await scheduleDatesFor(pool, Object.keys(posts));
+    const blogTitle = subject || params.subject || "";
+    const titles = { friday: blogTitle ? "Blog: " + blogTitle : "Weekly blog" };
     return {
       ok: true, posts, mailchimpFetched: !!blog, mailchimpError, archiveUrl, subject,
-      campaign: campaignSummary(blog),
-      dates: await scheduleDatesFor(pool, Object.keys(posts)),
+      campaign: campaignSummary(blog), dates,
+      ...(await landInPipeline(pool, "friday", posts, ids, dates, titles, createdBy)),
     };
   } catch (e) { return { ok: false, error: (e as Error).message }; }
 }
@@ -125,11 +148,14 @@ export async function draftPodcastPosts(pool: Pool, params: any, createdBy: stri
       + `Return ONLY a JSON object with keys ${jsonKeysHint(angles)}, each a string holding that post's text. `
       + "No markdown fences, just valid JSON.";
     const posts = JSON.parse(stripJsonFences(await callClaude(pool, sys, lines.join("\n"))));
-    await savePostDrafts(pool, "podcast", publishDate, posts, createdBy);
+    const ids = await savePostDrafts(pool, "podcast", publishDate, posts, createdBy);
+    const dates = podcastScheduleDates(angles, publishDate);
+    const titles: Record<string, string> = {};
+    for (const a of angles) titles[a.key] = title ? `${a.label}: ${title}` : `Podcast: ${a.label}`;
     return {
       ok: true, posts, buzzsproutFetched: !!episode, buzzsproutError, listenUrl, title,
-      episode: episodeSummary(episode),
-      dates: podcastScheduleDates(angles, publishDate),
+      episode: episodeSummary(episode), dates,
+      ...(await landInPipeline(pool, "podcast", posts, ids, dates, titles, createdBy)),
     };
   } catch (e) { return { ok: false, error: (e as Error).message }; }
 }
