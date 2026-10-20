@@ -172,15 +172,11 @@ export interface PlanDisplay {
   footerText: string;
   rotation: number;
   pollSeconds: number;
-  idleMessage: string;
-  /** For the player's offline fallback only; the real idle screen is a frame. */
-  idleHeadline: string;
-  idleShowMark: boolean;
   loopSingleVideo: boolean;
 }
 
 export interface PlanPower {
-  /** false = show nothing at all: the narthex is outside its opening hours. */
+  /** false = show nothing at all: nothing is scheduled, playing now, or urgent. */
   on: boolean;
   changesAt: string | null;
   /**
@@ -200,6 +196,30 @@ export interface PlanTakeover {
   headline: string;
   body: string;
   urgent: boolean;
+}
+
+export type PlanSource = "takeover" | "play_now" | "schedule" | "none";
+
+/**
+ * Changes the moment something different takes the screen, which is how the
+ * player knows to cut at once instead of waiting out the current slide. Every
+ * part that can change independently is in it: a takeover, a Play now (or a
+ * different one), the TV waking or sleeping, and the schedule's own airing.
+ */
+export function sourceKeyFor(p: {
+  takeoverStartedAt: string | null;
+  playNow: { mediaId: number; startedAt: string } | null;
+  powerOn: boolean;
+  source: PlanSource;
+  entryId: number;
+  playlistId: number;
+  startedAt: string;
+}): string {
+  return (
+    (p.takeoverStartedAt ? `TAKEOVER:${p.takeoverStartedAt}` : "") +
+    (p.playNow ? `PLAYNOW:${p.playNow.mediaId}:${p.playNow.startedAt}:` : "") +
+    `${p.powerOn ? "awake" : "dark"}:${p.source}:${p.entryId}:${p.playlistId}:${p.startedAt}`
+  );
 }
 
 export interface Plan {

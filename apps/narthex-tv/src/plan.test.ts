@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildFrames, itemAiring, planRevision, PlanItem, PlaylistDefaults } from "./plan";
+import { buildFrames, itemAiring, planRevision, PlanItem, PlaylistDefaults, sourceKeyFor } from "./plan";
 import { DEFAULT_SETTINGS } from "./settings";
 
 const playlist: PlaylistDefaults = {
@@ -181,4 +181,26 @@ test("itemAiring is inclusive at both ends and ignores absent bounds", () => {
 test("an expired item drops out of the plan entirely rather than showing blank", () => {
   const items = [item({ showUntil: "2026-01-01", media: { id: 1 } })];
   assert.deepEqual(buildFrames(items, playlist, DEFAULT_SETTINGS, 0, "2026-10-15"), []);
+});
+
+const base = {
+  takeoverStartedAt: null, playNow: null, powerOn: true, source: "schedule" as const,
+  entryId: 3, playlistId: 9, startedAt: "2026-10-20T15:00:00.000Z",
+};
+
+test("replacing one Play now with another changes the source key", () => {
+  const a = sourceKeyFor({ ...base, source: "play_now", playNow: { mediaId: 1, startedAt: "2026-10-20T15:00:00.000Z" } });
+  const b = sourceKeyFor({ ...base, source: "play_now", playNow: { mediaId: 2, startedAt: "2026-10-20T15:00:00.000Z" } });
+  const c = sourceKeyFor({ ...base, source: "play_now", playNow: { mediaId: 1, startedAt: "2026-10-20T15:05:00.000Z" } });
+  assert.notEqual(a, b);
+  assert.notEqual(a, c);
+});
+
+test("starting and clearing Play now or a takeover changes the source key", () => {
+  const sched = sourceKeyFor(base);
+  const pn = sourceKeyFor({ ...base, source: "play_now", playNow: { mediaId: 1, startedAt: "x" } });
+  const to = sourceKeyFor({ ...base, source: "takeover", takeoverStartedAt: "y", playNow: { mediaId: 1, startedAt: "x" } });
+  assert.notEqual(sched, pn);
+  assert.notEqual(pn, to);
+  assert.notEqual(sched, sourceKeyFor({ ...base, powerOn: false }));
 });

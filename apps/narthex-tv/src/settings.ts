@@ -13,7 +13,6 @@ export interface AppSettings {
   clock: "off" | "time" | "time_date";
   clockPosition: "top-left" | "top-right" | "bottom-left" | "bottom-right";
   footerText: string;      // optional standing line under everything
-  idleMessage: string;     // shown when nothing at all is scheduled
   pollSeconds: number;     // how often the TV asks the server what to play
   videoLoopSingle: boolean; // a playlist of one video loops seamlessly
 }
@@ -29,7 +28,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
   clock: "off",
   clockPosition: "bottom-right",
   footerText: "",
-  idleMessage: "",
   pollSeconds: 10,
   videoLoopSingle: true,
 };
@@ -45,7 +43,6 @@ const KEYS: Record<keyof AppSettings, string> = {
   clock: "clock",
   clockPosition: "clock_position",
   footerText: "footer_text",
-  idleMessage: "idle_message",
   pollSeconds: "poll_seconds",
   videoLoopSingle: "video_loop_single",
 };
@@ -103,16 +100,12 @@ export const SETTING_VALIDATORS: {
   clockPosition: chosen("The clock corner",
     ["top-left", "top-right", "bottom-left", "bottom-right"] as const),
   footerText: text(300),
-  idleMessage: text(300),
   pollSeconds: clamped("The check-in interval", 3, 600),
   videoLoopSingle: (raw) => ({ ok: true, value: Boolean(raw) }),
 };
 
 /** Fields this endpoint accepts. Anything else is refused, not dropped. */
-export const SETTABLE_KEYS: string[] = [
-  ...Object.keys(SETTING_VALIDATORS),
-  "defaultPlaylistId",
-];
+export const SETTABLE_KEYS: string[] = Object.keys(SETTING_VALIDATORS);
 
 export function unknownSettingKeys(body: Record<string, unknown>): string[] {
   return Object.keys(body).filter((k) => !SETTABLE_KEYS.includes(k));
@@ -181,7 +174,6 @@ export function parseSettings(raw: Record<string, string>): AppSettings {
       d.clockPosition
     ),
     footerText: (raw[KEYS.footerText] ?? d.footerText).slice(0, 300),
-    idleMessage: (raw[KEYS.idleMessage] ?? d.idleMessage).slice(0, 300),
     pollSeconds: num(raw[KEYS.pollSeconds], d.pollSeconds, 3, 600),
     videoLoopSingle: raw[KEYS.videoLoopSingle] === undefined
       ? d.videoLoopSingle
@@ -212,18 +204,6 @@ export async function saveSettings(pool: Pool, patch: Partial<AppSettings>): Pro
     if (value === undefined) continue;
     await setSetting(pool, key, String(value));
   }
-}
-
-// The default playlist is stored separately: it points at a row, so it is not
-// part of the value-typed settings above.
-export async function getDefaultPlaylistId(pool: Pool): Promise<number | null> {
-  const raw = await getSetting(pool, "default_playlist_id");
-  const n = Number(raw);
-  return raw && isFinite(n) && n > 0 ? n : null;
-}
-
-export async function setDefaultPlaylistId(pool: Pool, id: number | null): Promise<void> {
-  await setSetting(pool, "default_playlist_id", id === null ? "" : String(id));
 }
 
 // The two power hooks are stored as JSON, so they sit beside the value-typed

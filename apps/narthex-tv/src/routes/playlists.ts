@@ -6,7 +6,6 @@ import {
   addItems, createPlaylist, deletePlaylist, getPlaylist, listItems, listPlaylists,
   removeItem, reorderItems, updateItem, updatePlaylist, PlaylistRow, PlaylistItemRow,
 } from "../playlists";
-import { getDefaultPlaylistId } from "../settings";
 
 const intParam = (value: unknown): number => {
   const n = Number(value);
@@ -34,7 +33,7 @@ const inheritable = (value: unknown, allowed: string[]): string | undefined => {
   return v === "" || allowed.includes(v) ? v : undefined;
 };
 
-function playlistView(row: PlaylistRow, itemCount = 0, defaultId: number | null = null) {
+function playlistView(row: PlaylistRow, itemCount = 0) {
   return {
     id: Number(row.id),
     name: row.name,
@@ -47,7 +46,6 @@ function playlistView(row: PlaylistRow, itemCount = 0, defaultId: number | null 
     footerText: row.footer_text,
     archived: row.archived,
     itemCount,
-    isDefault: defaultId === Number(row.id),
     createdBy: row.created_by_email,
   };
 }
@@ -79,14 +77,13 @@ export async function playlistRoutes(app: FastifyInstance): Promise<void> {
   app.get("/api/playlists", async (req) => {
     const includeArchived = String((req.query as { archived?: string }).archived ?? "") === "1";
     const rows = await listPlaylists(pool, includeArchived);
-    const defaultId = await getDefaultPlaylistId(pool);
     const counts = await pool.query<{ playlist_id: number; n: number }>(
       "SELECT playlist_id, count(*)::int AS n FROM playlist_items GROUP BY playlist_id"
     );
     const byId = new Map(counts.rows.map((r) => [Number(r.playlist_id), Number(r.n)]));
     return {
       ok: true,
-      playlists: rows.map((r) => playlistView(r, byId.get(Number(r.id)) ?? 0, defaultId)),
+      playlists: rows.map((r) => playlistView(r, byId.get(Number(r.id)) ?? 0)),
     };
   });
 
@@ -95,10 +92,9 @@ export async function playlistRoutes(app: FastifyInstance): Promise<void> {
     const row = await getPlaylist(pool, id);
     if (!row) return reply.code(404).send({ ok: false, error: "No such playlist." });
     const items = await listItems(pool, id);
-    const defaultId = await getDefaultPlaylistId(pool);
     return {
       ok: true,
-      playlist: playlistView(row, items.length, defaultId),
+      playlist: playlistView(row, items.length),
       items: items.map(itemView),
     };
   });

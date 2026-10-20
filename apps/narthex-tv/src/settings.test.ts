@@ -106,6 +106,7 @@ test("a field the endpoint does not handle is named, not ignored", () => {
   assert.deepEqual(unknownSettingKeys({ timezone: "UTC" }), []);
   // Operating hours are gone: the schedule alone decides when the TV is on.
   assert.deepEqual(unknownSettingKeys({ hoursMode: "always" }), ["hoursMode"]);
-  assert.deepEqual(unknownSettingKeys({ defaultPlaylistId: 3 }), []);
+  // Nor is there a default playlist: nothing scheduled means the TV is off.
+  assert.deepEqual(unknownSettingKeys({ defaultPlaylistId: 3 }), ["defaultPlaylistId"]);
   assert.deepEqual(unknownSettingKeys({ hoursmode: "x", colour: 1 }), ["hoursmode", "colour"]);
 });
