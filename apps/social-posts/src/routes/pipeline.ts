@@ -1,4 +1,13 @@
 import { FastifyInstance } from "fastify";
+import { randomBytes, timingSafeEqual } from "node:crypto";
+import { addDays } from "../dates";
+import { getSetting, setSetting } from "../settings";
+import { buildCaptureIcs } from "../pipeline/ical";
+import { draftCaption } from "../pipeline/caption";
+import { describeRule, occurrences, parseRecurrenceInput, parseRule } from "../pipeline/recurrence";
+import {
+  HORIZON_DAYS, createRecurrence, deleteRecurrence, getRecurrence, listRecurrences, materialize, updateRecurrence,
+} from "../pipeline/recurring";
 import { pool } from "../db";
 import { getIdentity } from "../identity";
 import { referenceDate } from "../schedule";
@@ -9,8 +18,25 @@ import {
 } from "../pipeline/rules";
 import {
   createContent, createEvent, createMedia, dashboardGaps, dashboardSummary, deleteContent, deleteEvent,
-  deleteMedia, getContent, getEvent, listContent, listEvents, listMedia, updateContent, updateEvent, updateMedia,
+  deleteMedia, duplicateEvent, getContent, getEvent, listContent, listEvents, listMedia, updateContent, updateEvent,
+  updateMedia,
 } from "../pipeline/repo";
+
+const ICAL_SETTING = "pipeline_ical_token";
+
+async function icalToken(): Promise<string> {
+  let token = await getSetting(pool, ICAL_SETTING);
+  if (!token) {
+    token = randomBytes(24).toString("base64url");
+    await setSetting(pool, ICAL_SETTING, token);
+  }
+  return token;
+}
+
+function sameSecret(a: string, b: string): boolean {
+  const x = Buffer.from(a), y = Buffer.from(b);
+  return x.length === y.length && timingSafeEqual(x, y);
+}
 
 type Query = Record<string, string | undefined>;
 
@@ -50,6 +76,7 @@ export async function pipelineRoutes(app: FastifyInstance): Promise<void> {
     contentStatuses: CONTENT_STATUSES, mediaStatuses: MEDIA_STATUSES, mediaTypes: MEDIA_TYPES,
     eventKinds: EVENT_KINDS, platforms: PLATFORMS, gatedStatuses: GATED_STATUSES,
     readyStatuses: READY_STATUSES, thresholds: GAP_THRESHOLDS, upcomingDays: UPCOMING_DAYS,
+    recurrenceHorizonDays: HORIZON_DAYS,
   })));
 
   // ── Events ──
@@ -85,6 +112,11 @@ export async function pipelineRoutes(app: FastifyInstance): Promise<void> {
   // ── Content items ──
   app.get("/api/pipeline/content", async (req) => guard(async () => {
     const q = req.query as Query;
+    // Recurring posts exist HORIZON_DAYS ahead; looking further out (paging
+    // the calendar forward) generates the occurrences that range needs.
+    const to = dateParam(q, "to");
+    const today = await referenceDate(pool);
+    if (to && to > addDays(today, HORIZON_DAYS)) await materialize(pool, today, to);
     const items = await listContent(pool, {
       from: dateParam(q, "from"), to: dateParam(q, "to"), eventId: q.eventId || undefined,
       platform: q.platform || undefined, statuses: listParam(q, "status", CONTENT_STATUSES),
@@ -109,7 +141,8 @@ export async function pipelineRoutes(app: FastifyInstance): Promise<void> {
   app.patch("/api/pipeline/content/:id", async (req) => guard(async () => {
     const input = parseContentInput(req.body, "patch");
     if (!input.ok) return input;
-    const r = await updateContent(pool, (req.params as { id: string }).id, input.value);
+    const scope = (req.body as { scope?: string } | null)?.scope === "future" ? "future" : "this";
+    const r = await updateContent(pool, (req.params as { id: string }).id, input.value, scope);
     return r.ok ? { ok: true, ...r.value } : r;
   }));
 
@@ -117,6 +150,88 @@ export async function pipelineRoutes(app: FastifyInstance): Promise<void> {
     const r = await deleteContent(pool, (req.params as { id: string }).id);
     return r.ok ? { ok: true, ...r.value } : r;
   }));
+
+  app.post("/api/pipeline/content/:id/draft-caption", async (req) => guard(async () => {
+    const r = await draftCaption(pool, (req.params as { id: string }).id);
+    return r.ok ? { ok: true, caption: r.value } : r;
+  }));
+
+  app.post("/api/pipeline/events/:id/duplicate", async (req) => guard(async () => {
+    const b = (req.body ?? {}) as { name?: string; startDate?: string; shiftDays?: number };
+    if (b.startDate && !isIsoDate(b.startDate)) return { ok: false, error: "The new start date must be a date like 2027-07-10." };
+    const r = await duplicateEvent(pool, (req.params as { id: string }).id, {
+      name: String(b.name || "").trim(), startDate: b.startDate || null,
+      shiftDays: b.shiftDays == null ? null : Number(b.shiftDays),
+    }, getIdentity(req).email);
+    return r.ok ? { ok: true, ...r.value } : r;
+  }));
+
+  // ── Recurring posts ──
+  app.get("/api/pipeline/recurrences", async () => guard(async () =>
+    ({ ok: true, recurrences: await listRecurrences(pool, await referenceDate(pool)) })));
+
+  app.get("/api/pipeline/recurrences/:id", async (req) => guard(async () => {
+    const r = await getRecurrence(pool, (req.params as { id: string }).id, await referenceDate(pool));
+    return r ? { ok: true, recurrence: r } : { ok: false, error: "Recurring post not found." };
+  }));
+
+  // What a rule would produce, so the form can show the next few dates as you type.
+  app.post("/api/pipeline/recurrences/preview", async (req) => guard(async () => {
+    const rule = parseRule((req.body as { rule?: unknown } | null)?.rule);
+    if (!rule.ok) return rule;
+    const today = await referenceDate(pool);
+    return { ok: true, summary: describeRule(rule.value),
+             dates: occurrences(rule.value, addDays(today, 400)).filter((d) => d >= today).slice(0, 5) };
+  }));
+
+  app.post("/api/pipeline/recurrences", async (req) => guard(async () => {
+    const input = parseRecurrenceInput(req.body, "create");
+    if (!input.ok) return input;
+    const r = await createRecurrence(pool, input.value, getIdentity(req).email, await referenceDate(pool));
+    return r.ok ? { ok: true, recurrence: r.value } : r;
+  }));
+
+  app.patch("/api/pipeline/recurrences/:id", async (req) => guard(async () => {
+    const input = parseRecurrenceInput(req.body, "patch");
+    if (!input.ok) return input;
+    const r = await updateRecurrence(pool, (req.params as { id: string }).id, input.value, await referenceDate(pool));
+    return r.ok ? { ok: true, recurrence: r.value } : r;
+  }));
+
+  app.delete("/api/pipeline/recurrences/:id", async (req) => guard(async () => {
+    const r = await deleteRecurrence(pool, (req.params as { id: string }).id, await referenceDate(pool));
+    return r.ok ? { ok: true, ...r.value } : r;
+  }));
+
+  // ── Capture calendar feed ──
+  // The feed URL is the secret (calendar apps can't sign in), so it can be
+  // reset, which breaks every existing subscription at once.
+  app.get("/api/pipeline/ical", async (req) => guard(async () => {
+    const base = `https://${req.hostname}/ical/${await icalToken()}/capture.ics`;
+    return { ok: true, url: base, mineUrl: base + "?who=" + encodeURIComponent(getIdentity(req).email) };
+  }));
+
+  app.post("/api/pipeline/ical/reset", async (req) => guard(async () => {
+    await setSetting(pool, ICAL_SETTING, randomBytes(24).toString("base64url"));
+    const base = `https://${req.hostname}/ical/${await icalToken()}/capture.ics`;
+    return { ok: true, url: base, mineUrl: base + "?who=" + encodeURIComponent(getIdentity(req).email) };
+  }));
+
+  // Reached WITHOUT the hub login (its own Traefik router), so it checks the token itself.
+  app.get("/ical/:token/capture.ics", async (req, reply) => {
+    const { token } = req.params as { token: string };
+    const stored = await getSetting(pool, ICAL_SETTING);
+    if (!stored || !sameSecret(token, stored)) return reply.code(404).send("Not found");
+    const who = String((req.query as Query).who || "").trim();
+    const today = await referenceDate(pool);
+    const media = await listMedia(pool, { from: addDays(today, -30), to: addDays(today, 365), assigneeEmail: who || undefined });
+    reply.header("content-type", "text/calendar; charset=utf-8");
+    reply.header("cache-control", "private, max-age=900");
+    return buildCaptureIcs(media, {
+      name: who ? "GRMC captures: " + who : "GRMC capture calendar",
+      pageUrl: `https://${req.hostname}/pipeline#calendar`, stamp: new Date(),
+    });
+  });
 
   // ── Media assets ──
   app.get("/api/pipeline/media", async (req) => guard(async () => {

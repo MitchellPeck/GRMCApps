@@ -143,6 +143,14 @@ services:
       - "traefik.http.routers.social.tls=true"
       - "traefik.http.routers.social.middlewares=hub-forward-auth@file"
       - "traefik.http.services.social.loadbalancer.server.port=3000"
+      # The capture-calendar feed (/ical/<token>/capture.ics) skips the hub
+      # login: phone calendar apps can't sign in, so the unguessable token in
+      # the path is the credential and the app checks it. Its longer rule wins
+      # over the guarded router above for these paths only.
+      - "traefik.http.routers.social-ical.rule=Host(`social.${BASE_DOMAIN}`) && PathPrefix(`/ical/`)"
+      - "traefik.http.routers.social-ical.entrypoints=websecure"
+      - "traefik.http.routers.social-ical.tls=true"
+      - "traefik.http.routers.social-ical.service=social"
       - "com.centurylinklabs.watchtower.enable=true"
 
   approvals:

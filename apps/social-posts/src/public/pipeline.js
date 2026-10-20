@@ -46,7 +46,13 @@ var DOW = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 function parseIso(iso){ var p = iso.split('-').map(Number); return new Date(p[0], p[1]-1, p[2]); }
 function isoOf(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
 function addDays(iso, n){ var d = parseIso(iso); d.setDate(d.getDate()+n); return isoOf(d); }
-function shortDate(iso){ if (!iso) return 'No date'; var d = parseIso(iso); return DOW[d.getDay()]+' '+MONTHS[d.getMonth()].slice(0,3)+' '+d.getDate(); }
+// The year only appears when it isn't this year — a copied event a year out
+// mustn't read as next week.
+function shortDate(iso){
+  if (!iso) return 'No date';
+  var d = parseIso(iso), thisYear = S.meta ? Number(S.meta.today.slice(0, 4)) : new Date().getFullYear();
+  return DOW[d.getDay()]+' '+MONTHS[d.getMonth()].slice(0,3)+' '+d.getDate()+(d.getFullYear() !== thisYear ? ', '+d.getFullYear() : '');
+}
 function rangeLabel(a, b){
   if (!a && !b) return '';
   if (a && b && a !== b) return shortDate(a) + ' – ' + shortDate(b);
@@ -87,6 +93,7 @@ function platformChips(list){
     return '<span class="pl-plat" title="'+esc(meta ? meta.label : p)+'">'+esc(PLATFORM_SHORT[p] || p.slice(0,2).toUpperCase())+'</span>';
   }).join('');
 }
+function recMark(i){ return i.recurrenceId ? '<span class="pl-rec" title="Repeats" aria-label="Repeats">↻</span> ' : ''; }
 function statusBadge(s, kind){ return '<span class="pl-status pl-s-'+esc(s)+(kind === 'media' ? ' pl-media-s' : '')+'">'+esc(label(s))+'</span>'; }
 function mediaProgress(item){
   if (item.noMediaNeeded) return '<span class="pl-prog pl-prog-none">No media needed</span>';
@@ -166,7 +173,8 @@ function render() {
     if (on) t.setAttribute('aria-current', 'page'); else t.removeAttribute('aria-current');
   });
   var main = $('pl-main');
-  var views = { dashboard: renderDashboard, calendar: renderCalendar, board: renderBoard, events: renderEvents, event: renderEvent, gap: renderGapList };
+  var views = { dashboard: renderDashboard, calendar: renderCalendar, board: renderBoard, events: renderEvents, event: renderEvent,
+    gap: renderGapList, recurring: renderRecurring, mine: renderMine };
   (views[r.view] || renderDashboard)(main, r.arg).catch(function(e){
     main.innerHTML = '<div class="alert alert-err">Couldn’t load this view: '+esc(e.message)+'</div>';
   });
@@ -177,12 +185,24 @@ function refreshEvents() {
 }
 
 // ── Dashboard ────────────────────────────────────────────────────────────────
+// The board's scope: posts publishing from 30 days ago on, plus undated ones,
+// narrowed by the shared filters. The dashboard counts this same set, so its
+// numbers always match the board's columns.
+function loadBoardItems(includeCancelled) {
+  var from = addDays(S.meta.today, -30), c = includeCancelled ? 1 : '';
+  return Promise.all([
+    api('GET', '/api/pipeline/content' + contentFilterQuery({ from: from, includeCancelled: c })),
+    api('GET', '/api/pipeline/content' + contentFilterQuery({ undated: 1, includeCancelled: c })),
+  ]).then(function(res){ return { from: from, items: res[0].items.concat(res[1].items) }; });
+}
+
 function renderDashboard(main) {
   return Promise.all([
     api('GET', '/api/pipeline/dashboard/summary'),
     api('GET', '/api/pipeline/dashboard/gaps'),
+    loadBoardItems(false),
   ]).then(function(res){
-    var sum = res[0], gaps = res[1].gaps;
+    var sum = res[0], gaps = res[1].gaps, board = res[2];
     sum.posts = sum.posts.filter(matchItem);
     sum.capture = sum.capture.filter(matchMedia);
     var total = gaps.reduce(function(n, g){ return n + g.count; }, 0);
@@ -195,13 +215,15 @@ function renderDashboard(main) {
         }).join('')
       + '</div></section>';
 
-    var by = sum.byStatus;
+    var by = {};
+    board.items.forEach(function(i){ by[i.status] = (by[i.status] || 0) + 1; });
     var flow = S.meta.contentStatuses.filter(function(s){ return s !== 'cancelled'; });
     html += '<section class="card"><h3 class="ct">Pipeline</h3><div class="pl-flow">'
       + flow.map(function(s){
           return '<a class="pl-flow-step" href="#board" data-act="filter-status" data-status="'+s+'"><strong>'+(by[s] || 0)+'</strong>'+statusBadge(s)+'</a>';
         }).join('')
-      + '</div>'+(by.cancelled ? '<p class="hint">'+by.cancelled+' cancelled, kept for history.</p>' : '')+'</section>';
+      + '</div><p class="hint">The same posts as the board: publishing from '+esc(shortDate(board.from))+' on, plus undated ones'
+      + (S.filters.eventId || S.filters.platform || S.filters.status || S.filters.owner ? ', with your filters' : '')+'.</p></section>';
 
     html += '<div class="pl-two">'
       + '<section class="card"><h3 class="ct">Publishing this week</h3>'
@@ -338,7 +360,7 @@ function postCard(i) {
   var dim = i.status === 'published' ? ' done' : '';
   return '<div class="pl-card'+dim+'" role="button" tabindex="0" draggable="true" data-kind="content" data-id="'+esc(i.id)+'" data-act="open" style="--ev:'+esc(i.eventColor || 'var(--rule)')+'"'
     + ' title="'+esc(i.title + (i.eventName ? ' — ' + i.eventName : ''))+'">'
-    + '<span class="pl-card-title">'+(i.publishTime ? '<span class="pl-time">'+esc(timeLabel(i.publishTime))+'</span> ' : '')+esc(i.title)+'</span>'
+    + '<span class="pl-card-title">'+recMark(i)+(i.publishTime ? '<span class="pl-time">'+esc(timeLabel(i.publishTime))+'</span> ' : '')+esc(i.title)+'</span>'
     + '<span class="pl-card-meta">'+platformChips(i.platforms)+statusBadge(i.status)+'</span></div>';
 }
 
@@ -424,12 +446,8 @@ function moveDate(kind, id, date) {
 function renderBoard(main) {
   var showCancelled = !!storeGet('pipeline.boardCancelled');
   // Published work older than a month is history, not pipeline.
-  var from = addDays(S.meta.today, -30);
-  return Promise.all([
-    api('GET', '/api/pipeline/content' + contentFilterQuery({ from: from, includeCancelled: showCancelled ? 1 : '' })),
-    api('GET', '/api/pipeline/content' + contentFilterQuery({ undated: 1, includeCancelled: showCancelled ? 1 : '' })),
-  ]).then(function(res){
-    var items = res[0].items.concat(res[1].items);
+  return loadBoardItems(showCancelled).then(function(res){
+    var items = res.items, from = res.from;
     var cols = S.meta.contentStatuses.filter(function(s){ return s !== 'cancelled' || showCancelled; });
     var html = '<div class="pl-boardhead"><p class="hint">Posts publishing from '+esc(shortDate(from))+' on, plus undated ones. Drag a card to another column, or change its status on the card.</p>'
       + '<label class="check"><input type="checkbox" data-act="toggle-cancelled"'+(showCancelled ? ' checked' : '')+'> Show cancelled</label></div>'
@@ -446,7 +464,7 @@ function boardCard(i) {
   S.rows.content[i.id] = i;
   return '<article class="pl-bcard" draggable="true" data-kind="content" data-id="'+esc(i.id)+'" style="--ev:'+esc(i.eventColor || 'var(--rule)')+'">'
     + '<button class="pl-bcard-open" type="button" data-act="open" data-id="'+esc(i.id)+'">'
-    + '<span class="pl-title">'+esc(i.title)+'</span>'
+    + '<span class="pl-title">'+recMark(i)+esc(i.title)+'</span>'
     + '<span class="pl-sub">'+esc(shortDate(i.publishDate))+(i.eventName ? ' · '+esc(i.eventName) : '')+'</span></button>'
     + '<div class="pl-bcard-foot">'+platformChips(i.platforms)+mediaProgress(i)+'</div>'
     + '<select class="pl-quick" data-act="quick-status" data-id="'+esc(i.id)+'" aria-label="Status of '+esc(i.title)+'">'
@@ -521,6 +539,7 @@ function renderEvent(main, id) {
       + (e.ownerEmail ? ' · Owner: '+esc(personName(e.ownerEmail)) : '')+'</p>'
       + (e.notes ? '<p class="pl-notes">'+esc(e.notes)+'</p>' : '')+'</div>'
       + '<div class="pl-evactions"><button class="btn-sm" type="button" data-act="edit-event" data-id="'+esc(e.id)+'">Edit</button>'
+      + '<button class="btn-sm" type="button" data-act="duplicate-event" data-id="'+esc(e.id)+'">Duplicate</button>'
       + '<button class="btn-sm" type="button" data-act="archive-event" data-id="'+esc(e.id)+'" data-archived="'+(e.archived ? '1' : '')+'">'+(e.archived ? 'Restore' : 'Archive')+'</button>'
       + '<button class="btn-sm btn-sm-gold" type="button" data-act="new-post" data-event="'+esc(e.id)+'">New post for this event</button></div></section>'
       + '<div id="pl-event-form"></div>'
@@ -553,7 +572,7 @@ function renderEvent(main, id) {
 }
 
 // ── Editor drawer ────────────────────────────────────────────────────────────
-var drawer = { id: null, item: null, media: [], source: null, opener: null };
+var drawer = { id: null, item: null, media: [], source: null, recurrence: null, opener: null };
 
 function openDrawer(html) {
   var d = $('pl-drawer');
@@ -575,7 +594,7 @@ function closeDrawer() {
 }
 
 function newPost(defaults) {
-  drawer.id = null; drawer.item = null; drawer.media = []; drawer.source = null;
+  drawer.id = null; drawer.item = null; drawer.media = []; drawer.source = null; drawer.recurrence = null;
   var f = S.filters;
   var item = {
     title: '', eventId: defaults.eventId || f.eventId || '', platforms: f.platform ? [f.platform] : ['instagram','facebook'],
@@ -589,7 +608,7 @@ function openPost(id) {
   openDrawer('<div class="pl-drawer-body"><p class="empty">Loading…</p></div>');
   api('GET', '/api/pipeline/content/' + encodeURIComponent(id)).then(function(d){
     if (drawer.id !== id) return;
-    drawer.item = d.item; drawer.media = d.media; drawer.source = d.source;
+    drawer.item = d.item; drawer.media = d.media; drawer.source = d.source; drawer.recurrence = d.recurrence;
     $('pl-drawer').innerHTML = editorHtml(d.item, false);
   }).catch(function(e){
     $('pl-drawer').innerHTML = '<div class="pl-drawer-body"><div class="alert alert-err">'+esc(e.message)+'</div><button class="btn btn-secondary" data-act="close">Close</button></div>';
@@ -612,7 +631,7 @@ function editorHtml(i, isNew) {
     ? '<div class="alert alert-warn">Marked '+label(i.status)+' but still waiting on: '+esc(blockers.join('; '))+'</div>' : '';
   return '<form class="pl-drawer-body" data-form="content">'
     + '<div class="pl-drawer-head"><h2>'+(isNew ? 'New post' : 'Edit post')+'</h2><button class="pl-x" type="button" data-act="close" aria-label="Close">×</button></div>'
-    + sourceHtml(drawer.source) + gatedWarning
+    + sourceHtml(drawer.source) + (isNew ? '' : recurrenceBanner()) + gatedWarning
     + '<div class="field"><label for="pf-title">Title</label><input id="pf-title" type="text" name="title" required value="'+esc(i.title)+'" placeholder="Kids Camp: first day recap"></div>'
     + '<div class="row2"><div class="field"><label for="pf-date">Publish date</label><input id="pf-date" type="date" name="publishDate" required value="'+esc(i.publishDate || '')+'"></div>'
     + '<div class="field"><label for="pf-time">Time (optional)</label><input id="pf-time" type="time" name="publishTime" value="'+esc(i.publishTime || '')+'"></div></div>'
@@ -624,14 +643,30 @@ function editorHtml(i, isNew) {
     + '</fieldset>'
     + '<div class="field"><label for="pf-owner">Owner</label><input id="pf-owner" type="email" name="ownerEmail" list="pl-people" value="'+esc(i.ownerEmail)+'" placeholder="Who gets it published"></div>'
     + '<div class="field"><label for="pf-brief">Brief</label><textarea id="pf-brief" name="brief" placeholder="Purpose, angle and call to action in a sentence or two">'+esc(i.brief)+'</textarea></div>'
-    + '<div class="field"><label for="pf-caption">Caption</label><textarea id="pf-caption" name="caption" class="pl-caption" placeholder="Written by hand, or filled in by the automated drafting">'+esc(i.caption)+'</textarea></div>'
+    + '<div class="field"><div class="pl-label-row"><label for="pf-caption">Caption</label>'
+    + (isNew ? '' : '<button class="btn-sm" type="button" data-act="draft-caption" id="pf-draft">'+(i.caption ? 'Redraft with Claude' : 'Draft with Claude')+'</button>')+'</div>'
+    + '<textarea id="pf-caption" name="caption" class="pl-caption" placeholder="Written by hand, drafted with Claude, or filled in by the weekly runs">'+esc(i.caption)+'</textarea></div>'
     + '<label class="check pl-nomedia"><input type="checkbox" name="noMediaNeeded"'+(i.noMediaNeeded ? ' checked' : '')+'> No media needed (a text-only post)</label>'
+    + (drawer.recurrence ? '<fieldset class="field pl-scope"><legend class="lbl">Apply changes to</legend>'
+        + '<label class="check"><input type="radio" name="scope" value="this" checked> This post only</label>'
+        + '<label class="check"><input type="radio" name="scope" value="future"> This and later posts in the series</label></fieldset>' : '')
     + '<div class="pl-form-msg" id="pf-msg"></div>'
     + '<div class="btn-row"><button class="btn btn-primary" type="submit">'+(isNew ? 'Create post' : 'Save changes')+'</button>'
+    + (isNew ? '<button class="btn btn-secondary" type="button" data-act="make-recurring">Make it repeat</button>'
+             : '<button class="btn btn-gold" type="button" data-act="send-metricool">Send to Metricool</button>')
     + '<button class="btn btn-secondary" type="button" data-act="close">'+(isNew ? 'Cancel' : 'Close')+'</button>'
-    + (isNew ? '' : '<button class="btn btn-danger pl-right" type="button" data-act="delete-post">Delete post</button>')+'</div>'
+    + (isNew ? '' : drawer.recurrence
+        ? '<button class="btn btn-danger pl-right" type="button" data-act="delete-post">Skip this date</button>'
+        : '<button class="btn btn-danger pl-right" type="button" data-act="delete-post">Delete post</button>')+'</div>'
     + '</form>'
     + (isNew ? '<p class="hint pl-drawer-pad">Create the post first, then list the media it needs.</p>' : checklistHtml(i));
+}
+
+function recurrenceBanner() {
+  var r = drawer.recurrence;
+  if (!r) return '';
+  return '<p class="pl-source pl-rec-banner">↻ '+esc(r.summary)+(drawer.item && drawer.item.detached ? ' (this one has been edited on its own)' : '')
+    + ' <button class="pl-link" type="button" data-act="edit-recurrence" data-id="'+esc(r.id)+'">Edit the series</button></p>';
 }
 
 function readyBlockers(item, media) {
@@ -683,6 +718,10 @@ function readForm(form) {
   out.noMediaNeeded = fd.get('noMediaNeeded') === 'on';
   return out;
 }
+function formScope(form) {
+  var r = form.querySelector('input[name=scope]:checked');
+  return r ? r.value : 'this';
+}
 
 function saveContent(form) {
   var body = readForm(form), msg = $('pf-msg'), btn = form.querySelector('[type=submit]');
@@ -699,6 +738,7 @@ function saveContent(form) {
       if (Array.isArray(a) ? a.join(',') !== (b || []).join(',') : a !== b) patch[k] = a;
     });
     if (!Object.keys(patch).length) { btn.disabled = false; closeDrawer(); return; }
+    patch.scope = formScope(form);
     req = api('PATCH', '/api/pipeline/content/' + encodeURIComponent(drawer.id), patch);
   } else {
     req = api('POST', '/api/pipeline/content', body);
@@ -710,7 +750,7 @@ function saveContent(form) {
       toast('Post created. Now list the media it needs.', 'ok');
       openPost(res.item.id);
     } else {
-      toast('Saved.', 'ok');
+      toast(body && formScope(form) === 'future' ? 'Saved, and applied to later posts in the series.' : 'Saved.', 'ok');
       closeDrawer();
     }
     render();
@@ -754,6 +794,285 @@ function addMedia(form) {
   }).catch(function(e){ toast(e.message, 'err'); });
 }
 
+// ── Claude and Metricool from the drawer ─────────────────────────────────────
+function draftCaption(btn) {
+  btn.disabled = true;
+  var label = btn.textContent;
+  btn.innerHTML = '<span class="spin pl-spin-dark"></span> Drafting…';
+  api('POST', '/api/pipeline/content/' + encodeURIComponent(drawer.id) + '/draft-caption').then(function(res){
+    btn.disabled = false; btn.textContent = 'Redraft with Claude';
+    var box = $('pf-caption');
+    box.value = res.caption;
+    box.focus();
+    toast('Draft ready. Edit it if you like, then save.', 'ok');
+  }).catch(function(e){
+    btn.disabled = false; btn.textContent = label;
+    $('pf-msg').innerHTML = '<div class="alert alert-err">'+esc(e.message)+'</div>';
+  });
+}
+
+// Metricool calls X "twitter".
+var METRICOOL_NETWORK = { instagram: 'instagram', facebook: 'facebook', x: 'twitter' };
+
+function sendToMetricool() {
+  var form = document.querySelector('form[data-form=content]');
+  var cur = readForm(form), it = drawer.item;
+  if (!cur.caption.trim()) { $('pf-msg').innerHTML = '<div class="alert alert-err">Write or draft a caption first.</div>'; return; }
+  var blockers = readyBlockers(cur, drawer.media);
+  if (blockers.length && !confirm('Still waiting on: ' + blockers.join('; ') + '.\n\nSend to Metricool anyway?')) return;
+  openMetricool(cur.caption, {
+    date: cur.publishDate, time: cur.publishTime,
+    networks: cur.platforms.map(function(p){ return METRICOOL_NETWORK[p]; }).filter(Boolean),
+    sourceType: 'content', sourceRef: it.id, contentItemId: it.id,
+    // The server marks the post Scheduled; show that.
+    onSent: function(){ openPost(it.id); render(); },
+  });
+}
+
+// ── Recurring posts ──────────────────────────────────────────────────────────
+var WEEKDAY_NAMES = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+
+function renderRecurring(main) {
+  return api('GET', '/api/pipeline/recurrences').then(function(d){
+    var list = d.recurrences;
+    var html = '<div class="pl-boardhead"><p class="hint">Each recurring post keeps its next '+Math.round(S.meta.recurrenceHorizonDays / 7)+' weeks on the calendar as ordinary posts you can plan, give media and send. Skip a date by opening that post.</p>'
+      + '<button class="btn btn-primary" type="button" data-act="new-recurrence">New recurring post</button></div>';
+    if (!list.length) {
+      main.innerHTML = html + '<p class="empty">Nothing repeats yet. Set one up for anything you post on a rhythm: a weekly devotional, a monthly volunteer thank-you.</p>';
+      return;
+    }
+    html += '<section class="card"><ul class="pl-recs">' + list.map(function(r){
+      return '<li class="'+(r.active ? '' : 'paused')+'" style="--ev:'+esc(r.eventColor || 'var(--rule)')+'">'
+        + '<button class="pl-rec-open" type="button" data-act="edit-recurrence" data-id="'+esc(r.id)+'">'
+        + '<span class="pl-title">'+esc(r.title)+(r.active ? '' : ' <span class="muted">(paused)</span>')+'</span>'
+        + '<span class="pl-sub">'+esc(r.summary)+(r.eventName ? ' · '+esc(r.eventName) : '')+' '+platformChips(r.platforms)+'</span>'
+        + (r.nextDates.length ? '<span class="pl-sub">Next: '+r.nextDates.map(shortDate).map(esc).join(', ')+'</span>' : '')
+        + '</button>'
+        + '<button class="btn-sm" type="button" data-act="toggle-recurrence" data-id="'+esc(r.id)+'" data-active="'+(r.active ? '1' : '')+'">'+(r.active ? 'Pause' : 'Resume')+'</button>'
+        + '</li>';
+    }).join('') + '</ul></section>';
+    main.innerHTML = html;
+  });
+}
+
+function tplRowHtml(m) {
+  var before = -(m.offsetDays || 0);
+  return '<div class="pl-tpl-row">'
+    + '<input type="text" data-tpl="description" value="'+esc(m.description)+'" placeholder="What to capture each time" aria-label="What to capture">'
+    + '<select data-tpl="type" aria-label="Type">'+S.meta.mediaTypes.map(function(t){ return '<option value="'+t+'"'+(t === m.type ? ' selected' : '')+'>'+label(t)+'</option>'; }).join('')+'</select>'
+    + '<label class="pl-inline"><input type="number" data-tpl="before" min="-30" max="90" value="'+before+'" aria-label="Days before the post"> days before</label>'
+    + '<input type="email" data-tpl="assigneeEmail" list="pl-people" value="'+esc(m.assigneeEmail || '')+'" placeholder="Who" aria-label="Who captures it">'
+    + '<button class="pl-x" type="button" data-act="remove-tpl-row" aria-label="Remove">×</button></div>';
+}
+
+function openRecurrence(id, prefill) {
+  var load = id ? api('GET', '/api/pipeline/recurrences/' + encodeURIComponent(id)).then(function(d){ return d.recurrence; })
+                : Promise.resolve(null);
+  openDrawer('<div class="pl-drawer-body"><p class="empty">Loading…</p></div>');
+  load.then(function(r){ $('pl-drawer').innerHTML = recurrenceFormHtml(r, prefill || {}); previewRule(); })
+    .catch(function(e){ $('pl-drawer').innerHTML = '<div class="pl-drawer-body"><div class="alert alert-err">'+esc(e.message)+'</div></div>'; });
+}
+
+function recurrenceFormHtml(r, pre) {
+  var start = pre.publishDate || S.meta.today, startDow = parseIso(start).getDay();
+  var rule = r ? r.rule : { freq: 'weekly', interval: 1, weekdays: [startDow], monthDay: parseIso(start).getDate(),
+    nth: Math.min(4, Math.ceil(parseIso(start).getDate() / 7)), weekday: startDow, startDate: start, endDate: null, count: null };
+  var v = r || { title: pre.title || '', brief: pre.brief || '', eventId: pre.eventId || '', platforms: pre.platforms || ['instagram','facebook'],
+    publishTime: pre.publishTime || '', ownerEmail: pre.ownerEmail || '', noMediaNeeded: !!pre.noMediaNeeded, mediaTemplate: [], active: true };
+  var ends = rule.endDate ? 'on' : rule.count ? 'after' : 'never';
+  var opt = function(val, text, cur){ return '<option value="'+val+'"'+(String(val) === String(cur) ? ' selected' : '')+'>'+text+'</option>'; };
+  return '<form class="pl-drawer-body" data-form="recurrence" data-id="'+esc(r ? r.id : '')+'">'
+    + '<div class="pl-drawer-head"><h2>'+(r ? 'Recurring post' : 'New recurring post')+'</h2><button class="pl-x" type="button" data-act="close" aria-label="Close">×</button></div>'
+    + (r && r.draftKey ? '<p class="pl-source">The weekly run fills each of these with its draft.</p>' : '')
+    + '<div class="field"><label for="rf-title">Title</label><input id="rf-title" type="text" name="title" required value="'+esc(v.title)+'" placeholder="Midweek devotional"></div>'
+
+    + '<fieldset class="pl-repeat" data-rule><legend class="lbl">Repeats</legend>'
+    + '<div class="row2"><div class="field"><label for="rf-freq">How often</label><select id="rf-freq" name="freq" data-act="rec-freq">'
+    +   opt('weekly', 'Weekly', rule.freq) + opt('monthly_date', 'Monthly on a date', rule.freq) + opt('monthly_weekday', 'Monthly on a weekday', rule.freq) + '</select></div>'
+    + '<div class="field"><label for="rf-every">Every</label><div class="pl-inline"><input id="rf-every" type="number" name="interval" min="1" max="52" value="'+rule.interval+'">'
+    +   ' <span data-unit>'+(rule.freq === 'weekly' ? 'week(s)' : 'month(s)')+'</span></div></div></div>'
+    + '<div class="field" data-freq="weekly"><span class="lbl">On</span><div class="pl-days">'
+    +   WEEKDAY_NAMES.map(function(n, i){ return '<label class="pl-day-pick"><input type="checkbox" name="weekdays" value="'+i+'"'+(rule.weekdays.indexOf(i) !== -1 ? ' checked' : '')+'><span>'+n.slice(0,3)+'</span></label>'; }).join('')
+    + '</div></div>'
+    + '<div class="field" data-freq="monthly_date"><label for="rf-mday">Day of the month</label><input id="rf-mday" type="number" name="monthDay" min="1" max="31" value="'+(rule.monthDay || 1)+'">'
+    +   '<div class="hint">Months without that day use their last day.</div></div>'
+    + '<div class="row2" data-freq="monthly_weekday"><div class="field"><label for="rf-nth">Which</label><select id="rf-nth" name="nth">'
+    +   opt(1, '1st', rule.nth) + opt(2, '2nd', rule.nth) + opt(3, '3rd', rule.nth) + opt(4, '4th', rule.nth) + opt(-1, 'Last', rule.nth) + '</select></div>'
+    + '<div class="field"><label for="rf-wday">Day</label><select id="rf-wday" name="weekday">'+WEEKDAY_NAMES.map(function(n, i){ return opt(i, n, rule.weekday); }).join('')+'</select></div></div>'
+    + '<div class="row2"><div class="field"><label for="rf-start">Starts</label><input id="rf-start" type="date" name="startDate" value="'+esc(rule.startDate)+'" required></div>'
+    + '<div class="field"><label for="rf-ends">Ends</label><select id="rf-ends" name="ends" data-act="rec-ends">'
+    +   opt('never', 'Never', ends) + opt('on', 'On a date', ends) + opt('after', 'After a number of posts', ends) + '</select></div></div>'
+    + '<div class="field" data-ends="on"><label for="rf-end">Last date</label><input id="rf-end" type="date" name="endDate" value="'+esc(rule.endDate || '')+'"></div>'
+    + '<div class="field" data-ends="after"><label for="rf-count">Number of posts</label><input id="rf-count" type="number" name="count" min="1" max="520" value="'+(rule.count || 6)+'"></div>'
+    + '<p class="pl-preview" id="rf-preview" aria-live="polite"></p>'
+    + '</fieldset>'
+
+    + '<div class="row2"><div class="field"><label for="rf-event">Event or department</label><select id="rf-event" name="eventId">'+eventOptions(v.eventId, { blank: 'None' })+'</select></div>'
+    + '<div class="field"><label for="rf-time">Time (optional)</label><input id="rf-time" type="time" name="publishTime" value="'+esc(v.publishTime || '')+'"></div></div>'
+    + '<fieldset class="field pl-plats"><legend class="lbl">Platforms</legend>'
+    + S.meta.platforms.map(function(p){ return '<label class="check"><input type="checkbox" name="platforms" value="'+esc(p.key)+'"'+(v.platforms.indexOf(p.key) !== -1 ? ' checked' : '')+'> '+esc(p.label)+'</label>'; }).join('')
+    + '</fieldset>'
+    + '<div class="field"><label for="rf-owner">Owner</label><input id="rf-owner" type="email" name="ownerEmail" list="pl-people" value="'+esc(v.ownerEmail)+'" placeholder="Who gets each one published"></div>'
+    + '<div class="field"><label for="rf-brief">Brief</label><textarea id="rf-brief" name="brief" placeholder="What each post is for">'+esc(v.brief)+'</textarea></div>'
+    + '<div class="field"><span class="lbl">Media each time</span><div id="rf-tpl">'+(v.mediaTemplate || []).map(tplRowHtml).join('')+'</div>'
+    +   '<button class="btn-sm" type="button" data-act="add-tpl-row">Add something to capture</button>'
+    +   (r ? '<div class="hint">Changes reach upcoming posts nobody has started on. Media someone added or captured by hand stays.</div>' : '')+'</div>'
+    + '<label class="check pl-nomedia"><input type="checkbox" name="noMediaNeeded"'+(v.noMediaNeeded ? ' checked' : '')+'> No media needed (text-only posts)</label>'
+    + '<div class="pl-form-msg" id="rf-msg"></div>'
+    + '<div class="btn-row"><button class="btn btn-primary" type="submit">'+(r ? 'Save series' : 'Create recurring post')+'</button>'
+    + '<button class="btn btn-secondary" type="button" data-act="close">Cancel</button>'
+    + (r ? '<button class="btn btn-danger pl-right" type="button" data-act="delete-recurrence" data-id="'+esc(r.id)+'">End series</button>' : '')+'</div>'
+    + '</form>';
+}
+
+function showFreqFields(freq) {
+  document.querySelectorAll('form[data-form=recurrence] [data-freq]').forEach(function(el){ el.hidden = el.getAttribute('data-freq') !== freq; });
+  var unit = document.querySelector('form[data-form=recurrence] [data-unit]');
+  if (unit) unit.textContent = freq === 'weekly' ? 'week(s)' : 'month(s)';
+}
+function showEndFields(ends) {
+  document.querySelectorAll('form[data-form=recurrence] [data-ends]').forEach(function(el){ el.hidden = el.getAttribute('data-ends') !== ends; });
+}
+
+function readRule(form) {
+  var fd = new FormData(form), ends = fd.get('ends');
+  return {
+    freq: fd.get('freq'), interval: Number(fd.get('interval') || 1),
+    weekdays: fd.getAll('weekdays').map(Number), monthDay: Number(fd.get('monthDay')),
+    nth: Number(fd.get('nth')), weekday: Number(fd.get('weekday')), startDate: fd.get('startDate'),
+    endDate: ends === 'on' ? (fd.get('endDate') || null) : null,
+    count: ends === 'after' ? Number(fd.get('count')) : null,
+  };
+}
+
+var previewTimer;
+function previewRule() {
+  var form = document.querySelector('form[data-form=recurrence]');
+  if (!form) return;
+  showFreqFields(form.querySelector('[name=freq]').value);
+  showEndFields(form.querySelector('[name=ends]').value);
+  clearTimeout(previewTimer);
+  previewTimer = setTimeout(function(){
+    api('POST', '/api/pipeline/recurrences/preview', { rule: readRule(form) }).then(function(d){
+      $('rf-preview').innerHTML = '<strong>'+esc(d.summary)+'.</strong> '
+        + (d.dates.length ? 'Next: ' + d.dates.map(shortDate).map(esc).join(', ') : 'No dates from today on.');
+      $('rf-preview').className = 'pl-preview';
+    }).catch(function(e){
+      $('rf-preview').textContent = e.message;
+      $('rf-preview').className = 'pl-preview pl-gaptext';
+    });
+  }, 250);
+}
+
+function saveRecurrence(form) {
+  var fd = new FormData(form), id = form.getAttribute('data-id'), msg = $('rf-msg');
+  var body = {
+    title: (fd.get('title') || '').trim(), brief: fd.get('brief') || '', eventId: fd.get('eventId') || null,
+    platforms: fd.getAll('platforms'), publishTime: fd.get('publishTime') || null,
+    ownerEmail: (fd.get('ownerEmail') || '').trim(), noMediaNeeded: fd.get('noMediaNeeded') === 'on',
+    rule: readRule(form),
+    mediaTemplate: Array.prototype.map.call(form.querySelectorAll('.pl-tpl-row'), function(row){
+      var g = function(k){ return row.querySelector('[data-tpl='+k+']').value; };
+      return { description: g('description').trim(), type: g('type'), offsetDays: -Number(g('before') || 0), assigneeEmail: g('assigneeEmail').trim() };
+    }).filter(function(m){ return m.description; }),
+  };
+  msg.innerHTML = '';
+  var btn = form.querySelector('[type=submit]'); btn.disabled = true;
+  (id ? api('PATCH', '/api/pipeline/recurrences/' + encodeURIComponent(id), body) : api('POST', '/api/pipeline/recurrences', body))
+    .then(function(d){
+      var next = d.recurrence.nextDates;
+      toast((id ? 'Series saved. ' : 'Recurring post created. ') + (next.length ? 'Next one: ' + shortDate(next[0]) + '.' : ''), 'ok');
+      closeDrawer(); render();
+    }).catch(function(e){ btn.disabled = false; msg.innerHTML = '<div class="alert alert-err">'+esc(e.message)+'</div>'; });
+}
+
+function toggleRecurrence(id, active) {
+  api('PATCH', '/api/pipeline/recurrences/' + encodeURIComponent(id), { active: active }).then(function(){
+    toast(active ? 'Resumed. Upcoming posts are back on the calendar.' : 'Paused. Upcoming posts nobody had started are off the calendar.', 'ok');
+    render();
+  }).catch(function(e){ toast(e.message, 'err'); });
+}
+
+function deleteRecurrence(id) {
+  if (!confirm('End this series? Upcoming posts nobody has started on are removed. Anything already worked on, and everything in the past, stays.')) return;
+  api('DELETE', '/api/pipeline/recurrences/' + encodeURIComponent(id)).then(function(d){
+    toast('Series ended. ' + d.removed + ' upcoming post' + (d.removed === 1 ? '' : 's') + ' removed.', 'ok');
+    closeDrawer(); render();
+  }).catch(function(e){ toast(e.message, 'err'); });
+}
+
+// ── Duplicate an event ───────────────────────────────────────────────────────
+function duplicateForm(e) {
+  var year = /(\d{4})/.exec(e.name);
+  var name = year ? e.name.replace(year[1], String(Number(year[1]) + 1)) : e.name + ' (copy)';
+  var nextStart = e.startDate ? addDays(e.startDate, 364) : '';
+  return '<form class="card pl-form" data-form="duplicate" data-id="'+esc(e.id)+'">'
+    + '<h3 class="ct">Duplicate “'+esc(e.name)+'”</h3>'
+    + '<p class="hint pl-under">Copies the event with all its posts and media. Every date moves by the same amount; copies start again as ideas, and nothing is captured yet.</p>'
+    + '<div class="row2"><div class="field"><label for="df-name">New name</label><input id="df-name" type="text" name="name" required value="'+esc(name)+'"></div>'
+    + (e.startDate
+      ? '<div class="field"><label for="df-start">New start date</label><input id="df-start" type="date" name="startDate" required value="'+esc(nextStart)+'"><div class="hint">Was '+esc(shortDate(e.startDate))+'.</div></div>'
+      : '<div class="field"><label for="df-shift">Move dates by (days)</label><input id="df-shift" type="number" name="shiftDays" required value="364"></div>')
+    + '</div><div class="pl-form-msg"></div>'
+    + '<div class="btn-row"><button class="btn btn-primary" type="submit">Duplicate event</button>'
+    + '<button class="btn btn-secondary" type="button" data-act="cancel-event-form">Cancel</button></div></form>';
+}
+
+function submitDuplicate(form) {
+  var fd = new FormData(form), id = form.getAttribute('data-id');
+  var body = { name: (fd.get('name') || '').trim(), startDate: fd.get('startDate') || null,
+               shiftDays: fd.get('shiftDays') != null ? Number(fd.get('shiftDays')) : null };
+  api('POST', '/api/pipeline/events/' + encodeURIComponent(id) + '/duplicate', body).then(function(d){
+    toast('Copied ' + d.items + ' post' + (d.items === 1 ? '' : 's') + ' and ' + d.media + ' media item' + (d.media === 1 ? '' : 's') + '.', 'ok');
+    return refreshEvents().then(function(){ renderFilters(); location.hash = '#event/' + encodeURIComponent(d.event.id); });
+  }).catch(function(e){ form.querySelector('.pl-form-msg').innerHTML = '<div class="alert alert-err">'+esc(e.message)+'</div>'; });
+}
+
+// ── My work ──────────────────────────────────────────────────────────────────
+function renderMine(main) {
+  var me = S.me && S.me.email;
+  if (!me) { main.innerHTML = '<p class="empty">Sign in through the hub to see your work.</p>'; return Promise.resolve(); }
+  var today = S.meta.today;
+  return Promise.all([
+    api('GET', '/api/pipeline/content' + qs({ ownerEmail: me, from: addDays(today, -7) })),
+    api('GET', '/api/pipeline/content' + qs({ ownerEmail: me, undated: 1 })),
+    api('GET', '/api/pipeline/media' + qs({ assigneeEmail: me, status: 'needed,scheduled' })),
+    api('GET', '/api/pipeline/media' + qs({ status: 'needed,scheduled', to: addDays(today, 21) })),
+    api('GET', '/api/pipeline/media' + qs({ status: 'needed', unscheduled: 1 })),
+    api('GET', '/api/pipeline/ical'),
+  ]).then(function(res){
+    var open = function(i){ return i.status !== 'published' && i.status !== 'cancelled'; };
+    var posts = res[0].items.concat(res[1].items).filter(open);
+    var mine = res[2].media;
+    var seen = {};
+    var free = res[3].media.concat(res[4].media).filter(function(m){
+      if (m.assigneeEmail || seen[m.id] || (m.itemPublishDate && m.itemPublishDate < today)) return false;
+      seen[m.id] = true; return true;
+    });
+    var feed = res[5];
+    var html = '<p class="hint">Yours, whatever the filters above say. Signed in as '+esc(personName(me))+'.</p>'
+      + '<div class="pl-two"><section class="card"><h3 class="ct">Posts you own</h3>'
+      + (posts.length ? '<ul class="pl-agenda">'+posts.map(agendaPost).join('')+'</ul>' : '<p class="empty">Nothing waiting on you.</p>')
+      + '</section><section class="card"><h3 class="ct">Media you’re capturing</h3>'
+      + (mine.length ? '<ul class="pl-agenda">'+mine.map(agendaMedia).join('')+'</ul>' : '<p class="empty">No captures assigned to you.</p>')
+      + '</section></div>';
+    html += '<section class="card"><h3 class="ct">Nobody is capturing these</h3>'
+      + (free.length ? '<ul class="pl-agenda">'+free.map(function(m){
+          return agendaMedia(m).replace('</li>', '<button class="btn-sm btn-sm-gold pl-take" type="button" data-act="take-media" data-id="'+esc(m.id)+'">I’ll take it</button></li>');
+        }).join('')+'</ul>'
+        : '<p class="empty">Every capture coming up has someone on it.</p>')
+      + '</section>';
+    html += '<section class="card"><h3 class="ct">Capture days on your phone</h3>'
+      + '<p class="pl-under hint">Subscribe in Apple Calendar or Google Calendar (“add from URL”). It updates as plans change. Anyone with the link can see the capture schedule, so share it only with the team.</p>'
+      + '<div class="field"><label for="ical-mine">Just your captures</label><div class="pl-copyrow"><input id="ical-mine" type="text" readonly value="'+esc(feed.mineUrl)+'">'
+      + '<button class="btn-sm" type="button" data-act="copy" data-target="ical-mine">Copy</button></div></div>'
+      + '<div class="field"><label for="ical-all">Everyone’s captures</label><div class="pl-copyrow"><input id="ical-all" type="text" readonly value="'+esc(feed.url)+'">'
+      + '<button class="btn-sm" type="button" data-act="copy" data-target="ical-all">Copy</button></div></div>'
+      + '<button class="btn-sm" type="button" data-act="reset-ical">Reset the link</button></section>';
+    main.innerHTML = html;
+  });
+}
+
 // ── One delegated handler for every button and form ──────────────────────────
 document.addEventListener('click', function(e){
   var el = e.target.closest('[data-act]');
@@ -786,10 +1105,44 @@ document.addEventListener('click', function(e){
       storeSet('pipeline.cal', S.cal); render(); break;
     case 'delete-post':
       var n = drawer.media.length;
-      if (!confirm('Delete “' + drawer.item.title + '”' + (n ? ' and its ' + n + ' media item' + (n === 1 ? '' : 's') : '') + '? This can’t be undone.')) return;
-      api('DELETE', '/api/pipeline/content/' + encodeURIComponent(drawer.id)).then(function(){
-        toast('Post deleted.', 'ok'); closeDrawer(); render();
+      if (drawer.recurrence) {
+        if (!confirm('Skip “' + drawer.item.title + '” on ' + shortDate(drawer.item.publishDate) + '? The rest of the series carries on.')) return;
+      } else if (!confirm('Delete “' + drawer.item.title + '”' + (n ? ' and its ' + n + ' media item' + (n === 1 ? '' : 's') : '') + '? This can’t be undone.')) return;
+      api('DELETE', '/api/pipeline/content/' + encodeURIComponent(drawer.id)).then(function(res){
+        toast(res.skipped ? 'Skipped. It stays cancelled on that date.' : 'Post deleted.', 'ok'); closeDrawer(); render();
       }).catch(function(err){ toast(err.message, 'err'); });
+      break;
+    case 'draft-caption': draftCaption(el); break;
+    case 'send-metricool': sendToMetricool(); break;
+    case 'make-recurring': openRecurrence(null, readForm(el.closest('form'))); break;
+    case 'new-recurrence': openRecurrence(null, {}); break;
+    case 'edit-recurrence': openRecurrence(el.getAttribute('data-id')); break;
+    case 'toggle-recurrence': toggleRecurrence(el.getAttribute('data-id'), !el.getAttribute('data-active')); break;
+    case 'delete-recurrence': deleteRecurrence(el.getAttribute('data-id')); break;
+    case 'add-tpl-row':
+      $('rf-tpl').insertAdjacentHTML('beforeend', tplRowHtml({ description: '', type: 'photo', offsetDays: 0, assigneeEmail: '' }));
+      $('rf-tpl').lastElementChild.querySelector('input').focus();
+      break;
+    case 'remove-tpl-row': el.closest('.pl-tpl-row').remove(); break;
+    case 'take-media':
+      api('PATCH', '/api/pipeline/media/' + encodeURIComponent(el.getAttribute('data-id')), { assigneeEmail: S.me.email }).then(function(){
+        toast('It’s yours. It’s on your list and your calendar feed.', 'ok'); render();
+      }).catch(function(err){ toast(err.message, 'err'); });
+      break;
+    case 'copy':
+      var target = $(el.getAttribute('data-target'));
+      target.select();
+      (navigator.clipboard ? navigator.clipboard.writeText(target.value) : Promise.reject()).then(function(){ toast('Link copied.', 'ok'); })
+        .catch(function(){ document.execCommand('copy'); toast('Link copied.', 'ok'); });
+      break;
+    case 'reset-ical':
+      if (!confirm('Reset the calendar link? Everyone subscribed with the old link stops getting updates until they subscribe again.')) return;
+      api('POST', '/api/pipeline/ical/reset').then(function(){ toast('New link made. The old one no longer works.', 'ok'); render(); })
+        .catch(function(err){ toast(err.message, 'err'); });
+      break;
+    case 'duplicate-event':
+      $('pl-event-form').innerHTML = duplicateForm(eventById(el.getAttribute('data-id')));
+      $('df-name').focus();
       break;
     case 'delete-media':
       var row = el.closest('[data-media]');
@@ -824,7 +1177,15 @@ document.addEventListener('change', function(e){
   if (act === 'quick-status') return moveStatus(el.getAttribute('data-id'), el.value);
   if (act === 'toggle-cancelled') { storeSet('pipeline.boardCancelled', el.checked); return render(); }
   if (act === 'toggle-archived') { storeSet('pipeline.eventsArchived', el.checked); return render(); }
-  if (el.hasAttribute('data-mfield')) saveMediaField(el.closest('[data-media]'), el);
+  if (el.hasAttribute('data-mfield')) return saveMediaField(el.closest('[data-media]'), el);
+  if (el.closest('form[data-form=recurrence]')) {
+    if (act === 'rec-freq') showFreqFields(el.value);
+    if (act === 'rec-ends') showEndFields(el.value);
+    previewRule();
+  }
+});
+document.addEventListener('input', function(e){
+  if (e.target.closest && e.target.closest('form[data-form=recurrence]') && e.target.closest('[data-rule]')) previewRule();
 });
 
 document.addEventListener('submit', function(e){
@@ -833,6 +1194,8 @@ document.addEventListener('submit', function(e){
   e.preventDefault();
   if (kind === 'content') return saveContent(form);
   if (kind === 'media') return addMedia(form);
+  if (kind === 'recurrence') return saveRecurrence(form);
+  if (kind === 'duplicate') return submitDuplicate(form);
   if (kind === 'event') {
     var fd = new FormData(form), id = form.getAttribute('data-id');
     var body = { name: (fd.get('name') || '').trim(), kind: fd.get('kind'), color: fd.get('color'),
@@ -877,8 +1240,10 @@ function loadPeople() {
 }
 
 // ── Start ────────────────────────────────────────────────────────────────────
-Promise.all([api('GET', '/api/pipeline/meta'), refreshEvents(), loadPeople()]).then(function(res){
+Promise.all([api('GET', '/api/pipeline/meta'), refreshEvents(), loadPeople(),
+             api('GET', '/api/me').catch(function(){ return { email: '' }; })]).then(function(res){
   S.meta = res[0];
+  S.me = res[3];
   renderFilters();
   render();
 }).catch(function(e){

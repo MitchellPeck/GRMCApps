@@ -164,7 +164,8 @@ export async function recordRunDrafts(
     const date = d.date || null;
     const open = await db.query(
       `SELECT id FROM content_items
-        WHERE event_id = $1 AND draft_key = $2 AND publish_date IS NOT DISTINCT FROM $3 AND status = ANY($4)
+        WHERE event_id = $1 AND draft_key = $2 AND status = ANY($4)
+          AND (publish_date IS NOT DISTINCT FROM $3 OR occurrence_date = $3)
         ORDER BY created_at DESC LIMIT 1`,
       [event.id, d.key, date, OPEN_FOR_REDRAFT],
     );

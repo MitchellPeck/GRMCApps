@@ -107,3 +107,48 @@ Rolling back means redeploying the previous image. The old app ignores the
 new tables, and the Series tab's legacy columns have been kept current
 throughout, so nothing it shows is lost. To undo the schema as well, restore
 the dump above.
+
+## Iteration 2: recurring posts and workflow extras
+
+- **Recurring posts** (`recurrences` table, `src/pipeline/recurrence.ts` for
+  the rules and `recurring.ts` for storage). A recurrence is a template plus a
+  rule: weekly on chosen days, every N weeks, monthly on a date (clamped to
+  short months), or monthly on the nth or last weekday. Each one ends never, on
+  a date, or after N posts. The generator materialises occurrences as ordinary
+  `content_items` (`recurrence_id`, `occurrence_date`, unique together),
+  56 days ahead. It runs on boot, daily, and on demand when the calendar asks
+  for a later range. Past dates are never filled in.
+  - A single-post edit to a template field sets `detached`. Series edits
+    ("this and future", or the series editor) reach only untouched (Idea or
+    Planned), non-detached occurrences from that date on.
+  - Deleting an occurrence cancels it instead, so the generator never brings
+    it back. A rule change or a pause removes untouched future slots that no
+    longer fit.
+  - Template media is marked `from_template`. A new media list replaces only
+    template media that hasn't been captured; hand-added media stays.
+- **Weekly runs as recurrences**, seeded once (`pipeline_run_recurrences_v1`):
+  Grace Notes on Wednesdays, the Sunday invite on Saturdays, the Weekly blog
+  on Fridays. All are "no media needed" until someone adds a media list. A run
+  fills its slot by matching event, draft key and occurrence date.
+- **Send to Metricool** from the drawer. The dialog moved to the shared
+  `public/metricool-modal.js`, so Social Posts and the pipeline use the same
+  one.
+- **Draft with Claude** (`POST /content/:id/draft-caption`) from the title,
+  brief and event notes, using the house `VOICE`. It returns text and saves
+  nothing.
+- **My work** tab, **duplicate event** (`POST /events/:id/duplicate`, every
+  date shifted by the same offset), and a **capture calendar iCal feed**.
+- **Dashboard pipeline counts** now come from the board's own query (from
+  30 days ago on, plus undated, with the filters), so the two always agree.
+  They used to count every post ever made.
+
+### iCal feed deploy note
+
+`/ical/<token>/capture.ics` must be reachable without the hub login, so
+`docker-compose.yml` gains a second Traefik router (`social-ical`) on that
+path prefix with no forward-auth middleware. The token in the path is the
+credential: random, compared in constant time, and resettable from My work.
+**Watchtower does not apply label changes.** After this ships, run
+`docker compose up -d social-posts` on the host (or let `auto-deploy.sh` do it
+once the change is on `main`). Until then the feed URL redirects to the hub
+login.

@@ -602,131 +602,6 @@ function loadDrafts() {
     .catch(function(e){ document.getElementById('drafts-list').innerHTML='<div class="alert alert-err">'+esc(e.message)+'</div>'; });
 }
 
-// ── Metricool ─────────────────────────────────────────────────────────────────
-var _mcCtx = { sourceType:'', sourceRef:'', contentItemId:'' };
-
-var DAY_NAMES = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-var MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-
-// Read a YYYY-MM-DD box without letting the browser reinterpret it as UTC
-// midnight (which shows the day before in every US timezone).
-function describeDate(iso){
-  if(!/^\d{4}-\d{2}-\d{2}$/.test(iso||'')) return '';
-  var p=iso.split('-').map(Number);
-  var d=new Date(p[0],p[1]-1,p[2]);
-  return DAY_NAMES[d.getDay()]+', '+MONTH_NAMES[p[1]-1]+' '+p[2];
-}
-
-function updateDateHint(){
-  var hint=document.getElementById('mc-date-hint');
-  if(hint) hint.textContent=describeDate(document.getElementById('mc-date').value);
-}
-
-// Show only the control for the chosen image source, so the send path is never
-// ambiguous about which image it should use.
-function switchImageSource(){
-  var mode=document.getElementById('mc-image-source').value;
-  ['upload','approved','url'].forEach(function(k){
-    document.getElementById('mc-src-'+k).style.display = (mode===k) ? 'block' : 'none';
-  });
-  if(mode!=='upload') document.getElementById('mc-file').value='';
-  if(mode!=='url') document.getElementById('mc-imgurl').value='';
-  if(mode!=='approved') document.getElementById('mc-approved').value='';
-}
-
-// Metricool's autoPublish is one flag for the whole post, and Instagram has to
-// publish itself — so ticking Instagram also commits whatever it's grouped with.
-// Say that up front instead of letting it be a surprise after the fact.
-function updatePublishHint(){
-  var hint=document.getElementById('mc-publish-hint'); if(!hint) return;
-  var ig=document.getElementById('mc-ig').checked;
-  var others=[];
-  if(document.getElementById('mc-fb').checked) others.push('Facebook');
-  if(document.getElementById('mc-x').checked) others.push('X');
-  if(!ig){ hint.textContent='Lands as a draft — approve it in Metricool to publish.'; return; }
-  hint.textContent = others.length
-    ? 'Instagram publishes automatically, so '+others.join(' and ')+' will too — nothing waits for approval.'
-    : 'Publishes automatically at the scheduled time.';
-}
-
-// opts.date is the day this post belongs to (this week's Wednesday for a
-// Wednesday draft, the series post's own date for a series draft).
-function openMetricool(text, opts){
-  opts = opts || {};
-  _mcCtx = { sourceType: opts.sourceType||'', sourceRef: opts.sourceRef||'', contentItemId: opts.contentItemId||'' };
-  document.getElementById('mc-text').value = text || '';
-  document.getElementById('mc-date').value = opts.date || new Date().toLocaleDateString('en-CA');
-  document.getElementById('mc-time').value = (window._mcDefaults && _mcDefaults.time) || '09:00';
-  document.getElementById('mc-image-source').value = 'none';
-  document.getElementById('mc-msg').innerHTML = '';
-  switchImageSource();
-  updateDateHint();
-  updatePublishHint();
-  document.getElementById('mc-modal').style.display = 'flex';
-  // Populate approved-image select
-  var sel = document.getElementById('mc-approved');
-  sel.innerHTML = '<option value="">— none —</option>';
-  api('/api/metricool/approved-images').then(function(res){
-    if (!res.ok || !res.images) return;
-    res.images.forEach(function(img){
-      var opt = document.createElement('option');
-      opt.value = img.id;
-      opt.textContent = img.title;
-      sel.appendChild(opt);
-    });
-  }).catch(function(){ /* silently ignore if approvals not available */ });
-}
-
-function closeMetricool(){ document.getElementById('mc-modal').style.display='none'; }
-
-// Resolve the chosen image into the fields the send endpoint expects. Uploads
-// are read into a data URL here; the server puts them on R2 like it already
-// does for approved images.
-function readMetricoolImage(){
-  var mode=document.getElementById('mc-image-source').value;
-  if(mode==='approved') return Promise.resolve({ approvedImageId: document.getElementById('mc-approved').value });
-  if(mode==='url') return Promise.resolve({ imageUrl: document.getElementById('mc-imgurl').value.trim() });
-  if(mode!=='upload') return Promise.resolve({});
-  var file=document.getElementById('mc-file').files[0];
-  if(!file) return Promise.reject(new Error('Choose a file to upload, or pick a different image source.'));
-  if(file.size > 10*1024*1024) return Promise.reject(new Error('That image is larger than 10 MB.'));
-  return new Promise(function(resolve, reject){
-    var reader=new FileReader();
-    reader.onload=function(){ resolve({ imageData: String(reader.result) }); };
-    reader.onerror=function(){ reject(new Error('Could not read that file.')); };
-    reader.readAsDataURL(file);
-  });
-}
-
-function submitMetricool(){
-  var networks = [];
-  if (document.getElementById('mc-fb').checked) networks.push('facebook');
-  if (document.getElementById('mc-ig').checked) networks.push('instagram');
-  // Metricool still calls X "twitter" in its API.
-  if (document.getElementById('mc-x').checked) networks.push('twitter');
-  if (!networks.length) { document.getElementById('mc-msg').innerHTML='<div class="alert alert-err">Pick at least one network.</div>'; return; }
-  var dateTime = document.getElementById('mc-date').value + 'T' + (document.getElementById('mc-time').value||'09:00') + ':00';
-  var tz = (window._mcDefaults && _mcDefaults.tz) || 'America/New_York';
-  setBtn('mc-send-btn', true, 'Sending...');
-  readMetricoolImage().then(function(image){
-    var body = { text: document.getElementById('mc-text').value, networks: networks, dateTime: dateTime, timezone: tz,
-      sourceType: _mcCtx.sourceType, sourceRef: _mcCtx.sourceRef, contentItemId: _mcCtx.contentItemId };
-    Object.keys(image).forEach(function(k){ body[k]=image[k]; });
-    return api('/api/metricool/send', { method:'POST', body: body });
-  }).then(function(res){
-    setBtn('mc-send-btn', false);
-    var el = document.getElementById('mc-msg');
-    if(!res.ok){ el.innerHTML = '<div class="alert alert-err">'+esc(res.error)+'</div>'; return; }
-    // Whether a human still has to press publish depends on the networks picked,
-    // so say which of the two happened rather than a generic "sent".
-    var fate = res.autoPublish
-      ? ' It will publish automatically.'
-      : ' Approve it in the Metricool planner to publish.';
-    var extra = fate + (res.note? ' '+esc(res.note):'') + ((res.warnings&&res.warnings.length)? ' '+esc(res.warnings.join(' ')):'');
-    el.innerHTML = '<div class="alert alert-ok">Sent to Metricool — scheduled '+esc(res.scheduledFor)+'.'+extra+'</div>';
-  }).catch(function(e){ setBtn('mc-send-btn', false); document.getElementById('mc-msg').innerHTML = '<div class="alert alert-err">'+esc(e.message)+'</div>'; });
-}
-
 function loadBrands(){
   var btn=document.getElementById('btn-load-brands'); if(btn){btn.disabled=true;btn.textContent='Loading...';}
   api('/api/metricool/brands').then(function(res){
@@ -772,7 +647,8 @@ document.getElementById('f-date').value=todayLocal();
   var el=document.getElementById('w-sunday'); if(el) el.value=d.toLocaleDateString('en-CA');
 })();
 document.getElementById('ns-start').value=todayLocal();
-document.getElementById('mc-date').addEventListener('change', updateDateHint);
 checkAuthStatus();
 // The pipeline links back to a tab with /#series or /#drafts.
-(function(){ var h=location.hash.replace('#',''); if(h && document.querySelector('[data-tab="'+h+'"]')) switchTab(h); })();
+function tabFromHash(){ var h=location.hash.replace('#',''); if(h && document.querySelector('[data-tab="'+h+'"]')) switchTab(h); }
+tabFromHash();
+window.addEventListener('hashchange', tabFromHash);

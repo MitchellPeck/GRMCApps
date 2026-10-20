@@ -116,6 +116,42 @@ CREATE TABLE IF NOT EXISTS media_assets (
   created_at      timestamptz NOT NULL DEFAULT now(),
   updated_at      timestamptz NOT NULL DEFAULT now()
 );
+-- Recurring posts: a template plus a repeat rule. The generator turns each
+-- occurrence into an ordinary content item, so instances get their own media,
+-- owner and status. Written as ALTERs so a database that already has the
+-- pipeline tables picks the new columns up too.
+CREATE TABLE IF NOT EXISTS recurrences (
+  id              text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  title           text NOT NULL,
+  brief           text NOT NULL DEFAULT '',
+  event_id        text REFERENCES events(id) ON DELETE SET NULL,
+  platforms       text[] NOT NULL DEFAULT '{}',
+  publish_time    time,
+  owner_email     text NOT NULL DEFAULT '',
+  no_media_needed boolean NOT NULL DEFAULT false,
+  media_template  jsonb NOT NULL DEFAULT '[]',
+  draft_key       text NOT NULL DEFAULT '',
+  freq            text NOT NULL CHECK (freq IN ('weekly','monthly_date','monthly_weekday')),
+  every           integer NOT NULL DEFAULT 1 CHECK (every >= 1),
+  weekdays        integer[] NOT NULL DEFAULT '{}',
+  month_day       integer,
+  nth             integer,
+  weekday         integer,
+  start_date      date NOT NULL,
+  end_date        date,
+  max_count       integer,
+  active          boolean NOT NULL DEFAULT true,
+  created_by      text NOT NULL DEFAULT '',
+  created_at      timestamptz NOT NULL DEFAULT now(),
+  updated_at      timestamptz NOT NULL DEFAULT now()
+);
+ALTER TABLE content_items ADD COLUMN IF NOT EXISTS recurrence_id text REFERENCES recurrences(id) ON DELETE SET NULL;
+ALTER TABLE content_items ADD COLUMN IF NOT EXISTS occurrence_date date;
+-- Set when one occurrence is edited on its own, so series-wide edits leave it be.
+ALTER TABLE content_items ADD COLUMN IF NOT EXISTS detached boolean NOT NULL DEFAULT false;
+CREATE UNIQUE INDEX IF NOT EXISTS content_items_occurrence_idx ON content_items (recurrence_id, occurrence_date);
+ALTER TABLE media_assets ADD COLUMN IF NOT EXISTS from_template boolean NOT NULL DEFAULT false;
+
 CREATE INDEX IF NOT EXISTS media_assets_gather_date_idx ON media_assets (gather_date);
 CREATE INDEX IF NOT EXISTS media_assets_item_idx ON media_assets (content_item_id);
 CREATE INDEX IF NOT EXISTS media_assets_status_idx ON media_assets (status);

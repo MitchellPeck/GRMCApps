@@ -4,7 +4,7 @@
    swatch, never as text, so any colour stays legible. */
 
 .pl-layout{max-width:1180px;margin:0 auto;padding:22px 20px 80px}
-.pl-layout .tabs{max-width:620px}
+.pl-layout .tabs{max-width:860px}
 .pl-layout .tab{text-decoration:none}
 .pl-h2{font-size:var(--t-h2);margin-bottom:6px}
 .pl-back{font-size:12px;margin-bottom:6px}
@@ -222,3 +222,49 @@ header a.btn-hdr{text-decoration:none}
    layout doesn't lose the gap after each row's last field. */
 .pl-drawer .row2{margin-bottom:14px}
 .pl-drawer .row2 .field{margin-bottom:0}
+
+/* ---- Recurring posts ---- */
+[hidden]{display:none !important}
+.pl-rec{color:var(--gold-d);font-weight:700}
+.pl-rec-banner{background:var(--pending-bg);color:var(--pending-fg)}
+.pl-rec-banner .pl-link{color:inherit;font-weight:600}
+.pl-recs{list-style:none}
+.pl-recs li{display:flex;align-items:center;gap:10px;border-left:4px solid var(--ev);padding:4px 0 4px 12px;margin-bottom:10px}
+.pl-recs li.paused{opacity:.6}
+.pl-rec-open{flex:1;display:flex;flex-direction:column;gap:2px;text-align:left;background:none;border:none;cursor:pointer;font-family:var(--font-ui);padding:4px 0;min-width:0}
+.pl-repeat{border:1px solid var(--rule);border-radius:var(--r);padding:12px 14px 4px;margin-bottom:14px;background:var(--paper)}
+.pl-repeat legend{padding:0 4px}
+.pl-inline{display:flex;align-items:center;gap:6px;text-transform:none;letter-spacing:0;font-size:12px;font-weight:500;color:var(--muted);margin:0;white-space:nowrap}
+.pl-inline input[type=number],.pl-repeat input[type=number]{width:72px;border:1px solid var(--rule);border-radius:var(--r);padding:8px 9px;font-size:13px;font-family:var(--font-ui);background:var(--field-bg)}
+.pl-repeat input[type=date],.pl-repeat input[type=number]{width:100%;max-width:200px}
+.pl-days{display:flex;gap:4px;flex-wrap:wrap}
+.pl-day-pick{margin:0;text-transform:none;letter-spacing:0}
+.pl-day-pick input{position:absolute;opacity:0;pointer-events:none}
+.pl-day-pick span{display:inline-block;padding:6px 9px;border:1px solid var(--rule);border-radius:var(--r);font-size:12px;font-weight:600;color:var(--ink);background:var(--field-bg);cursor:pointer}
+.pl-day-pick input:checked + span{background:var(--navy);border-color:var(--navy);color:#fff}
+.pl-day-pick input:focus-visible + span{outline:2px solid var(--gold);outline-offset:2px}
+.pl-preview{font-size:12.5px;color:var(--ink-soft);margin:0 0 10px;min-height:1.5em}
+.pl-tpl-row{display:grid;grid-template-columns:minmax(0,2fr) auto auto minmax(0,1.2fr) auto;gap:6px;align-items:center;margin-bottom:6px}
+.pl-tpl-row input,.pl-tpl-row select{padding:6px 8px;font-size:12px}
+.pl-tpl-row input[type=email]{border:1px solid var(--rule);border-radius:var(--r);font-family:var(--font-ui);background:var(--field-bg);min-width:0}
+.pl-tpl-row input[type=number]{width:56px;padding:6px}
+.pl-scope{border:none}
+.pl-scope legend{margin-bottom:6px}
+
+/* ---- Drawer extras ---- */
+.pl-label-row{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:5px}
+.pl-label-row label{margin:0}
+.pl-spin-dark{border-color:var(--rule);border-top-color:var(--navy);width:10px;height:10px;vertical-align:-1px}
+
+/* ---- My work ---- */
+.pl-agenda li:has(.pl-take){display:flex;align-items:center;gap:8px}
+.pl-agenda li:has(.pl-take) .pl-row{flex:1;margin-bottom:6px}
+.pl-take{flex-shrink:0;margin-bottom:6px}
+.pl-copyrow{display:flex;gap:6px}
+.pl-copyrow input{font-size:12px;color:var(--ink-soft)}
+
+@media (max-width:700px){
+  .pl-tpl-row{grid-template-columns:1fr 1fr;border-bottom:1px dashed var(--rule);padding-bottom:6px}
+  .pl-tpl-row input[type=text]{grid-column:1 / -1}
+  .pl-agenda li:has(.pl-take){flex-direction:column;align-items:stretch}
+}

@@ -10,12 +10,15 @@ import {
 } from "./pipeline/repo";
 import { BACKFILL_SETTING, backfillOnce, markSentToMetricool, recordRunDrafts } from "./pipeline/sync";
 import { RUN_EVENTS } from "./pipeline/config";
+import { createRecurrence, deleteRecurrence, materialize, seedRunRecurrences, updateRecurrence } from "./pipeline/recurring";
+import { duplicateEvent } from "./pipeline/repo";
+import { Rule } from "./pipeline/recurrence";
 
 const pool = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
 const REF = "2026-11-01";
 
 before(async () => {
-  await pool.query("DROP TABLE IF EXISTS media_assets, content_items, events");
+  await pool.query("DROP TABLE IF EXISTS media_assets, content_items, recurrences, events");
   await pool.query(SCHEMA_SQL);
   await pool.query("DELETE FROM series_posts");
   await pool.query("DELETE FROM series");
@@ -26,6 +29,7 @@ before(async () => {
 after(async () => {
   await pool.query("DELETE FROM media_assets");
   await pool.query("DELETE FROM content_items");
+  await pool.query("DELETE FROM recurrences");
   await pool.query("DELETE FROM events");
   await pool.query("DELETE FROM series_posts");
   await pool.query("DELETE FROM series");
@@ -204,4 +208,127 @@ test("filters and gaps read the same records", async () => {
   const { gaps } = await dashboardGaps(pool, REF);
   assert.equal(gaps.length, 5);
   for (const g of gaps) assert.equal(g.count, g.ids.length);
+});
+
+const weekly = (weekdays: number[], extra: Partial<Rule> = {}): Rule => ({
+  freq: "weekly", interval: 1, weekdays, monthDay: null, nth: null, weekday: null,
+  startDate: REF, endDate: null, count: null, ...extra,
+});
+const occ = async (recId: string) => (await pool.query(
+  "SELECT * FROM content_items WHERE recurrence_id = $1 ORDER BY occurrence_date", [recId])).rows;
+
+test("a recurring post keeps its next weeks on the calendar, with template media", async () => {
+  const r = await createRecurrence(pool, {
+    title: "Midweek devotional", brief: "Short reflection", rule: weekly([3]),
+    mediaTemplate: [{ description: "Sanctuary photo", type: "photo", offsetDays: -1, assigneeEmail: "p@x.org" }],
+  }, "me@x.org", REF);
+  assert.ok(r.ok);
+  assert.equal(r.value.summary, "Every Wednesday");
+  const items = await occ(r.value.id);
+  assert.equal(items.length, 8, "56 days of Wednesdays from Sun Nov 1");
+  assert.equal(items[0].publish_date, "2026-11-04");
+  assert.equal(items[0].status, "planned", "a brief makes it Planned");
+  const media = await listMedia(pool, { contentItemId: items[0].id });
+  assert.deepEqual(media.map((m) => [m.description, m.gatherDate, m.status, m.assigneeEmail]),
+    [["Sanctuary photo", "2026-11-03", "scheduled", "p@x.org"]]);
+  assert.equal(await materialize(pool, REF, "2026-12-27"), 0, "idempotent");
+  // Paging the calendar further out generates what that range needs.
+  assert.ok(await materialize(pool, REF, "2027-01-31") > 0);
+
+  // A new media list replaces template media on untouched posts; media added by hand stays.
+  await createMedia(pool, items[1].id, { description: "Hand-added quote card", type: "graphic" });
+  const upd = await updateRecurrence(pool, r.value.id, {
+    mediaTemplate: [{ description: "Choir clip", type: "video", offsetDays: -2, assigneeEmail: "" }],
+  }, REF);
+  assert.ok(upd.ok);
+  const now = (await listMedia(pool, { contentItemId: items[1].id })).map((m) => m.description).sort();
+  assert.deepEqual(now, ["Choir clip", "Hand-added quote card"]);
+});
+
+test("one-off edits detach; series edits reach only untouched later posts", async () => {
+  const r = await createRecurrence(pool, { title: "Weekly verse", rule: weekly([5]) }, "me@x.org", REF);
+  assert.ok(r.ok);
+  const [first, second, third, fourth] = await occ(r.value.id);
+
+  await updateContent(pool, second.id, { title: "Verse — Thanksgiving edition" });
+  await updateContent(pool, fourth.id, { status: "drafted", caption: "done" });
+  await updateContent(pool, third.id, { brief: "Lead with the verse" }, "future");
+
+  const after = await occ(r.value.id);
+  const byId = Object.fromEntries(after.map((x) => [x.id, x]));
+  assert.equal(byId[second.id].detached, true);
+  assert.equal(byId[first.id].brief, "", "earlier posts untouched by a 'this and future' edit");
+  assert.equal(byId[third.id].brief, "Lead with the verse");
+  assert.equal(byId[fourth.id].brief, "", "drafted posts are left alone");
+  assert.equal(after[5].brief, "Lead with the verse", "later untouched posts follow");
+
+  const upd = await updateRecurrence(pool, r.value.id, { title: "Friday verse" }, REF);
+  assert.ok(upd.ok);
+  const renamed = Object.fromEntries((await occ(r.value.id)).map((x) => [x.id, x]));
+  assert.equal(renamed[first.id].title, "Friday verse");
+  assert.equal(renamed[second.id].title, "Verse — Thanksgiving edition", "detached keeps its own title");
+});
+
+test("skipping a date sticks; changing the rule moves untouched posts only", async () => {
+  const r = await createRecurrence(pool, { title: "Prayer prompt", rule: weekly([3]) }, "me@x.org", REF);
+  assert.ok(r.ok);
+  const [first, second] = await occ(r.value.id);
+  const skipped = await deleteContent(pool, first.id);
+  assert.ok(skipped.ok);
+  assert.equal(skipped.value.skipped, true);
+  await materialize(pool, REF, "2026-12-27");
+  const again = await occ(r.value.id);
+  assert.equal(again.find((x) => x.id === first.id)?.status, "cancelled", "not regenerated");
+
+  await updateContent(pool, second.id, { status: "drafted", caption: "keep me" });
+  const moved = await updateRecurrence(pool, r.value.id, { rule: weekly([4]) }, REF);
+  assert.ok(moved.ok);
+  const rows = await occ(r.value.id);
+  const dows = rows.filter((x) => x.status === "idea").map((x) => new Date(x.publish_date + "T12:00:00Z").getUTCDay());
+  assert.ok(dows.length && dows.every((d) => d === 4), "untouched posts now on Thursdays");
+  assert.ok(rows.some((x) => x.id === second.id), "the drafted Wednesday stays");
+
+  await updateRecurrence(pool, r.value.id, { active: false }, REF);
+  assert.equal((await occ(r.value.id)).filter((x) => x.status === "idea").length, 0, "pausing clears untouched slots");
+
+  const ended = await deleteRecurrence(pool, r.value.id, REF);
+  assert.ok(ended.ok);
+  const kept = await pool.query("SELECT recurrence_id FROM content_items WHERE id = $1", [second.id]);
+  assert.equal(kept.rows[0].recurrence_id, null, "worked-on posts outlive the series");
+});
+
+test("weekly runs become recurrences and fill their own slots", async () => {
+  assert.equal(await seedRunRecurrences(pool, REF), 3);
+  assert.equal(await seedRunRecurrences(pool, REF), 0, "seeded once");
+  const slots = await pool.query(
+    `SELECT id, publish_date FROM content_items WHERE event_id = $1 AND draft_key = 'wednesday' AND recurrence_id IS NOT NULL
+      ORDER BY publish_date`, [RUN_EVENTS.wednesday.id]);
+  // Nov 4 already had a drafted Grace Notes from the earlier run test, so no empty twin.
+  assert.equal(slots.rows[0].publish_date, "2026-11-11");
+  const ids = await savePostDrafts(pool, "wednesday", "2026-11-15", { wednesday: "GN Nov 11" }, "me@x.org");
+  const filled = await recordRunDrafts(pool, "wednesday", [
+    { key: "wednesday", text: "GN Nov 11", date: "2026-11-11", draftId: ids.wednesday, title: "Grace Notes: Advent" },
+  ], "me@x.org");
+  assert.equal(filled.wednesday, slots.rows[0].id, "the run filled the slot instead of adding a post");
+  const item = await getContent(pool, filled.wednesday);
+  assert.ok(item.ok);
+  assert.equal(item.value.item.status, "drafted");
+  assert.ok(item.value.recurrence);
+});
+
+test("duplicating an event shifts every date and starts the copies over", async () => {
+  const camp = await createEvent(pool, { name: "VBS 2026", kind: "event", startDate: "2026-07-06", endDate: "2026-07-10" });
+  const p = await createContent(pool, { title: "VBS day 1", publishDate: "2026-07-06", eventId: camp.id, brief: "Recap" }, "me@x.org");
+  assert.ok(p.ok);
+  await createMedia(pool, p.value.id, { description: "Opening photo", gatherDate: "2026-07-06" });
+  await updateContent(pool, p.value.id, { status: "published" });
+  const dup = await duplicateEvent(pool, camp.id, { name: "VBS 2027", startDate: "2027-07-05" }, "me@x.org");
+  assert.ok(dup.ok);
+  assert.equal(dup.value.event.startDate, "2027-07-05");
+  assert.equal(dup.value.event.endDate, "2027-07-09");
+  const copy = await getEvent(pool, dup.value.event.id);
+  assert.ok(copy.ok);
+  assert.deepEqual(copy.value.items.map((i) => [i.publishDate, i.status]), [["2027-07-05", "planned"]]);
+  assert.deepEqual(copy.value.media.map((m) => [m.gatherDate, m.status]), [["2027-07-05", "scheduled"]]);
+  assert.ok(!(await duplicateEvent(pool, camp.id, { name: "" }, "me@x.org")).ok);
 });

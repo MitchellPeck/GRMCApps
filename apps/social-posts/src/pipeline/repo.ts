@@ -10,6 +10,8 @@ import {
   checkStatusChange, computeGaps, lateMediaWarning, pipelineStatusToSeries, resolveMediaStatus,
   CONTENT_STATUSES,
 } from "./rules";
+import { propagate } from "./recurring";
+import { describeRule } from "./recurrence";
 
 // Hand `date` columns back as "YYYY-MM-DD" strings. pg's default turns them
 // into a JS Date at local midnight — exactly the one-day drift these calendar
@@ -35,6 +37,7 @@ export interface ContentRow {
   ownerEmail: string; brief: string; caption: string; noMediaNeeded: boolean;
   seriesId: string | null; postIdx: number | null; draftId: number | null; draftKey: string;
   mediaTotal: number; mediaDone: number;
+  recurrenceId: string | null; occurrenceDate: string | null; detached: boolean;
 }
 
 export interface MediaRow {
@@ -68,6 +71,7 @@ function contentOf(r: any): ContentRow {
     postIdx: r.post_idx == null ? null : Number(r.post_idx),
     draftId: r.draft_id == null ? null : Number(r.draft_id), draftKey: r.draft_key,
     mediaTotal: Number(r.media_total || 0), mediaDone: Number(r.media_done || 0),
+    recurrenceId: r.recurrence_id ?? null, occurrenceDate: r.occurrence_date ?? null, detached: !!r.detached,
   };
 }
 
@@ -216,6 +220,8 @@ export interface ContentDetail {
   item: ContentRow; media: MediaRow[];
   /** Where the caption came from, when the automated drafting wrote it. */
   source: { kind: "series"; seriesName: string; postNumber: number } | { kind: "run"; run: string; key: string; draftedAt: string } | null;
+  /** The recurring post this is one occurrence of. */
+  recurrence: { id: string; title: string; summary: string } | null;
 }
 
 export async function getContent(db: Db, id: string): Promise<Result<ContentDetail>> {
@@ -230,7 +236,18 @@ export async function getContent(db: Db, id: string): Promise<Result<ContentDeta
     const d = await db.query("SELECT run, key, created_at FROM post_drafts WHERE id = $1", [item.draftId]);
     if (d.rowCount) source = { kind: "run", run: d.rows[0].run, key: d.rows[0].key, draftedAt: String(d.rows[0].created_at) };
   }
-  return { ok: true, value: { item, media, source } };
+  let recurrence: ContentDetail["recurrence"] = null;
+  if (item.recurrenceId) {
+    const r = await db.query("SELECT * FROM recurrences WHERE id = $1", [item.recurrenceId]);
+    if (r.rowCount) {
+      const x = r.rows[0];
+      recurrence = { id: x.id, title: x.title, summary: describeRule({
+        freq: x.freq, interval: x.every, weekdays: x.weekdays || [], monthDay: x.month_day, nth: x.nth,
+        weekday: x.weekday, startDate: x.start_date, endDate: x.end_date, count: x.max_count,
+      }) };
+    }
+  }
+  return { ok: true, value: { item, media, source, recurrence } };
 }
 
 const CONTENT_COLUMNS: Record<string, string> = {
@@ -262,8 +279,17 @@ export async function createContent(db: Db, input: ContentInput, createdBy: stri
   return { ok: true, value: (await getContentRow(db, r.rows[0].id))! };
 }
 
+// Fields a recurring post's template sets. Changing one on a single
+// occurrence detaches it, so later series-wide edits leave it alone.
+const TEMPLATE_KEYS: Array<keyof ContentInput> = ["title", "brief", "eventId", "platforms", "ownerEmail", "publishTime", "noMediaNeeded", "publishDate"];
+
+/**
+ * scope "future" (recurring posts only): the template fields in this change
+ * also become the recurrence's, and reach every later occurrence nobody has
+ * worked on yet.
+ */
 export async function updateContent(
-  db: Db, id: string, input: ContentInput,
+  db: Db, id: string, input: ContentInput, scope: "this" | "future" = "this",
 ): Promise<Result<{ item: ContentRow; warnings: string[] }>> {
   const current = await getContentRow(db, id);
   if (!current) return fail("Post not found.");
@@ -281,6 +307,27 @@ export async function updateContent(
   if (sets.length) {
     vals.push(id);
     await db.query(`UPDATE content_items SET ${sets.join(", ")}, updated_at = now() WHERE id = $${vals.length}`, vals);
+  }
+  const touchesTemplate = TEMPLATE_KEYS.some((k) => k in input);
+  if (current.recurrenceId && touchesTemplate) {
+    if (scope === "future") {
+      const tpl: Record<string, unknown> = {};
+      for (const k of TEMPLATE_KEYS) if (k !== "publishDate" && k in input) tpl[k] = (input as Record<string, unknown>)[k];
+      const map: Record<string, string> = {
+        title: "title", brief: "brief", eventId: "event_id", platforms: "platforms", ownerEmail: "owner_email",
+        publishTime: "publish_time", noMediaNeeded: "no_media_needed",
+      };
+      const keys = Object.keys(tpl);
+      if (keys.length) {
+        await db.query(
+          `UPDATE recurrences SET ${keys.map((k, i) => `${map[k]} = $${i + 1}`).join(", ")}, updated_at = now() WHERE id = $${keys.length + 1}`,
+          [...keys.map((k) => tpl[k]), current.recurrenceId],
+        );
+        await propagate(db, current.recurrenceId, current.occurrenceDate || current.publishDate || "", tpl, id);
+      }
+    } else {
+      await db.query("UPDATE content_items SET detached = true WHERE id = $1", [id]);
+    }
   }
   const item = (await getContentRow(db, id))!;
   await writeBackToSeries(db, item);
@@ -303,7 +350,14 @@ export async function writeBackToSeries(db: Db, item: ContentRow): Promise<void>
   );
 }
 
-export async function deleteContent(db: Db, id: string): Promise<Result<{ mediaDeleted: number }>> {
+export async function deleteContent(db: Db, id: string): Promise<Result<{ mediaDeleted: number; skipped?: boolean }>> {
+  // Deleting one occurrence of a recurring post would only have the generator
+  // put it back, so it is skipped (cancelled) instead.
+  const rec = await db.query("SELECT recurrence_id FROM content_items WHERE id = $1", [id]);
+  if (rec.rowCount && rec.rows[0].recurrence_id) {
+    await db.query("UPDATE content_items SET status = 'cancelled', detached = true, updated_at = now() WHERE id = $1", [id]);
+    return { ok: true, value: { mediaDeleted: 0, skipped: true } };
+  }
   const m = await db.query("SELECT count(*) AS n FROM media_assets WHERE content_item_id = $1", [id]);
   const r = await db.query("DELETE FROM content_items WHERE id = $1", [id]);
   if (!r.rowCount) return fail("Post not found.");
@@ -417,4 +471,60 @@ export async function dashboardGaps(db: Db, today: string): Promise<{ today: str
     itemPublishDate: m.itemPublishDate, itemStatus: m.itemStatus,
   }));
   return { today, gaps: computeGaps(items, media, today, GAP_THRESHOLDS) };
+}
+
+// ── Duplicating an event ─────────────────────────────────────────────────────
+
+function daysBetween(from: string, to: string): number {
+  return Math.round((Date.parse(to + "T12:00:00Z") - Date.parse(from + "T12:00:00Z")) / 86400000);
+}
+const shift = (d: string | null, n: number) => (d ? addDays(d, n) : null);
+
+/**
+ * Copy an event, its posts and their media to new dates — Kids Camp 2026 into
+ * 2027. Every date moves by the same offset. Copies start over: posts as Idea
+ * (Planned if they have a brief), media as Needed/Scheduled with no file.
+ * Occurrences of recurring posts are left out; the recurrence makes its own.
+ */
+export async function duplicateEvent(
+  db: Db, id: string, input: { name: string; startDate?: string | null; shiftDays?: number | null }, createdBy: string,
+): Promise<Result<{ event: EventRow; items: number; media: number }>> {
+  const src = await db.query("SELECT * FROM events WHERE id = $1", [id]);
+  if (!src.rowCount) return fail("Event not found.");
+  const e = eventOf(src.rows[0]);
+  if (!input.name) return fail("Give the copy a name.");
+  let offset: number;
+  if (input.startDate && e.startDate) offset = daysBetween(e.startDate, input.startDate);
+  else if (input.shiftDays != null && Number.isInteger(input.shiftDays)) offset = input.shiftDays;
+  else return fail(e.startDate ? "Pick the new start date." : "Say how many days later the copies should be.");
+
+  const created = await createEvent(db, {
+    name: input.name, kind: e.kind === "series" ? "event" : e.kind, color: e.color,
+    startDate: shift(e.startDate, offset), endDate: shift(e.endDate, offset), ownerEmail: e.ownerEmail, notes: e.notes,
+  });
+  const items = await db.query(
+    "SELECT * FROM content_items WHERE event_id = $1 AND status <> 'cancelled' AND recurrence_id IS NULL ORDER BY publish_date",
+    [id],
+  );
+  let mediaCount = 0;
+  for (const it of items.rows) {
+    const r = await db.query(
+      `INSERT INTO content_items (title, event_id, platforms, publish_date, publish_time, status, owner_email, brief,
+                                  caption, no_media_needed, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
+      [it.title, created.id, it.platforms, shift(it.publish_date, offset), it.publish_time, it.brief ? "planned" : "idea",
+       it.owner_email, it.brief, it.caption, it.no_media_needed, createdBy],
+    );
+    const media = await db.query("SELECT * FROM media_assets WHERE content_item_id = $1 ORDER BY created_at", [it.id]);
+    for (const m of media.rows) {
+      const gather = shift(m.gather_date, offset);
+      await db.query(
+        `INSERT INTO media_assets (content_item_id, description, type, gather_date, gather_location, assignee_email, status, notes)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [r.rows[0].id, m.description, m.type, gather, m.gather_location, m.assignee_email, gather ? "scheduled" : "needed", m.notes],
+      );
+      mediaCount++;
+    }
+  }
+  return { ok: true, value: { event: created, items: items.rowCount || 0, media: mediaCount } };
 }

@@ -30,6 +30,54 @@ change made anywhere shows up everywhere.
 4. **Move posts along.** On the **Board**, drag a card to the next column or
    pick its status on the card.
 
+## Recurring posts
+
+Anything posted on a rhythm, like a weekly devotional or a monthly volunteer
+thank-you, can repeat. Go to **Recurring → New recurring post** (or click
+**Make it repeat** while creating a post). Choose weekly on certain days, every
+few weeks, monthly on a date ("the 1st") or monthly on a weekday ("the last
+Sunday"), and list any media to capture each time, for example *"Sanctuary
+photo, 1 day before"*.
+
+The next 8 weeks of posts appear on the calendar as ordinary posts, so each one
+can have its own caption, media and owner. Paging the calendar further ahead
+adds more.
+
+- **Changing one post:** edit it and save with **This post only**.
+- **Changing all of them:** pick **This and later posts in the series**, or
+  open **Edit the series**. Posts someone has already drafted or finished are
+  never overwritten.
+- **Skipping a week:** open that post and click **Skip this date**.
+- **Pausing or stopping:** pause it on the Recurring tab, or **End series** in
+  its editor. Upcoming posts nobody started are removed; everything else stays.
+
+The Wednesday Grace Notes, Saturday invite and Friday blog are already set up
+this way, so their slots sit on the calendar weeks ahead. When the run drafts
+a post, it fills that slot.
+
+## More from the post editor
+
+- **Draft with Claude** writes a caption from the post's title, brief and its
+  event's notes. Review it, then save.
+- **Send to Metricool** opens the usual send box with the date, time and
+  platforms filled in. Once it's sent, the post moves to Scheduled.
+
+## My work
+
+The **My work** tab shows the posts you own and the media you're capturing. It
+also lists captures nobody has taken yet; click **I'll take it** to claim one.
+
+At the bottom is a link for your phone's calendar ("add calendar from URL" in
+Apple or Google Calendar). Your capture days then appear there and update as
+plans change. Anyone with the link can see the schedule, so keep it within the
+team; **Reset the link** makes a new one and stops the old one working.
+
+## Next year's event
+
+On an event's page, **Duplicate** copies it with every post and media item to
+new dates, for example Kids Camp 2026 into 2027. The copies start as ideas,
+with nothing captured.
+
 ## Statuses
 
 | Post | Means |
