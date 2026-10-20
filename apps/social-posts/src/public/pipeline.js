@@ -880,7 +880,15 @@ function mediaSectionHtml(item) {
       ? '<div class="pl-file"><img src="/api/pipeline/approved/'+encodeURIComponent(x.approvalId)+'/image" alt="" loading="lazy">'
         + '<span><strong>'+esc(x.approvalTitle || 'Approved file')+'</strong><br><span class="muted">From Approvals</span></span>'
         + '<button class="btn-sm" type="button" data-act="clear-approval">Remove</button></div>'
-      : '<div class="pl-mline pl-mline-sm"><button class="btn-sm" type="button" data-act="pick-approval">Choose from Approvals</button>'
+      : x.fileType
+      ? '<div class="pl-file">'+(x.fileType === 'image'
+          ? '<img src="'+esc(x.fileLink)+'" alt="" loading="lazy">'
+          : '<span class="pl-file-video" aria-hidden="true">▶</span>')
+        + '<span><strong><a href="'+esc(x.fileLink)+'" target="_blank" rel="noopener">'+esc(x.fileName || 'Uploaded file')+'</a></strong><br><span class="muted">Uploaded '+(x.fileType === 'video' ? 'video' : 'photo')+'</span></span>'
+        + '<button class="btn-sm" type="button" data-act="clear-file">Remove</button></div>'
+      : '<div class="pl-mline pl-mline-sm pl-attach"><button class="btn-sm" type="button" data-act="pick-approval">Choose from Approvals</button>'
+        + '<button class="btn-sm" type="button" data-act="upload-file">Upload a file</button>'
+        + '<input type="file" data-upload hidden accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/quicktime">'
         + '<input type="url" data-mfield="fileLink" value="'+esc(x.fileLink)+'" placeholder="or paste a link (optional)" aria-label="Link to the file"></div>';
     return '<div class="pl-mrow'+(isCollected(x) ? ' is-done' : '')+'" data-media="'+esc(x.id)+'">'
       + '<div class="pl-mline"><label class="pl-collect" title="Collected"><input type="checkbox" data-mcollect'+(isCollected(x) ? ' checked' : '')+'><span>Collected</span></label>'
@@ -960,7 +968,7 @@ function addMedia(form) {
   if (!body.description) return;
   if (!drawer.id) {
     var x = { id: 'tmp-' + (++tmpSeq), description: body.description, type: body.type, gatherDate: body.gatherDate,
-      gatherLocation: '', assigneeEmail: '', fileLink: '', notes: '', approvalId: null, approvalTitle: '', status: 'needed' };
+      gatherLocation: '', assigneeEmail: '', fileLink: '', notes: '', approvalId: null, approvalTitle: '', fileName: '', fileType: '', status: 'needed' };
     x.status = localMediaStatus(x);
     drawer.media.push(x);
     redrawMedia();
@@ -984,6 +992,28 @@ function deleteMedia(row) {
   api('DELETE', '/api/pipeline/media/' + encodeURIComponent(id)).then(function(){
     return reloadDrawer().then(render);
   }).catch(function(err){ toast(err.message, 'err'); });
+}
+
+// ── Uploading a file straight to a media item ──
+var UPLOAD_TYPES = { 'image/jpeg': 'image', 'image/png': 'image', 'image/gif': 'image', 'image/webp': 'image', 'video/mp4': 'video', 'video/quicktime': 'video' };
+var MAX_UPLOAD = 100000000;
+function uploadMediaFile(row, input) {
+  var file = input.files[0];
+  input.value = '';
+  if (!file) return;
+  if (!UPLOAD_TYPES[file.type]) { toast('Upload a photo (JPG, PNG, GIF or WebP) or a video (MP4 or MOV).', 'err'); return; }
+  if (file.size > MAX_UPLOAD) { toast('That file is larger than 100 MB. Share a link to it instead.', 'err'); return; }
+  var btn = row.querySelector('[data-act=upload-file]');
+  btn.disabled = true; btn.innerHTML = '<span class="spin pl-spin-dark"></span> Uploading…';
+  // Raw bytes, not base64: the server stores them in R2 and hands back the link.
+  fetch('/api/pipeline/uploads', { method: 'POST', headers: { 'Content-Type': file.type, 'X-File-Name': encodeURIComponent(file.name) }, body: file })
+    .then(function(r){ if (!r.ok) throw new Error(r.status === 413 ? 'That file is too large to upload.' : 'The upload failed (' + r.status + '). Try again.'); return r.json(); })
+    .then(function(d){
+      if (!d.ok) throw new Error(d.error);
+      // A file attached is the finished file.
+      mediaChange(row.getAttribute('data-media'), { fileLink: d.url, fileName: d.name, fileType: d.type, status: 'edited' });
+    })
+    .catch(function(e){ btn.disabled = false; btn.textContent = 'Upload a file'; toast(e.message, 'err'); });
 }
 
 // ── Picking a finished file from Approvals ──
@@ -1075,7 +1105,7 @@ function savePost(form, opts) {
           return api('POST', '/api/pipeline/content/' + encodeURIComponent(res.item.id) + '/media', {
             description: x.description, type: x.type, gatherDate: x.gatherDate, gatherLocation: x.gatherLocation,
             assigneeEmail: x.assigneeEmail, fileLink: x.fileLink, notes: x.notes,
-            approvalId: x.approvalId, approvalTitle: x.approvalTitle, status: x.status,
+            approvalId: x.approvalId, approvalTitle: x.approvalTitle, fileName: x.fileName, fileType: x.fileType, status: x.status,
           });
         });
       }, Promise.resolve()).then(function(){ return res; });
@@ -1293,10 +1323,12 @@ function sendToMetricool() {
   savePost(form, { quiet: true }).then(function(res){
     var id = res.item.id;
     var approved = drawer.media.filter(function(m){ return m.approvalId; })[0];
+    var uploaded = drawer.media.filter(function(m){ return m.fileType === 'image' && m.fileLink; })[0];
     openMetricool(cur.caption, {
       date: cur.publishDate, time: cur.publishTime, texts: texts,
       networks: cur.platforms.map(function(p){ return METRICOOL_NETWORK[p]; }).filter(Boolean),
       approvedImageId: approved ? approved.approvalId : '',
+      imageUrl: !approved && uploaded ? uploaded.fileLink : '',
       sourceType: 'content', sourceRef: id, contentItemId: id,
       // The server marks the post Scheduled; show that.
       onSent: function(){ openPost(id); render(); },
@@ -1780,6 +1812,10 @@ document.addEventListener('click', function(e){
       mediaChange(el.closest('[data-media]').getAttribute('data-media'),
         { approvalId: Number(el.getAttribute('data-approval')), approvalTitle: el.getAttribute('data-title'), status: 'edited' });
       break;
+    case 'upload-file': el.closest('[data-media]').querySelector('[data-upload]').click(); break;
+    case 'clear-file':
+      mediaChange(el.closest('[data-media]').getAttribute('data-media'), { fileLink: '', fileName: '', fileType: '' });
+      break;
     case 'clear-approval':
       mediaChange(el.closest('[data-media]').getAttribute('data-media'), { approvalId: null, approvalTitle: '' });
       break;
@@ -1814,6 +1850,7 @@ document.addEventListener('change', function(e){
   if (act === 'src-toggle' || ((el.name === 'publishDate' || el.name === 'eventId') && el.closest('form[data-form=content]'))) loadSourcePanel();
   if (el.hasAttribute('data-mfield')) return saveMediaField(el.closest('[data-media]'), el);
   if (el.hasAttribute('data-mcollect')) return toggleCollected(el.closest('[data-media]'), el.checked);
+  if (el.hasAttribute('data-upload')) return uploadMediaFile(el.closest('[data-media]'), el);
   if (act === 'no-media' || act === 'platform') {
     var f = el.closest('form');
     if (f.getAttribute('data-form') === 'content') return act === 'no-media' ? applyImageRule('no-media') : refreshCaptionUi();

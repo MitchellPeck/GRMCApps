@@ -184,3 +184,14 @@ login.
   right after the post. Before, a new post showed "create the post first" in
   place of the media list. **Make it repeat** on an existing one-off post
   makes it the series' first occurrence (`fromContentId`).
+
+## Iteration 4: uploading a media item's file
+
+A media item's file can now be uploaded as well as picked from Approvals or
+linked. `POST /api/pipeline/uploads` takes the raw bytes (photos JPG/PNG/GIF/
+WebP, videos MP4/MOV, at most 100 MB, which is Cloudflare's tunnel limit),
+stores them in the existing R2 bucket under `media/`, and returns the public
+URL. The editor saves it as the item's `file_link` with `file_name` and
+`file_type`, which works before the post is first saved. Attaching makes the
+item "Final file"; Remove detaches it but leaves the object in R2. Send to
+Metricool preselects an Approvals file, else an uploaded photo.

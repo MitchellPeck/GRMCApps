@@ -662,3 +662,37 @@ test("weekly-run posts aren't told they're post N of a series", async () => {
     assert.doesNotMatch(prompt, /THIS POST: \d+ of \d+/);
   } finally { f.restore(); await pool.query("DELETE FROM settings WHERE key = 'anthropic_api_key'"); }
 });
+
+test("an uploaded file is stored in R2 and attaches to media as its final file", async () => {
+  const { storeUpload } = await import("./pipeline/uploads");
+  const puts: string[] = [];
+  const fakePut = async (_c: unknown, bytes: Buffer, type: string, seed: string, prefix: string) => {
+    puts.push(`${prefix}:${type}:${bytes.length}`);
+    return `https://media.example/${prefix}/${seed}.jpg`;
+  };
+  await assert.rejects(() => storeUpload(pool, Buffer.from("x"), "image/jpeg", "a.jpg", fakePut), /Image hosting \(R2\) not configured/);
+  await pool.query(`INSERT INTO settings (key, value) VALUES ('r2_account_id','a'), ('r2_access_key_id','k'), ('r2_secret_access_key','s'),
+                    ('r2_bucket','b'), ('r2_public_base_url','https://media.example') ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`);
+  try {
+    await assert.rejects(() => storeUpload(pool, Buffer.from("x"), "text/plain", "a.txt", fakePut), /a photo .* or a video/);
+    const up = await storeUpload(pool, Buffer.from("jpegbytes"), "image/jpeg", "Choir.jpg", fakePut);
+    assert.deepEqual(puts, ["media:image/jpeg:9"]);
+    assert.equal(up.name, "Choir.jpg");
+    assert.equal(up.type, "image");
+    assert.match(up.url, /^https:\/\/media\.example\/media\//);
+
+    const p = await createContent(pool, { title: "Upload test", publishDate: "2026-11-20", platforms: ["facebook"] }, "me@x.org");
+    assert.ok(p.ok);
+    const m = await createMedia(pool, p.value.id, { description: "Choir photo" });
+    assert.ok(m.ok);
+    const withFile = await updateMedia(pool, m.value.media.id, { fileLink: up.url, fileName: up.name, fileType: up.type });
+    assert.ok(withFile.ok);
+    assert.equal(withFile.value.media.status, "edited", "a file attached means it's final");
+    assert.deepEqual([withFile.value.media.fileName, withFile.value.media.fileType], ["Choir.jpg", "image"]);
+    const removed = await updateMedia(pool, m.value.media.id, { fileLink: "", fileName: "", fileType: "" });
+    assert.ok(removed.ok);
+    assert.equal(removed.value.media.status, "captured", "removing the file leaves it collected");
+  } finally {
+    await pool.query("DELETE FROM settings WHERE key LIKE 'r2_%'");
+  }
+});

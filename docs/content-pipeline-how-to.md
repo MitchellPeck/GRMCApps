@@ -126,7 +126,10 @@ Once it's sent, the post moves to Scheduled.
 
 Each thing a post needs has a **Collected** box: tick it when you have it. No
 link is needed. To attach the finished file, click **Choose from Approvals**
-and pick anything that's been signed off, or paste a link to it instead. A
+and pick anything that's been signed off, **Upload a file** (a photo or video,
+up to 100 MB), or paste a link to it. An uploaded file gets a link that's
+hard to guess but public: anyone who has the link can open it. For sensitive
+photos, such as children at camp, use Approvals or a shared drive instead. A
 media item with its file attached shows as **Final file**.
 
 ## My work
@@ -170,4 +173,4 @@ is collected; the editor tells you what is still missing.
   shows up on the dashboard.
 - Every draft of a post is kept: open **Earlier drafts** in its editor to
   bring one back.
-- Files aren't uploaded here: pick them from Approvals, or paste a link.
+- A media item's file can come from Approvals, be uploaded (photos and videos up to 100 MB), or be a pasted link.

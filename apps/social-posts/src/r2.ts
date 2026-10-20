@@ -2,13 +2,17 @@ import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import { Pool } from "pg";
 import { getSetting } from "./settings";
 
-const EXT: Record<string, string> = { "image/jpeg": "jpg", "image/png": "png", "image/gif": "gif", "image/webp": "webp" };
+const EXT: Record<string, string> = {
+  "image/jpeg": "jpg", "image/png": "png", "image/gif": "gif", "image/webp": "webp",
+  "video/mp4": "mp4", "video/quicktime": "mov",
+};
 
 function hash(s: string): number { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return h; }
 
-export function objectKey(contentType: string, seed: string): string {
+// `prefix` keeps Metricool send images and media uploads apart in the bucket.
+export function objectKey(contentType: string, seed: string, prefix = "metricool"): string {
   const ext = EXT[contentType] || "bin";
-  return `metricool/${seed}-${Math.abs(hash(seed + contentType))}.${ext}`;
+  return `${prefix}/${seed}-${Math.abs(hash(seed + contentType))}.${ext}`;
 }
 
 export function publicUrlFor(base: string, key: string): string {
@@ -43,13 +47,13 @@ export async function getR2Creds(pool: Pool): Promise<R2Creds> {
   return { accountId, accessKeyId, secretAccessKey, bucket, publicBaseUrl };
 }
 
-export async function uploadPublic(c: R2Creds, bytes: Buffer, contentType: string, seed: string): Promise<string> {
+export async function uploadPublic(c: R2Creds, bytes: Buffer, contentType: string, seed: string, prefix = "metricool"): Promise<string> {
   const client = new S3Client({
     region: "auto",
     endpoint: `https://${c.accountId}.r2.cloudflarestorage.com`,
     credentials: { accessKeyId: c.accessKeyId, secretAccessKey: c.secretAccessKey },
   });
-  const key = objectKey(contentType, seed);
+  const key = objectKey(contentType, seed, prefix);
   await client.send(new PutObjectCommand({ Bucket: c.bucket, Key: key, Body: bytes, ContentType: contentType }));
   return publicUrlFor(c.publicBaseUrl, key);
 }

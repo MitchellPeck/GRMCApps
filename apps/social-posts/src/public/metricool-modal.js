@@ -5,7 +5,8 @@
 // opts: { date, time, networks: ['facebook','instagram','twitter'],
 //         texts: { facebook: '…', instagram: '…', twitter: '…' }  — a different
 //                text per network; each distinct text is sent as its own post,
-//         approvedImageId, sourceType, sourceRef, contentItemId, onSent(res) }
+//         approvedImageId, imageUrl (a public image to attach),
+//         sourceType, sourceRef, contentItemId, onSent(res) }
 
 function mcEsc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 function mcApi(path, opts) {
@@ -104,9 +105,10 @@ function openMetricool(text, opts){
     document.getElementById('mc-ig').checked = opts.networks.indexOf('instagram') !== -1;
     document.getElementById('mc-x').checked = opts.networks.indexOf('twitter') !== -1;
   }
-  document.getElementById('mc-image-source').value = opts.approvedImageId ? 'approved' : 'none';
+  document.getElementById('mc-image-source').value = opts.approvedImageId ? 'approved' : opts.imageUrl ? 'url' : 'none';
   document.getElementById('mc-msg').innerHTML = '';
   switchImageSource();
+  if (opts.imageUrl) document.getElementById('mc-imgurl').value = opts.imageUrl;
   updateDateHint();
   updatePublishHint();
   document.getElementById('mc-modal').style.display = 'flex';

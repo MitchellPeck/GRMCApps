@@ -9,6 +9,7 @@ import { planFromEpisode, proposeSeriesPlan, saveSeriesPlan } from "../pipeline/
 import { listCampaigns } from "../mailchimp";
 import { listEpisodes } from "../buzzsprout";
 import { getApprovedImageBytes } from "../approvals-client";
+import { MAX_UPLOAD_BYTES, storeUpload } from "../pipeline/uploads";
 import { describeRule, occurrences, parseRecurrenceInput, parseRule } from "../pipeline/recurrence";
 import {
   HORIZON_DAYS, createRecurrence, deleteRecurrence, getRecurrence, listRecurrences, materialize, updateRecurrence,
@@ -309,6 +310,18 @@ export async function pipelineRoutes(app: FastifyInstance): Promise<void> {
       pageUrl: `https://${req.hostname}/pipeline#calendar`, stamp: new Date(),
     });
   });
+
+  // A file uploaded for a media item arrives as its raw bytes (not base64),
+  // with its name in a header; it's stored in R2 and the link returned.
+  app.addContentTypeParser(/^(image|video)\//, { parseAs: "buffer", bodyLimit: MAX_UPLOAD_BYTES },
+    (_req, body, done) => done(null, body));
+  app.post("/api/pipeline/uploads", { bodyLimit: MAX_UPLOAD_BYTES }, async (req) => guard(async () => {
+    const bytes = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+    const type = String(req.headers["content-type"] || "").split(";")[0].trim().toLowerCase();
+    let name = "upload";
+    try { name = decodeURIComponent(String(req.headers["x-file-name"] || "upload")); } catch { /* keep the default */ }
+    return { ok: true, ...(await storeUpload(pool, bytes, type, name)) };
+  }));
 
   // ── Media assets ──
   app.get("/api/pipeline/media", async (req) => guard(async () => {

@@ -49,6 +49,7 @@ export interface MediaRow {
   id: string; contentItemId: string; description: string; type: string;
   gatherDate: string | null; gatherLocation: string; assigneeEmail: string; status: MediaStatus;
   fileLink: string; notes: string; approvalId: number | null; approvalTitle: string;
+  fileName: string; fileType: string;
   itemTitle: string; itemPublishDate: string | null; itemStatus: ContentStatus;
   eventId: string | null; eventName: string; eventColor: string;
 }
@@ -88,6 +89,7 @@ function mediaOf(r: any): MediaRow {
     gatherDate: r.gather_date, gatherLocation: r.gather_location, assigneeEmail: r.assignee_email,
     status: r.status, fileLink: r.file_link, notes: r.notes,
     approvalId: r.approval_id ?? null, approvalTitle: r.approval_title || "",
+    fileName: r.file_name || "", fileType: r.file_type || "",
     itemTitle: r.item_title || "", itemPublishDate: r.item_publish_date ?? null, itemStatus: r.item_status,
     eventId: r.event_id ?? null, eventName: r.event_name || "", eventColor: r.event_color || "",
   };
@@ -415,7 +417,7 @@ async function getMediaRow(db: Db, id: string): Promise<MediaRow | null> {
 const MEDIA_COLUMNS: Record<string, string> = {
   description: "description", type: "type", gatherDate: "gather_date", gatherLocation: "gather_location",
   assigneeEmail: "assignee_email", status: "status", fileLink: "file_link", notes: "notes",
-  approvalId: "approval_id", approvalTitle: "approval_title",
+  approvalId: "approval_id", approvalTitle: "approval_title", fileName: "file_name", fileType: "file_type",
 };
 
 export async function createMedia(
@@ -427,11 +429,11 @@ export async function createMedia(
   if (!status.ok) return status;
   const r = await db.query(
     `INSERT INTO media_assets (content_item_id, description, type, gather_date, gather_location,
-                               assignee_email, status, file_link, notes, approval_id, approval_title)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
+                               assignee_email, status, file_link, notes, approval_id, approval_title, file_name, file_type)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
     [contentItemId, input.description, input.type || "photo", input.gatherDate ?? null,
      input.gatherLocation || "", input.assigneeEmail || "", status.value, input.fileLink || "", input.notes || "",
-     input.approvalId ?? null, input.approvalTitle || ""],
+     input.approvalId ?? null, input.approvalTitle || "", input.fileName || "", input.fileType || ""],
   );
   const media = (await getMediaRow(db, r.rows[0].id))!;
   const w = lateMediaWarning(media.gatherDate, media.itemPublishDate);

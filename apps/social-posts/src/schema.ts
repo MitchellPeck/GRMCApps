@@ -175,4 +175,8 @@ ALTER TABLE content_items ADD COLUMN IF NOT EXISTS phase text NOT NULL DEFAULT '
 -- Draft history: which post a draft belongs to.
 ALTER TABLE post_drafts ADD COLUMN IF NOT EXISTS content_item_id text;
 CREATE INDEX IF NOT EXISTS post_drafts_item_idx ON post_drafts (content_item_id);
+
+-- A file uploaded straight to a media item (stored in R2; file_link is its URL).
+ALTER TABLE media_assets ADD COLUMN IF NOT EXISTS file_name text NOT NULL DEFAULT '';
+ALTER TABLE media_assets ADD COLUMN IF NOT EXISTS file_type text NOT NULL DEFAULT '';
 `;

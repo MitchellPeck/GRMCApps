@@ -178,6 +178,8 @@ export interface MediaInput {
   assigneeEmail?: string; status?: MediaStatus; fileLink?: string; notes?: string;
   /** A finished file chosen from the Approvals app; null clears it. */
   approvalId?: number | null; approvalTitle?: string;
+  /** An uploaded file's original name and kind ("image" | "video"); "" when the link was pasted. */
+  fileName?: string; fileType?: string;
 }
 
 export function parseMediaInput(raw: unknown, mode: "create" | "patch"): Result<MediaInput> {
@@ -192,6 +194,9 @@ export function parseMediaInput(raw: unknown, mode: "create" | "patch"): Result<
   const err = collect(out, [
     ["approvalId", approvalId],
     ["approvalTitle", optText(body, "approvalTitle", "Approved file title", 300)],
+    ["fileName", optText(body, "fileName", "File name", 200)],
+    ["fileType", "fileType" in body ? (["", "image", "video"].includes(body.fileType as string)
+      ? { ok: true, value: body.fileType as string } : fail("File type must be image or video.")) : undefined],
     ["description", optText(body, "description", "Description", 500)],
     ["type", optEnum(body, "type", "Media type", MEDIA_TYPES)],
     ["gatherDate", optDate(body, "gatherDate", "Gather date")],
