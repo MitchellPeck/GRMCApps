@@ -112,15 +112,15 @@ between apps. Both are served to each app at `/assets/` (see *Shared UI* below).
   **playlists**, and put a playlist on the screen. There is no sound anywhere in
   this app by design: the audio track is stripped from every video at upload.
 
-  **Scheduling** has three shapes. *Between two dates and times* plays for that
-  window and then gets off the screen. *From a date and time, until something
-  else is scheduled* is the standing content — it keeps playing indefinitely,
-  and is replaced only when a later open-ended entry starts. *Every week, on
-  chosen days, between two times* covers the Sunday-morning slot; it is written
-  in the app's timezone and follows the clock through daylight saving, so 08:00
-  stays 08:00. A timed entry temporarily borrows the screen from the standing
-  content and hands it back when it ends, and `priority` breaks a tie when two
-  overlap. When nothing at all applies, a **default playlist** (Settings) plays.
+  **One schedule decides what plays and whether the TV is on.** An entry is
+  either *between two dates and times* or *every week, on chosen days, between
+  two times* (the Sunday-morning slot); weekly entries are written in the app's
+  timezone and follow the clock through daylight saving, so 08:00 stays 08:00.
+  `priority` breaks a tie when two overlap. **If something is scheduled the TV
+  is on; if nothing is, it is off** — there is no default playlist and no idle
+  screen. Entries that touch or overlap are one stretch, so the TV never blinks
+  off between them, and if the winning entry's playlist is empty a
+  lower-priority one covering the same time takes over.
   The **On now** tab says what is showing and why, and will answer the same
   question for any future moment — you can check a Sunday morning before it
   happens.
@@ -175,29 +175,25 @@ between apps. Both are served to each app at `/assets/` (see *Shared UI* below).
   down the day after the event instead of waiting for somebody to remember. The
   editor says what that means today — "expires in 4 days", "last day".
 
+  **Play now.** Any ready item in the media library can be put on the screen
+  at once, looping, over whatever is scheduled — turning the TV on if it was
+  off — until somebody clears it from **On now**. Clearing hands the screen back
+  to the schedule, or turns the TV off again if nothing is scheduled. Handy for
+  checking how something looks on the real screen.
+
   **Emergency takeover.** One message, on the screen immediately, over
-  everything scheduled and over the operating hours — a dark screen is no use
-  to somebody being told to evacuate. Drawn by the player as text rather than
+  everything — Play now included — and turning the TV on if nothing is
+  scheduled: a dark screen is no use to somebody being told to evacuate. Drawn by the player as text rather than
   going through the conversion queue, so it cannot be held up by it, and
   clearing it puts the schedule straight back.
 
-  **The idle screen is yours.** What the wall shows when nothing at all is
-  scheduled — headline, message, a logo picked from the media library, and a
-  colourway — instead of a hard-coded seal. Rendered on the server like the
-  announcements, so it reaches a screen driven through the Blackmagic card and
-  not only a browser. The built-in GRMC mark is now only what the player falls
-  back to when it cannot reach the server at all.
-
-  **Operating hours.** The screen does not have to be on all day. Settings takes
-  a weekly grid of windows in the app's timezone; outside them the player shows
-  true black and tears the media down rather than decoding frames nobody is
-  watching. Windows that touch or overlap are one stretch, so the screen never
-  blinks off between a morning and an afternoon; an end earlier than its start
-  runs past midnight; and an empty grid means "not configured" rather than "stay
-  dark". Separately and optionally, a **power action** — a web request or a
-  Wake-on-LAN packet — fires at each boundary, so a TV or smart plug that
-  answers on the network can actually be switched. Both can be fired by hand
-  from Settings with the result shown, and the last attempts are logged.
+  **Turning the TV on and off.** When nothing is on, the player shows true
+  black and tears the media down rather than decoding frames nobody is
+  watching. Separately and optionally, a **power action** — a web request, a
+  paired Samsung, or a Wake-on-LAN packet — fires each time the TV should turn
+  on or off, so a TV or smart plug that answers on the network can actually be
+  switched. Both can be fired by hand from Settings with the result shown, and
+  the last attempts are logged.
 
   **Configurable** without a rebuild: timezone, seconds per photo and per slide
   (app-wide, per playlist, or per item), crossfade or cut, fit-or-fill,

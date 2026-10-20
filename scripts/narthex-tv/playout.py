@@ -284,7 +284,7 @@ def overlay_filters(display, width, height, font, clock_files=(), footer_file=No
     The browser player draws these as ordinary page elements. This program
     decodes pictures and video and draws nothing, so on the DeckLink path they
     have to be burnt into the frames -- the same reason the emergency message
-    and the idle screen are rendered server-side. Without this the television
+    is rendered server-side. Without this the television
     shows the media and nothing else.
 
     **Every string drawn comes from a file**, and none is ever interpolated
@@ -743,7 +743,7 @@ class Playout:
             return
         self.last_heartbeat = time.time()
         playing = "(EMERGENCY MESSAGE)" if self.takeover_active(plan) else (
-            "(outside opening hours)" if not plan.get("power", {}).get("on", True)
+            "(nothing scheduled)" if not plan.get("power", {}).get("on", True)
             else plan.get("playlistName") or ""
         )
         body = json.dumps({"revision": plan.get("revision", ""), "playing": playing}).encode()
@@ -1025,7 +1025,7 @@ class Playout:
         # which is the right answer during an evacuation — better than leaving
         # last week's announcements up.
         if not plan.get("power", {}).get("on", True):
-            # Outside the narthex's opening hours. Black in short pieces so a
+            # Nothing scheduled, so the TV is off. Black in short pieces so a
             # change is picked up quickly rather than at the end of a long one.
             return [None]
         frames = plan.get("frames") or []

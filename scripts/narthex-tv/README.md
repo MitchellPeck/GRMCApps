@@ -46,7 +46,7 @@ gets out.
 ## Two ways to drive the screen
 
 Pick one. Both read exactly the same `/api/player/plan`, so the schedule,
-operating hours and blackout behave identically either way.
+Play now and blackout behave identically either way.
 
 ### A. Through the Blackmagic UltraStudio (`playout.py`)
 
@@ -323,26 +323,32 @@ Chromium fork.
 
 ## When the screen is on
 
-**Settings → When the screen is on** in the app. Two modes:
+There is one schedule, and it decides both what plays and whether the TV is on.
+**The TV is on whenever the schedule has something on, or Play now or an
+emergency takeover is active, and off otherwise.** When it is off the screen
+shows true black — the browser player tears the `<img>`/`<video>` down, and
+`playout.py` feeds black frames — so nothing is decoded for an empty room.
 
-- **Always on** — the screen never goes dark. The default.
-- **Only during the hours below** — a weekly grid of windows, in the app's
-  timezone, following daylight saving. Outside them the screen shows true black —
-  the browser player tears the `<img>`/`<video>` down, and `playout.py` feeds
-  black frames — so nothing is being decoded for an empty room.
+- **Schedule** entries are either between two dates and times, or weekly on
+  chosen days between two times (in the app's timezone, following daylight
+  saving). Entries that touch or overlap are treated as one stretch, whatever
+  they play, so the TV never blinks off between them.
+- **Play now** (on any ready item under **Media**) puts that one item on the
+  screen at once, looping, over the schedule — turning the TV on if it was off.
+  **Clear** on **On now** hands the screen back to the schedule, or turns the
+  TV off again if nothing is scheduled.
+- An entry whose playlist turns out to be empty still turns the TV on; the
+  screen is black and **On now** says which playlist has nothing to show. A
+  lower-priority entry covering the same time takes over if there is one.
 
-Rows for one day that touch or overlap are treated as a single stretch, so the
-screen never blinks off between a morning and an afternoon window. An *Until*
-earlier than *From* means the window runs past midnight. An empty grid keeps
-the screen on — that is "nobody configured this", not "stay dark forever".
-
-**On now** reports a dark screen as its own state, so nobody mistakes it for a
-fault.
+There is no default playlist and no idle screen any more: time with no entry is
+dark. **Before deploying this, make sure the schedule covers every hour the
+narthex screen should be lit.**
 
 ## Actually cutting the power (optional)
 
 **Settings → Turning the TV on and off** can fire one request on your network
-at each boundary, separate from blanking the picture. Leave both at *Nothing*
+each time the TV should turn on or off, separate from blanking the picture. Leave both at *Nothing*
 and the screen just goes black on time, which is the safe default.
 
 Two shapes, because televisions agree on nothing:
@@ -389,7 +395,7 @@ Manager → Device Connection Manager → Device List** on the TV and delete any
 old entry with the same name: a set that already knows the name reconnects
 silently and issues no token.
 
-Then set the hours actions above to **Samsung TV (paired below)**.
+Then set the turn-on and turn-off actions above to **Samsung TV (paired below)**.
 
 **Turning it back ON is the hard direction, and it is handled for you.**
 
@@ -403,8 +409,8 @@ through Docker Desktop's NAT, which a broadcast does not survive, and a
 *directed* packet is no use either, because a set that has been off for hours
 has long since dropped out of the router's ARP table. **`playout.py` sends it
 instead**, from the Mac, which is on the same LAN as the television. Fill in
-the MAC under **Settings → Samsung television** and it fires on the opening
-boundary, once per edge — never on every poll, which would nudge a set that is
+the MAC under **Settings → Samsung television** and it fires when the TV
+should come on, once per edge — never on every poll, which would nudge a set that is
 already awake into turning itself off.
 
 Two things on the television, without which nothing will wake it:
@@ -426,7 +432,7 @@ browser: the screen is only told whether there is one.
 ## Checking it is alive
 
 **Screens** shows each display's last check-in, the revision of the plan it is
-playing, and what it thinks it is showing (including "(outside opening hours)"
+playing, and what it thinks it is showing (including "(nothing scheduled)"
 when it is deliberately dark). A screen that has not checked in for five
 minutes stops saying "checked in" — that is the first place to look when
 somebody says the TV is stuck.

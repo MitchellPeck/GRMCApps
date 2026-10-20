@@ -35,7 +35,7 @@
   var startedAt = Date.now();
   var clearStamp = 0;      // invalidates a pending "wipe the old layer" timer
   var lastHeartbeat = 0;
-  var dark = false;          // outside the narthex's opening hours
+  var dark = false;          // the TV is off: nothing scheduled
   var currentMs = null;      // how long the frame on screen gets, once it IS on screen
 
   var DEFAULT_POLL_MS = 10000;
@@ -139,7 +139,7 @@
       // The power state is part of sourceKey, so a boundary always lands here
       // rather than waiting out the current slide: 21:00 means 21:00.
       if (applyTakeover(next)) {
-        dark = false;   // the emergency owns the screen; hours do not apply
+        dark = false;   // the emergency owns the screen, scheduled or not
       } else if (isDark(next)) {
         enterBlackout();
       } else {
@@ -152,8 +152,7 @@
     }
   }
 
-  // Above everything: it outranks the schedule, the idle screen and the
-  // blackout. Returns true while it owns the screen.
+  // Above everything: it outranks Play now, the schedule and the blackout. Returns true while it owns the screen.
   function applyTakeover(p) {
     var t = p && p.takeover;
     var box = $("takeover");
@@ -245,12 +244,6 @@
     frames = [];
     index = -1;
     layers.forEach(function (l) { l.classList.remove("visible"); l.innerHTML = ""; });
-    var display = (plan && plan.display) || {};
-    $("idle-headline").textContent = display.idleHeadline || "";
-    $("idle-headline").hidden = !display.idleHeadline;
-    // The seal is the LAST resort: hidden once anything else is configured, so
-    // a church that is not Grace Resurrection never sees somebody else's mark.
-    $("idle-mark").hidden = display.idleShowMark === false;
     $("idle-text").textContent = text || "";
     $("idle").hidden = false;
   }
@@ -276,9 +269,12 @@
       return;
     }
 
+    // Nothing playable: plain black. The TV is on because something is
+    // scheduled, and the admin screen is the place that says what is wrong --
+    // not the wall in the narthex.
     if (!frames.length) {
-      var message = (plan && plan.display && plan.display.idleMessage) || "";
-      showIdle(message);
+      hideIdle();
+      layers.forEach(function (l) { l.classList.remove("visible"); l.innerHTML = ""; });
       return;
     }
     hideIdle();
@@ -408,7 +404,7 @@
     lastHeartbeat = Date.now();
     var playing = (plan && plan.takeover && plan.takeover.active)
       ? "(EMERGENCY MESSAGE)"
-      : dark ? "(outside opening hours)" : (plan ? (plan.playlistName || "") : "");
+      : dark ? "(nothing scheduled)" : (plan ? (plan.playlistName || "") : "");
     fetch(apiUrl("/api/player/heartbeat"), {
       method: "POST",
       headers: { "content-type": "application/json" },
