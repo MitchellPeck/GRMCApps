@@ -1029,9 +1029,18 @@ function formScope(form) {
   return r ? r.value : 'this';
 }
 
+// Compare form values with what was loaded. Objects are compared with their
+// keys sorted: the database hands jsonb keys back in its own order, and a
+// difference in order alone must not count as an edit.
+function canonical(v) {
+  return JSON.stringify(v == null ? null : v, function(_k, x){
+    if (!x || typeof x !== 'object' || Array.isArray(x)) return x;
+    var out = {}; Object.keys(x).sort().forEach(function(k){ out[k] = x[k]; }); return out;
+  });
+}
 function sameValue(a, b) {
-  if (Array.isArray(a)) return a.join(',') === (b || []).join(',');
-  if (a && typeof a === 'object') return JSON.stringify(a) === JSON.stringify(b || {});
+  if (a && typeof a === 'object') return canonical(a) === canonical(b);
+  if (a == null) return b == null;
   return a === (b == null ? '' : b);
 }
 
@@ -1359,7 +1368,9 @@ function recurrenceFormHtml(r, pre, fromContentId) {
     mediaTemplate: pre.mediaTemplate || [], active: true };
   var ends = rule.endDate ? 'on' : rule.count ? 'after' : 'never';
   var opt = function(val, text, cur){ return '<option value="'+val+'"'+(String(val) === String(cur) ? ' selected' : '')+'>'+text+'</option>'; };
-  return '<form class="pl-drawer-body" data-form="recurrence" data-id="'+esc(r ? r.id : '')+'" data-from="'+esc(fromContentId || '')+'">'
+  return '<form class="pl-drawer-body" data-form="recurrence" data-id="'+esc(r ? r.id : '')+'" data-from="'+esc(fromContentId || '')+'"'
+    // The form edits only the instructions; an override's source rides along untouched.
+    + ' data-source="'+esc(JSON.stringify((r && r.drafting && r.drafting.source) || null))+'">'
     + (fromContentId ? '<p class="pl-source">This post becomes the first in the series, on its own date.</p>' : '')
     + '<div class="pl-drawer-head"><h2>'+(r ? 'Recurring post' : 'New recurring post')+'</h2><button class="pl-x" type="button" data-act="close" aria-label="Close">×</button></div>'
     + (r && r.draftKey ? '<p class="pl-source">The weekly run fills each of these with its draft.</p>' : '')
@@ -1454,7 +1465,12 @@ function saveRecurrence(form) {
     platforms: fd.getAll('platforms'), publishTime: fd.get('publishTime') || null,
     ownerEmail: (fd.get('ownerEmail') || '').trim(), noMediaNeeded: fd.get('noMediaNeeded') === 'on',
     rule: readRule(form), fromContentId: form.getAttribute('data-from') || undefined,
-    drafting: { instructions: (fd.get('draftInstructions') || '').trim() },
+    drafting: (function(){
+      var d = { instructions: (fd.get('draftInstructions') || '').trim() };
+      var src = JSON.parse(form.getAttribute('data-source') || 'null');
+      if (src) d.source = src;
+      return d;
+    })(),
     mediaTemplate: Array.prototype.map.call(form.querySelectorAll('.pl-tpl-row'), function(row){
       var g = function(k){ return row.querySelector('[data-tpl='+k+']').value; };
       return { description: g('description').trim(), type: g('type'), offsetDays: -Number(g('before') || 0), assigneeEmail: g('assigneeEmail').trim() };

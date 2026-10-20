@@ -291,6 +291,12 @@ export async function createContent(db: Db, input: ContentInput, createdBy: stri
   return { ok: true, value: (await getContentRow(db, r.rows[0].id))! };
 }
 
+/** JSON with object keys sorted, for comparing values regardless of key order. */
+function canonical(v: unknown): string {
+  return JSON.stringify(v ?? null, (_k, x) => x && typeof x === "object" && !Array.isArray(x)
+    ? Object.fromEntries(Object.keys(x).sort().map((k) => [k, (x as Record<string, unknown>)[k]])) : x);
+}
+
 // Fields a recurring post's template sets. Changing one on a single
 // occurrence detaches it, so later series-wide edits leave it alone.
 const TEMPLATE_KEYS: Array<keyof ContentInput> = ["title", "brief", "eventId", "platforms", "ownerEmail", "publishTime", "noMediaNeeded", "publishDate", "drafting"];
@@ -316,6 +322,13 @@ export async function updateContent(
     if (!gate.ok) return gate;
   }
 
+  // Drop template fields that arrive unchanged (jsonb hands keys back in its
+  // own order), so re-saving a post can't detach it from its series.
+  for (const k of TEMPLATE_KEYS) {
+    if (k in input && canonical((input as Record<string, unknown>)[k]) === canonical((current as unknown as Record<string, unknown>)[k])) {
+      delete (input as Record<string, unknown>)[k];
+    }
+  }
   const vals: unknown[] = [];
   const sets = setClause(input as Record<string, unknown>, CONTENT_COLUMNS, vals);
   if (sets.length) {

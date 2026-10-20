@@ -588,3 +588,60 @@ test("the drafting migration seeds run profiles, splits out Sunday worship, and 
 
   assert.equal((await migrateDrafting(pool, REF)).ran, false, "once only");
 });
+
+// ── Final review fixes ──
+
+test("Draft all carries on when a post throws partway (e.g. the X shorten call fails)", async () => {
+  const { draftAll } = await import("./pipeline/caption");
+  const a = await createContent(pool, { title: "Long X", publishDate: "2026-11-10", platforms: ["facebook", "x"] }, "me@x.org");
+  const b = await createContent(pool, { title: "Null reply", publishDate: "2026-11-11", platforms: ["facebook"] }, "me@x.org");
+  const c = await createContent(pool, { title: "Fine", publishDate: "2026-11-12", platforms: ["facebook"] }, "me@x.org");
+  assert.ok(a.ok && b.ok && c.ok);
+  const replies: Array<() => unknown> = [
+    () => ({ content: [{ text: JSON.stringify({ post: "Too long ".repeat(50) }) }] }),
+    () => { throw new Error("429 Too Many Requests"); },
+    () => ({ content: [{ text: "null" }] }),
+    () => ({ content: [{ text: JSON.stringify({ post: "C drafted" }) }] }),
+  ];
+  await pool.query("INSERT INTO settings (key, value) VALUES ('anthropic_api_key','t') ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value");
+  const f = stubFetch([[/api\.anthropic\.com/, () => replies.shift()!()]]);
+  try {
+    const results = await draftAll(pool, [a.value.id, b.value.id, c.value.id], "me@x.org");
+    assert.deepEqual(results.map((r) => r.ok), [false, false, true], "every post gets an answer");
+    assert.match(results[0].error!, /429/);
+    assert.match(results[1].error!, /without a draft|wasn't readable/);
+  } finally { f.restore(); await pool.query("DELETE FROM settings WHERE key = 'anthropic_api_key'"); }
+});
+
+test("a post that turns its source off doesn't use a stored issue", async () => {
+  const { resolveSource } = await import("./pipeline/sources");
+  const r = await resolveSource(pool, { kind: "none" }, { kind: "mailchimp", id: "c18", title: "Grace Notes" }, "2026-10-21");
+  assert.equal(r, null);
+});
+
+test("a Mailchimp error says so instead of reading as 'no campaigns'", async () => {
+  const { resolveSource } = await import("./pipeline/sources");
+  await pool.query("INSERT INTO settings (key, value) VALUES ('mailchimp_api_key','k'), ('mailchimp_server','us1') ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value");
+  const real = globalThis.fetch;
+  globalThis.fetch = (async () => ({ ok: false, status: 401, json: async () => ({ title: "API Key Invalid", detail: "Your API key may be invalid." }) })) as unknown as typeof fetch;
+  try {
+    await assert.rejects(
+      () => resolveSource(pool, { kind: "mailchimp", subjectContains: "grace notes", cutoff: "latest" }, null, "2026-10-21"),
+      /Mailchimp answered 401: API Key Invalid/);
+  } finally {
+    globalThis.fetch = real;
+    await pool.query("DELETE FROM settings WHERE key IN ('mailchimp_api_key','mailchimp_server')");
+  }
+});
+
+test("re-saving a recurring post's unchanged override doesn't detach it", async () => {
+  const r = await createRecurrence(pool, { title: "Keyorder", platforms: ["facebook"], rule: weekly([2]) }, "me@x.org", REF);
+  assert.ok(r.ok);
+  const first = (await occ(r.value.id))[0];
+  // As stored by jsonb (keys reordered) …
+  await pool.query(`UPDATE content_items SET drafting = '{"source": {"kind": "none"}, "instructions": "Short."}' WHERE id = $1`, [first.id]);
+  // … and as the editor sends it back (another key order), alongside a real status change.
+  const u = await updateContent(pool, first.id, { drafting: { instructions: "Short.", source: { kind: "none" } }, status: "drafted" });
+  assert.ok(u.ok);
+  assert.equal((await pool.query("SELECT detached FROM content_items WHERE id = $1", [first.id])).rows[0].detached, false);
+});

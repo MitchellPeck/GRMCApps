@@ -113,6 +113,7 @@ export async function draftCaptions(pool: Pool, req: DraftRequest, createdBy: st
     return fail(e instanceof SyntaxError ? "Claude's reply wasn't readable. Try again." : msg);
   }
 
+  if (!parsed || typeof parsed !== "object") return fail("Claude came back without a draft. Try again.");
   const result: DraftResult = { warnings: [], source };
   if (prompt.keys[0] === "post") {
     let caption = typeof parsed.post === "string" ? parsed.post.trim() : "";
@@ -166,8 +167,13 @@ export async function draftAndSave(pool: Pool, id: string, createdBy: string): P
 export async function draftAll(pool: Pool, ids: string[], createdBy: string): Promise<Array<{ id: string; ok: boolean; error?: string }>> {
   const out: Array<{ id: string; ok: boolean; error?: string }> = [];
   for (const id of ids) {
-    const r = await draftAndSave(pool, id, createdBy);
-    out.push(r.ok ? { id, ok: true } : { id, ok: false, error: r.error });
+    try {
+      const r = await draftAndSave(pool, id, createdBy);
+      out.push(r.ok ? { id, ok: true } : { id, ok: false, error: r.error });
+    } catch (e) {
+      // A failure anywhere in one post (a retry call, the database) is that post's answer.
+      out.push({ id, ok: false, error: (e as Error).message });
+    }
   }
   return out;
 }

@@ -42,6 +42,8 @@ export async function resolveSource(
   if (ref?.kind === "manual") {
     return { kind: "manual", id: "", title: ref.title || "Pasted content", url: ref.url || "", date: "", dateLine: "", content: ref.content || "" };
   }
+  // "Don't use the event's source for this post" outranks an issue or episode stored earlier.
+  if (source.kind === "none") return null;
   if (ref?.kind === "buzzsprout" || (!ref && source.kind === "buzzsprout")) {
     if (!ref?.id) return null;
     const ep = await getEpisode(pool, ref.id);

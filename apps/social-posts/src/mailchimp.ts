@@ -83,6 +83,14 @@ export function campaignDateLine(c: CampaignDates, tz: string = DEFAULT_TZ): str
 }
 
 
+// A refused or failed request (a revoked key, a missing campaign) is an error
+// worth showing as itself, not an empty list.
+async function mailchimpJson(res: Response): Promise<any> {
+  const body: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(`Mailchimp answered ${res.status}: ${body.title || body.detail || "request failed"}.`);
+  return body;
+}
+
 export interface CampaignSummary {
   id: string; subject: string; status: string; archiveUrl: string;
   sentAt: string; createdAt: string; issueDate: string; isDraft: boolean; dateLine: string;
@@ -95,7 +103,7 @@ export async function listCampaigns(pool: Pool, subjectMatch: string): Promise<C
     mc.base +
     "/campaigns?count=30&sort_field=create_time&sort_dir=DESC" +
     "&fields=campaigns.id,campaigns.status,campaigns.settings.subject_line,campaigns.archive_url,campaigns.send_time,campaigns.create_time";
-  const listRes: any = await (await fetch(listUrl, { headers: mc.headers })).json();
+  const listRes: any = await mailchimpJson(await fetch(listUrl, { headers: mc.headers }));
   const match = subjectMatch.toLowerCase();
   const tz = (await getSetting(pool, "default_timezone")) || DEFAULT_TZ;
   return (listRes.campaigns || [])
@@ -113,6 +121,6 @@ export async function listCampaigns(pool: Pool, subjectMatch: string): Promise<C
 /** A campaign's text, cleaned and trimmed the way the runs used it. */
 export async function getCampaignText(pool: Pool, id: string): Promise<string> {
   const mc = await getMailchimpAuth(pool);
-  const res: any = await (await fetch(mc.base + "/campaigns/" + encodeURIComponent(id) + "/content?fields=plain_text", { headers: mc.headers })).json();
+  const res: any = await mailchimpJson(await fetch(mc.base + "/campaigns/" + encodeURIComponent(id) + "/content?fields=plain_text", { headers: mc.headers }));
   return cleanCampaignText(res.plain_text || "").substring(0, 4000);
 }
