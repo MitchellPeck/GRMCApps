@@ -121,8 +121,7 @@ export interface Span {
  * A wall-clock time range anchored to one local calendar day, as instants.
  *
  * `end <= start` means the range runs past midnight (22:00-02:00), and
- * `end === start` means a full 24 hours. Both the recurring schedule and the
- * operating-hours grid are the same shape, so both go through here.
+ * `end === start` means a full 24 hours.
  */
 export function daySpan(
   dateKey: string,
@@ -144,4 +143,23 @@ export function daySpan(
     start: zonedTimeToUtc(from.year, from.month, from.day, Math.floor(startMin / 60), startMin % 60, timeZone),
     end: zonedTimeToUtc(to.year, to.month, to.day, Math.floor(endMin / 60), endMin % 60, timeZone),
   };
+}
+
+/**
+ * Sorts spans and joins any that overlap or touch. Two entries that meet at
+ * 11:00 are one stretch of being on, and the screen must not blink off
+ * between them.
+ */
+export function mergeSpans(spans: Span[]): Span[] {
+  const sorted = [...spans].sort((a, b) => a.start.getTime() - b.start.getTime());
+  const merged: Span[] = [];
+  for (const span of sorted) {
+    const last = merged[merged.length - 1];
+    if (last && span.start.getTime() <= last.end.getTime()) {
+      if (span.end.getTime() > last.end.getTime()) last.end = span.end;
+    } else {
+      merged.push({ start: span.start, end: span.end });
+    }
+  }
+  return merged;
 }

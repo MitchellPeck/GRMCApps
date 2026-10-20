@@ -1,13 +1,13 @@
-import { addDays, daySpan, localDateKey, parseHM, weekdayOf } from "./tz";
+import { addDays, daySpan, localDateKey, mergeSpans, parseHM, Span, weekdayOf } from "./tz";
 
-export type ScheduleMode = "window" | "until_next" | "recurring";
+export type ScheduleMode = "window" | "recurring";
 
 export interface ScheduleEntry {
   id: number;
   playlistId: number;
   mode: ScheduleMode;
   label: string;
-  /** window + until_next: the instant it starts. */
+  /** window: the instant it starts. */
   startsAt: string | null;
   /** window: the instant it stops. */
   endsAt: string | null;
@@ -25,6 +25,8 @@ export interface ScheduleEntry {
 
 export interface Resolution {
   entry: ScheduleEntry | null;
+  /** Every entry covering the moment, best first. `entry` is the first. */
+  candidates: ScheduleEntry[];
   /** When the winning entry began. */
   startedAt: Date | null;
   /** When it stops on its own. null = it runs until something displaces it. */
@@ -105,15 +107,10 @@ export function nextRecurringStart(
 /**
  * What should be on the screen at `now`.
  *
- * Precedence, highest first:
- *   1. Bounded entries covering `now` — a `window` or a `recurring` occurrence.
- *      Among those: higher priority, then the one that started most recently,
- *      then the newest. A bounded entry is a deliberate "this, at this time",
- *      so it displaces the standing content and hands it back when it ends.
- *   2. The most recently started `until_next` entry. This is the "plays until
- *      something else is scheduled after it" mode: a later one supersedes it
- *      permanently, a bounded one only borrows the screen.
- *   3. Nothing — the caller falls back to the default playlist.
+ * Every entry covering `now` (a `window`, or a `recurring` occurrence) is a
+ * candidate. Higher priority wins, then the one that started most recently,
+ * then the newest. There is no fallback: nothing covering `now` means nothing
+ * plays and the TV is off.
  */
 export function resolveSchedule(
   entries: ScheduleEntry[],
@@ -129,14 +126,10 @@ export function resolveSchedule(
       if (occ) bounded.push(occ);
       continue;
     }
-    if (entry.mode === "window") {
-      const start = parseInstant(entry.startsAt);
-      const end = parseInstant(entry.endsAt);
-      // A window saved without an end would otherwise be invisible forever;
-      // treat it as the open-ended mode it clearly meant.
-      if (start && end && ms(start) <= ms(now) && ms(now) < ms(end)) {
-        bounded.push({ entry, start, end });
-      }
+    const start = parseInstant(entry.startsAt);
+    const end = parseInstant(entry.endsAt);
+    if (start && end && ms(start) <= ms(now) && ms(now) < ms(end)) {
+      bounded.push({ entry, start, end });
     }
   }
 
@@ -147,33 +140,55 @@ export function resolveSchedule(
       b.entry.id - a.entry.id
   );
 
-  let winner: Candidate | null = bounded[0] ?? null;
-  let openEnded: { entry: ScheduleEntry; start: Date } | null = null;
-
-  if (!winner) {
-    for (const entry of live) {
-      if (entry.mode !== "until_next" && !(entry.mode === "window" && !entry.endsAt)) continue;
-      const start = parseInstant(entry.startsAt);
-      if (!start || ms(start) > ms(now)) continue;
-      if (
-        !openEnded ||
-        ms(start) > ms(openEnded.start) ||
-        (ms(start) === ms(openEnded.start) && entry.id > openEnded.entry.id)
-      ) {
-        openEnded = { entry, start };
-      }
-    }
-  }
-
+  const winner: Candidate | null = bounded[0] ?? null;
+  const candidates = bounded.map((c) => c.entry);
   const changesAt = nextBoundary(live, now, timeZone, winner ? winner.end : null);
 
   if (winner) {
-    return { entry: winner.entry, startedAt: winner.start, endsAt: winner.end, changesAt };
+    return { entry: winner.entry, candidates, startedAt: winner.start, endsAt: winner.end, changesAt };
   }
-  if (openEnded) {
-    return { entry: openEnded.entry, startedAt: openEnded.start, endsAt: null, changesAt };
+  return { entry: null, candidates, startedAt: null, endsAt: null, changesAt };
+}
+
+/**
+ * Whether anything at all is scheduled at `now`, and when that next flips.
+ * This, not the playlist's contents, is what turns the TV on and off.
+ *
+ * Occurrences of every entry are merged before looking, so two entries that
+ * meet or overlap -- whatever they play -- are one stretch of being on.
+ */
+export function scheduleCoverage(
+  entries: ScheduleEntry[],
+  now: Date,
+  timeZone: string
+): { on: boolean; changesAt: Date | null } {
+  const spans: Span[] = [];
+  for (const entry of entries) {
+    if (!entry.enabled) continue;
+    if (entry.mode === "recurring") {
+      // From yesterday: an overnight occurrence that began before midnight
+      // is still the one covering 00:30.
+      let key = addDays(localDateKey(now, timeZone), -1);
+      for (let i = 0; i <= HORIZON_DAYS + 1; i++) {
+        const occ = occurrenceOn(entry, key, timeZone);
+        if (occ) spans.push({ start: occ.start, end: occ.end });
+        key = addDays(key, 1);
+      }
+      continue;
+    }
+    const start = parseInstant(entry.startsAt);
+    const end = parseInstant(entry.endsAt);
+    if (start && end && ms(end) > ms(start)) spans.push({ start, end });
   }
-  return { entry: null, startedAt: null, endsAt: null, changesAt };
+
+  const merged = mergeSpans(spans);
+  for (const span of merged) {
+    if (ms(span.start) <= ms(now) && ms(now) < ms(span.end)) {
+      return { on: true, changesAt: span.end };
+    }
+  }
+  const next = merged.find((span) => ms(span.start) > ms(now));
+  return { on: false, changesAt: next ? next.start : null };
 }
 
 // The earliest of: the winner's own end, and every entry's next start. An
@@ -209,20 +224,18 @@ const DATE_KEY = /^\d{4}-\d{2}-\d{2}$/;
 /** Rejects an entry that could never play, before it is stored. */
 export function validateEntry(entry: Partial<ScheduleEntry>): ValidationResult {
   const mode = entry.mode;
-  if (mode !== "window" && mode !== "until_next" && mode !== "recurring") {
+  if (mode !== "window" && mode !== "recurring") {
     return { ok: false, error: "Pick how this should be scheduled." };
   }
   if (!entry.playlistId) return { ok: false, error: "Pick a playlist to play." };
 
-  if (mode === "window" || mode === "until_next") {
+  if (mode === "window") {
     const start = parseInstant(entry.startsAt ?? null);
     if (!start) return { ok: false, error: "Give this a start date and time." };
-    if (mode === "window") {
-      const end = parseInstant(entry.endsAt ?? null);
-      if (!end) return { ok: false, error: "Give this an end date and time." };
-      if (ms(end) <= ms(start)) {
-        return { ok: false, error: "The end has to come after the start." };
-      }
+    const end = parseInstant(entry.endsAt ?? null);
+    if (!end) return { ok: false, error: "Give this an end date and time." };
+    if (ms(end) <= ms(start)) {
+      return { ok: false, error: "The end has to come after the start." };
     }
     return { ok: true };
   }
@@ -264,9 +277,8 @@ export interface EntryStatus {
 }
 
 /**
- * Per-entry state for the schedule list. `superseded` is specific to the
- * open-ended mode: the entry has started and never ends, but a later one took
- * the screen for good, so it will not come back.
+ * Per-entry state for the schedule list. `superseded` is a window that is
+ * running but another entry currently has the screen.
  */
 export function describeEntries(
   entries: ScheduleEntry[],
@@ -274,11 +286,6 @@ export function describeEntries(
   timeZone: string
 ): EntryStatus[] {
   const winner = resolveSchedule(entries, now, timeZone);
-  const latestOpen = entries
-    .filter((e) => e.enabled && e.mode === "until_next" && e.startsAt)
-    .map((e) => ({ e, start: parseInstant(e.startsAt) }))
-    .filter((x): x is { e: ScheduleEntry; start: Date } => x.start !== null && ms(x.start) <= ms(now))
-    .sort((a, b) => ms(b.start) - ms(a.start) || b.e.id - a.e.id)[0];
 
   return entries.map((entry) => {
     if (!entry.enabled) {
@@ -302,24 +309,14 @@ export function describeEntries(
     if (ms(start) > ms(now)) {
       return { id: entry.id, state: "upcoming" as EntryState, nextStart: start, currentEnd: null };
     }
-    if (entry.mode === "window") {
-      if (end && ms(now) >= ms(end)) {
-        return { id: entry.id, state: "finished" as EntryState, nextStart: null, currentEnd: null };
-      }
-      return {
-        id: entry.id,
-        state: winner.entry?.id === entry.id ? "active" : "superseded",
-        nextStart: null,
-        currentEnd: end,
-      };
+    if (!end || ms(now) >= ms(end)) {
+      return { id: entry.id, state: "finished" as EntryState, nextStart: null, currentEnd: null };
     }
-    // until_next
-    const isLatest = latestOpen?.e.id === entry.id;
     return {
       id: entry.id,
-      state: isLatest ? (winner.entry?.id === entry.id ? "active" : "superseded") : "superseded",
+      state: winner.entry?.id === entry.id ? "active" : "superseded",
       nextStart: null,
-      currentEnd: null,
+      currentEnd: end,
     };
   });
 }

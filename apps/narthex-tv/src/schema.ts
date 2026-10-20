@@ -86,10 +86,8 @@ CREATE INDEX IF NOT EXISTS playlist_items_playlist_idx ON playlist_items (playli
 ALTER TABLE playlist_items ADD COLUMN IF NOT EXISTS show_from  date;
 ALTER TABLE playlist_items ADD COLUMN IF NOT EXISTS show_until date;
 
--- The two modes the narthex staff asked for, plus a recurring one for the
--- weekly Sunday slot:
+-- Two modes:
 --   window     - starts_at .. ends_at, then it is over
---   until_next - starts_at, then plays until another until_next entry starts
 --   recurring  - days-of-week + a local time range, optionally date-bounded
 CREATE TABLE IF NOT EXISTS schedule_entries (
   id               bigserial PRIMARY KEY,
@@ -110,6 +108,10 @@ CREATE TABLE IF NOT EXISTS schedule_entries (
   updated_at       timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS schedule_entries_mode_idx ON schedule_entries (mode, starts_at);
+
+-- One schedule now decides both what plays and whether the TV is on, so an
+-- entry with no end would keep the narthex lit indefinitely.
+DELETE FROM schedule_entries WHERE mode = 'until_next' OR (mode = 'window' AND ends_at IS NULL);
 
 -- A physical display. The token is how the TV authenticates: it cannot sign in
 -- with Google, so /player and /api/player/* sit outside the hub's forward-auth
