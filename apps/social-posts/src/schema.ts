@@ -191,4 +191,23 @@ ALTER TABLE recurrences ADD COLUMN IF NOT EXISTS attachments jsonb NOT NULL DEFA
 -- A recurring post decides whether each week's caption is the same everywhere
 -- or different per platform.
 ALTER TABLE recurrences ADD COLUMN IF NOT EXISTS caption_mode text NOT NULL DEFAULT 'same';
+
+-- Sermon recordings: uploaded in pieces to the data volume, transcribed in the
+-- background, and used as a drafting source.
+CREATE TABLE IF NOT EXISTS sermons (
+  id               text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  title            text NOT NULL,
+  file_name        text NOT NULL,
+  size             bigint NOT NULL,
+  mime             text NOT NULL,
+  status           text NOT NULL DEFAULT 'uploading' CHECK (status IN ('uploading','queued','transcribing','ready','error')),
+  progress         text NOT NULL DEFAULT '',
+  error            text NOT NULL DEFAULT '',
+  duration_seconds numeric,
+  transcript       text NOT NULL DEFAULT '',
+  segments         jsonb NOT NULL DEFAULT '[]',
+  created_by       text NOT NULL DEFAULT '',
+  created_at       timestamptz NOT NULL DEFAULT now(),
+  updated_at       timestamptz NOT NULL DEFAULT now()
+);
 `;

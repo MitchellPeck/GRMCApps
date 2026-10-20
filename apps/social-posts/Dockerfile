@@ -1,5 +1,7 @@
 FROM node:20-alpine
 WORKDIR /app
+# ffmpeg pulls the audio out of sermon recordings for transcription.
+RUN apk add --no-cache ffmpeg
 COPY apps/social-posts/package.json ./
 RUN npm install
 COPY apps/social-posts/tsconfig.json ./

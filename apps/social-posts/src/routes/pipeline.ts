@@ -10,6 +10,15 @@ import { listCampaigns } from "../mailchimp";
 import { listEpisodes } from "../buzzsprout";
 import { getApprovedImageBytes } from "../approvals-client";
 import { MAX_UPLOAD_BYTES, storeUpload } from "../pipeline/uploads";
+import { Readable } from "node:stream";
+import { UploadError } from "../pipeline/sermon-files";
+import { SermonRow, completeSermon, createSermon, durationLabel, getSermon, receiveChunk, retrySermon, sermonOpts } from "../pipeline/sermons";
+
+/** A sermon for the editor: its state, length and a taste of the transcript (not all of it). */
+function sermonSummary(s: SermonRow) {
+  return { id: s.id, title: s.title, fileName: s.fileName, status: s.status, progress: s.progress, error: s.error,
+           duration: s.durationSeconds ? durationLabel(s.durationSeconds) : "", excerpt: s.transcript.slice(0, 400) };
+}
 import { describeRule, occurrences, parseRecurrenceInput, parseRule } from "../pipeline/recurrence";
 import {
   HORIZON_DAYS, createRecurrence, deleteRecurrence, getRecurrence, listRecurrences, materialize, updateRecurrence,
@@ -321,6 +330,51 @@ export async function pipelineRoutes(app: FastifyInstance): Promise<void> {
     let name = "upload";
     try { name = decodeURIComponent(String(req.headers["x-file-name"] || "upload")); } catch { /* keep the default */ }
     return { ok: true, ...(await storeUpload(pool, bytes, type, name)) };
+  }));
+
+  // ── Sermon recordings ──
+  // A recording arrives in 8 MB pieces (Cloudflare caps a request at 100 MB),
+  // each streamed straight to the data volume.
+  app.addContentTypeParser("application/octet-stream", (_req, payload, done) => done(null, payload));
+
+  app.post("/api/pipeline/sermons", async (req) => guard(async () => {
+    const b = (req.body ?? {}) as { fileName?: string; size?: number; type?: string };
+    const r = await createSermon(pool, { fileName: String(b.fileName || ""), size: Number(b.size), type: String(b.type || "") },
+      getIdentity(req).email, sermonOpts());
+    return r.ok ? { ok: true, sermon: sermonSummary(r.value), chunkBytes: r.value.chunkBytes } : r;
+  }));
+
+  app.put("/api/pipeline/sermons/:id/chunk", async (req, reply) => {
+    try {
+      const received = await receiveChunk(pool, (req.params as { id: string }).id, Number((req.query as Query).offset),
+        req.body as Readable, sermonOpts());
+      return { ok: true, received };
+    } catch (e) {
+      if (e instanceof UploadError) return reply.code(e.status).send({ ok: false, error: e.message, received: e.received });
+      return reply.code(500).send({ ok: false, error: (e as Error).message });
+    }
+  });
+
+  app.post("/api/pipeline/sermons/:id/complete", async (req) => guard(async () => {
+    const r = await completeSermon(pool, (req.params as { id: string }).id, sermonOpts());
+    return r.ok ? { ok: true, sermon: sermonSummary(r.value) } : r;
+  }));
+
+  app.get("/api/pipeline/sermons/:id", async (req) => guard(async () => {
+    const s = await getSermon(pool, (req.params as { id: string }).id);
+    return s ? { ok: true, sermon: sermonSummary(s) } : { ok: false, error: "That recording doesn't exist." };
+  }));
+
+  app.get("/api/pipeline/sermons/:id/transcript", async (req, reply) => {
+    const s = await getSermon(pool, (req.params as { id: string }).id);
+    if (!s) return reply.code(404).send("Not found");
+    reply.header("content-type", "text/plain; charset=utf-8");
+    return s.transcript || "(No transcript yet.)";
+  });
+
+  app.post("/api/pipeline/sermons/:id/retry", async (req) => guard(async () => {
+    const r = await retrySermon(pool, (req.params as { id: string }).id, sermonOpts());
+    return r.ok ? { ok: true, sermon: sermonSummary(r.value) } : r;
   }));
 
   // ── Media assets ──

@@ -755,3 +755,72 @@ test("a recurring post sets each week's caption mode and can turn the event's so
   assert.ok(upd.ok);
   assert.equal((await occ(r.value.id))[1].caption_mode, "same", "untouched weeks follow the series");
 });
+
+// ── Sermon recordings as a drafting source ──
+
+test("a sermon upload is transcribed and drafts from its transcript", async (t) => {
+  const { execFileSync } = await import("node:child_process");
+  try { execFileSync("ffmpeg", ["-version"], { stdio: "ignore" }); } catch { t.skip("ffmpeg isn't installed here"); return; }
+  const http = await import("node:http");
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { Readable } = await import("node:stream");
+  const { readFileSync } = await import("node:fs");
+  const sermons = await import("./pipeline/sermons");
+  const { resolveSource } = await import("./pipeline/sources");
+  const { draftCaptions, parseDraftRequest } = await import("./pipeline/caption");
+
+  // A stand-in Whisper that answers the OpenAI-style transcription call.
+  let calls = 0;
+  const whisper = http.createServer((req, res) => {
+    calls++;
+    req.resume(); req.on("end", () => {
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ text: "Grace is not earned, it is given.", segments: [{ start: 0.5, end: 2.5, text: "Grace is not earned, it is given." }] }));
+    });
+  });
+  await new Promise<void>((r) => whisper.listen(0, r));
+  const dataDir = await mkdtemp(join(tmpdir(), "sermon-data-"));
+  const opts = { dataDir, whisperUrl: `http://127.0.0.1:${(whisper.address() as { port: number }).port}` };
+  try {
+    // A 3-second recording made by ffmpeg, uploaded in two pieces.
+    const src = join(dataDir, "clip.mp4");
+    execFileSync("ffmpeg", ["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=3", "-c:a", "aac", src]);
+    const bytes = readFileSync(src);
+    const s = await sermons.createSermon(pool, { fileName: "Sunday sermon.mp4", size: bytes.length, type: "video/mp4" }, "me@x.org", opts);
+    assert.ok(s.ok);
+    const half = Math.floor(bytes.length / 2);
+    await sermons.receiveChunk(pool, s.value.id, 0, Readable.from([bytes.subarray(0, half)]), opts);
+    const early = await sermons.completeSermon(pool, s.value.id, opts, { enqueue: false });
+    assert.ok(!early.ok, "can't finish before every byte has arrived");
+    await sermons.receiveChunk(pool, s.value.id, half, Readable.from([bytes.subarray(half)]), opts);
+    const done = await sermons.completeSermon(pool, s.value.id, opts, { enqueue: false });
+    assert.ok(done.ok);
+    assert.equal(done.value.status, "queued");
+
+    // Not ready yet: drafting says so instead of drafting from nothing.
+    await assert.rejects(() => resolveSource(pool, { kind: "sermon" }, { kind: "sermon", id: s.value.id }, "2026-11-01"), /still being transcribed/);
+
+    await sermons.processSermon(pool, s.value.id, opts);
+    const ready = await sermons.getSermon(pool, s.value.id);
+    assert.equal(ready?.status, "ready");
+    assert.equal(ready?.transcript, "Grace is not earned, it is given.");
+    assert.ok(ready!.durationSeconds >= 2.5 && ready!.durationSeconds <= 3.5);
+    assert.equal(calls, 1);
+
+    const content = await resolveSource(pool, { kind: "sermon" }, { kind: "sermon", id: s.value.id }, "2026-11-01");
+    assert.equal(content?.kind, "sermon");
+    assert.match(content!.content, /Grace is not earned/);
+
+    // A sermon-sourced post with no recording yet asks for one.
+    const req = parseDraftRequest({ title: "Sunday recap", platforms: ["facebook"], publishDate: "2026-11-01", drafting: { source: { kind: "sermon" } } });
+    assert.ok(req.ok);
+    const r = await draftCaptions(pool, req.value, "me@x.org");
+    assert.ok(!r.ok);
+    assert.match(r.error, /Upload the sermon recording first/);
+  } finally {
+    whisper.close();
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});

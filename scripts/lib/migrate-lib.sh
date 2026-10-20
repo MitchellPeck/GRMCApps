@@ -16,7 +16,7 @@
 # TV's media — uploads that exist nowhere else); letsencrypt + whisperdata are
 # regenerable but cheap to carry.
 # shellcheck disable=SC2034  # consumed by the scripts that source this file
-MIGRATE_VOLUMES=(pgdata minutesdata narthextvdata letsencrypt whisperdata)
+MIGRATE_VOLUMES=(pgdata minutesdata narthextvdata socialpostsdata letsencrypt whisperdata)
 
 # Host-only files (gitignored, or — for cloudflared/config.yml — git-tracked but
 # locally edited to hold the real tunnel UUID). Paths relative to the repo root.

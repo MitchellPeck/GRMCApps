@@ -4,7 +4,7 @@
 // and/or source. Pure.
 import { Result } from "./rules";
 
-export const SOURCE_KINDS = ["none", "mailchimp", "buzzsprout"] as const;
+export const SOURCE_KINDS = ["none", "mailchimp", "buzzsprout", "sermon"] as const;
 export type SourceKind = typeof SOURCE_KINDS[number];
 export const CUTOFFS = ["latest", "postDate", "followingSunday"] as const;
 export type Cutoff = typeof CUTOFFS[number];
@@ -14,7 +14,7 @@ export interface Angle { key: string; label: string; instructions: string; offse
 export interface Profile { source?: SourceConfig; instructions?: string; angles?: Angle[] }
 export interface Override { source?: SourceConfig; instructions?: string }
 export interface SourceRef {
-  kind: "mailchimp" | "buzzsprout" | "manual";
+  kind: "mailchimp" | "buzzsprout" | "manual" | "sermon";
   id?: string; title?: string; url?: string; date?: string; content?: string;
 }
 export interface Effective {
@@ -29,7 +29,7 @@ const obj = (raw: unknown): Record<string, any> => (raw && typeof raw === "objec
 
 export function parseSource(raw: unknown): Result<SourceConfig> {
   const r = obj(raw);
-  if (!(SOURCE_KINDS as readonly string[]).includes(r.kind)) return fail("Source must be none, Mailchimp or Buzzsprout.");
+  if (!(SOURCE_KINDS as readonly string[]).includes(r.kind)) return fail("Source must be none, Mailchimp, Buzzsprout or a sermon recording.");
   if (r.kind !== "mailchimp") return { ok: true, value: { kind: r.kind } };
   const subjectContains = String(r.subjectContains ?? "").trim().toLowerCase();
   if (!subjectContains) return fail("Say which Mailchimp campaigns to use: text their subject contains.");
@@ -91,7 +91,7 @@ export function parseProfile(raw: unknown): Result<Profile> {
 export function parseSourceRef(raw: unknown): Result<SourceRef | null> {
   if (raw == null) return { ok: true, value: null };
   const r = obj(raw);
-  if (!["mailchimp", "buzzsprout", "manual"].includes(r.kind)) return fail("That source item isn't valid.");
+  if (!["mailchimp", "buzzsprout", "manual", "sermon"].includes(r.kind)) return fail("That source item isn't valid.");
   const s = (k: string, max: number) => (r[k] == null ? undefined : String(r[k]).slice(0, max));
   const ref: SourceRef = { kind: r.kind, id: s("id", 100), title: s("title", 300), url: s("url", 2000), date: s("date", 10), content: s("content", 20000) };
   if (ref.kind === "manual" && !ref.content?.trim()) return fail("Paste the content to draft from.");

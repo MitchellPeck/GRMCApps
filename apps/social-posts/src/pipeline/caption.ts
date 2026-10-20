@@ -87,6 +87,7 @@ export async function draftCaptions(pool: Pool, req: DraftRequest, createdBy: st
   catch (e) { return fail((e as Error).message); }
   const { effective, source, event } = resolved;
   if (effective.source.kind === "buzzsprout" && !source) return fail("Pick the episode this post is about.");
+  if (effective.source.kind === "sermon" && !source) return fail("Upload the sermon recording first.");
 
   let seriesPosition: { n: number; of: number } | null = null;
   // Only a real series (an arc of posts) has a position; the weekly runs'

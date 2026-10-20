@@ -130,6 +130,11 @@ services:
       SOCIALPOSTS_DB_USER: "${SOCIALPOSTS_DB_USER}"
       SOCIALPOSTS_DB_PASSWORD: "${SOCIALPOSTS_DB_PASSWORD}"
       SOCIALPOSTS_DB_NAME: "${SOCIALPOSTS_DB_NAME}"
+      # Sermon recordings (uploaded for Sunday recap posts) and their transcripts.
+      SOCIALPOSTS_DATA_DIR: "/data"
+      WHISPER_REST_URL: "http://whisper:9000"
+    volumes:
+      - socialpostsdata:/data
     depends_on:
       postgres:
         condition: service_healthy
@@ -360,3 +365,4 @@ volumes:
   whisperdata:
   minutesdata:
   narthextvdata:
+  socialpostsdata:

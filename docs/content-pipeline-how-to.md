@@ -47,6 +47,31 @@ The weekly posts are set up like this already:
 - **Weekly blog:** the latest blog email.
 - **Podcast:** episodes.
 
+## Sunday recap from the sermon
+
+A post can draft from the sermon itself. Set its **Source** to **A sermon
+recording** — on the post (under **Drafting for this post**), on a recurring
+post (so every week asks for one), or on an event.
+
+1. Open the week's post and click **Upload the sermon recording**. Video or
+   audio, up to 4 GB; it goes up in pieces, so keep the page open until the
+   bar finishes.
+2. It's transcribed on the church's server. A long sermon can take a while;
+   you can close the post and come back. **Read the transcript** shows what
+   it heard.
+3. **Draft with Claude** writes from the transcript, in the house voice, the
+   same everywhere or different for each platform.
+
+The transcript is automatic, so names and verse references can be misheard;
+check those before posting. Recordings stay on the church's server and are
+only viewable when signed in.
+
+To set this up once: **Recurring → New recurring post**, event **Sunday
+worship**, repeats **every Sunday**, **Source for each post: A sermon
+recording**, **Caption: Different for each platform**, and instructions such as
+*"Recap the sermon's main idea in a way someone can carry into their week.
+Quote one line that landed. Invite people back next Sunday."*
+
 ## Planning several posts at once
 
 - **Podcast:** on its event page, **Plan posts from an episode**. Pick the

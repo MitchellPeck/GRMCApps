@@ -212,3 +212,22 @@ attachments; a series edit replaces them only on untouched weeks whose files
 weren't changed by hand. Send to Metricool sends every ticked file in order
 (`media: [...]` on `/api/metricool/send`, prepared by `gatherSendMedia`), so
 several images make a carousel.
+
+## Iteration 6: sermon recordings as a source (stage 1 of a Pulpit AI–style flow)
+
+A new drafting source kind, `sermon`: the post drafts from a recording uploaded
+to it (`source_ref: { kind: "sermon", id }`). Recordings (video or audio, up to
+`SOCIALPOSTS_MAX_SERMON_MB`, default 4 GB) are uploaded in 8 MB pieces to the
+new `socialpostsdata` volume (`/data/sermons/<id>/`), transcribed in an
+in-process queue (one at a time, resumed at boot): ffmpeg extracts 16 kHz mono
+audio and cuts 10-minute parts; each part goes to the existing Whisper server
+(`WHISPER_REST_URL`, OpenAI-style `/v1/audio/transcriptions`); parts are
+stitched with their real offsets into `sermons.transcript` and `segments`.
+The prompt carries up to 60,000 characters of transcript with a warning that
+it's automatic. Recurring posts now also set `caption_mode` and can choose a
+source (event's, none, sermon) for every week. Stage 2 (auto-cut clips) and
+pulling recordings from a link or Buzzsprout are not built.
+
+**Deploy:** this changes `docker-compose.yml` (a volume and two env vars for
+social-posts), so after the image ships run `docker compose up -d social-posts`
+on the host. `socialpostsdata` is in the migration scripts' volume list.

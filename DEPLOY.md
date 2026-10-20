@@ -154,7 +154,7 @@ agent — and Docker — to be running after a reboot. Logs land in
 Everything that makes the always-on Mac *the* host is either gitignored
 (`.env`, `secrets/`), an uncommitted local edit (`cloudflared/config.yml`
 carries the real tunnel UUID), or a Docker volume (`pgdata` — every app's
-database; `minutesdata` — meeting recordings; `narthextvdata` — the narthex TV's
+database; `minutesdata` — meeting recordings; `socialpostsdata` — sermon recordings for Social Posts; `narthextvdata` — the narthex TV's
 uploaded media; `letsencrypt` and `whisperdata` — regenerable, but cheap to
 carry). Nothing in Cloudflare, Google or GHCR is tied
 to the machine: the tunnel follows its credentials file, the DNS routes point

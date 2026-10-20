@@ -8,6 +8,7 @@ import { CampaignSummary, getCampaignText, listCampaigns } from "../mailchimp";
 import { getEpisode } from "../buzzsprout";
 import { Cutoff, SourceConfig, SourceRef } from "./drafting";
 import { SourceContent } from "./prompt";
+import { durationLabel, getSermon, notReadyMessage } from "./sermons";
 
 /** The last day an issue may have been created on, or null for "newest". */
 export function cutoffDate(cutoff: Cutoff, postDate: string | null): string | null {
@@ -44,6 +45,16 @@ export async function resolveSource(
   }
   // "Don't use the event's source for this post" outranks an issue or episode stored earlier.
   if (source.kind === "none") return null;
+  // A sermon post drafts from the recording uploaded to it; until there is
+  // one there's nothing to draft from, and until it's transcribed, say so.
+  if (ref?.kind === "sermon" || (!ref && source.kind === "sermon")) {
+    if (!ref?.id) return null;
+    const s = await getSermon(pool, ref.id);
+    if (!s) throw new Error("That sermon recording is gone. Upload it again.");
+    if (s.status !== "ready") throw new Error(notReadyMessage(s));
+    return { kind: "sermon", id: s.id, title: s.title, url: "", date: "", dateLine: durationLabel(s.durationSeconds) + " recording",
+             content: s.transcript.slice(0, 60000) };
+  }
   if (ref?.kind === "buzzsprout" || (!ref && source.kind === "buzzsprout")) {
     if (!ref?.id) return null;
     const ep = await getEpisode(pool, ref.id);

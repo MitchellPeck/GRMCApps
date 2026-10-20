@@ -676,7 +676,7 @@ function draftingCardHtml(e) {
     + '<p class="hint pl-under">How Draft with Claude writes this event’s posts. A recurring post or a single post can override the instructions.'
     + ' Background comes from the event’s notes'+(e.notes ? '' : ' (empty: <button class="pl-link" type="button" data-act="edit-event" data-id="'+esc(e.id)+'">add some</button>)')+'.</p>'
     + '<div class="row2"><div class="field"><label for="dr-kind">Source</label><select id="dr-kind" name="kind" data-act="dr-kind">'
-    +   opt('none', 'None', src.kind) + opt('mailchimp', 'A Mailchimp newsletter', src.kind) + opt('buzzsprout', 'A podcast episode (Buzzsprout)', src.kind) + '</select></div>'
+    +   opt('none', 'None', src.kind) + opt('mailchimp', 'A Mailchimp newsletter', src.kind) + opt('buzzsprout', 'A podcast episode (Buzzsprout)', src.kind) + opt('sermon', 'A sermon recording (uploaded to each post)', src.kind) + '</select></div>'
     + '<div class="field" data-dr="mailchimp"><label for="dr-subject">Campaigns whose subject contains</label>'
     +   '<input id="dr-subject" type="text" name="subjectContains" value="'+esc(src.subjectContains || '')+'" placeholder="grace notes"></div></div>'
     + '<div class="field" data-dr="mailchimp"><label for="dr-cutoff">Which issue</label><select id="dr-cutoff" name="cutoff">'
@@ -814,7 +814,7 @@ function editorHtml(i) {
     + '<section class="pl-source-panel" id="pf-source" aria-live="polite"><p class="hint">Checking where this post drafts from…</p></section>'
     + '<details class="pl-override"'+((i.drafting && (i.drafting.instructions || i.drafting.source)) ? ' open' : '')+'><summary>Drafting for this post</summary>'
     +   '<div class="field"><label for="pf-instr">Instructions</label><textarea id="pf-instr" name="draftInstructions" class="pl-instr" placeholder="Leave empty to use the event’s">'+esc((i.drafting && i.drafting.instructions) || '')+'</textarea></div>'
-    +   '<label class="check"><input type="checkbox" name="draftNoSource" data-act="src-toggle"'+(i.drafting && i.drafting.source && i.drafting.source.kind === 'none' ? ' checked' : '')+'> Don’t use the event’s source for this post</label>'
+    +   '<div class="field"><label for="pf-src">Source for this post</label>'+postSourceSelect(i)+'</div>'
     + '</details>'
     + '<div class="field pl-caption-block"><div class="pl-label-row"><span class="lbl">Caption</span>'
     + '<div class="pl-seg pl-seg-sm" role="group" aria-label="Caption per platform">'
@@ -850,6 +850,14 @@ function editorHtml(i) {
     + '</div></form>'
     + (drawer.id ? '<details class="pl-history" data-act="history"><summary>Earlier drafts</summary><div id="pf-history"><p class="hint">Loading…</p></div></details>' : '')
     + mediaSectionHtml(i);
+}
+
+function postSourceSelect(i) {
+  var cur = i.drafting && i.drafting.source ? i.drafting.source.kind : '';
+  var known = SOURCE_CHOICES.some(function(c){ return c[0] === cur; });
+  return '<select id="pf-src" name="draftSource" data-act="src-toggle">'
+    + SOURCE_CHOICES.map(function(c){ return '<option value="'+c[0]+'"'+(c[0] === cur ? ' selected' : '')+'>'+(c[0] === 'none' ? 'None for this post' : c[1])+'</option>'; }).join('')
+    + (known ? '' : '<option value="keep" selected>Keep its current source</option>') + '</select>';
 }
 
 function recurrenceBanner() {
@@ -1143,10 +1151,11 @@ function readForm(form) {
   out.captionMode = fd.get('captionMode') === 'separate' ? 'separate' : 'same';
   out.captions = {};
   S.meta.platforms.forEach(function(p){ var v = (fd.get('caption-' + p.key) || '').trim(); if (v) out.captions[p.key] = v; });
-  var instr = (fd.get('draftInstructions') || '').trim(), noSource = fd.get('draftNoSource') === 'on';
+  var instr = (fd.get('draftInstructions') || '').trim(), pick = fd.get('draftSource') || '';
   out.drafting = {};
   if (instr) out.drafting.instructions = instr;
-  if (noSource) out.drafting.source = { kind: 'none' };
+  if (pick === 'keep') { if (drawer.item && drawer.item.drafting && drawer.item.drafting.source) out.drafting.source = drawer.item.drafting.source; }
+  else if (pick) out.drafting.source = { kind: pick };
   out.sourceRef = drawer.sourceRef;
   out.phase = drawer.item ? drawer.item.phase || '' : '';
   return out;
@@ -1286,6 +1295,7 @@ function applyImageRule(changed) {
 var sourceTimer;
 function loadSourcePanel() {
   clearTimeout(sourceTimer);
+  if (drawer.sourceRef && drawer.sourceRef.kind === 'sermon') return loadSermonPanel(drawer.sourceRef.id);
   sourceTimer = setTimeout(function(){
     var form = document.querySelector('form[data-form=content]'), panel = $('pf-source');
     if (!form || !panel) return;
@@ -1309,6 +1319,7 @@ function sourcePanelHtml(res) {
   if (kind === 'none') return '';
   var head = '<div class="pl-label-row"><span class="lbl">Drafts from</span>'
     + '<span>'+(kind !== 'manual' ? '<button class="btn-sm" type="button" data-act="src-change" data-kind="'+kind+'">Change</button> ' : '')+paste+'</span></div>';
+  if (kind === 'sermon' && !s) return sermonUploadHtml();
   if (kind === 'buzzsprout' && !s) return head + '<p class="pl-gaptext">Pick the episode this post is about.</p><div id="pf-src-list"></div>';
   if (!s) return head + '<p class="hint">Nothing found to draft from.</p>' + reset;
   var marks = (s.isDraft ? ' <span class="pl-status pl-s-drafted">Not sent yet</span>' : '')
@@ -1320,6 +1331,93 @@ function sourcePanelHtml(res) {
     + (s.excerpt ? '<p class="pl-src-excerpt">'+esc(s.excerpt)+'…</p>' : '')
     + (ref ? '<p class="hint">Picked for this post.'+reset+'</p>' : '')
     + '<div id="pf-src-list"></div>';
+}
+
+// ── Sermon recordings ──
+var SERMON_TYPES = { mp4: 'video/mp4', mov: 'video/quicktime', m4v: 'video/x-m4v', webm: 'video/webm',
+  mp3: 'audio/mpeg', m4a: 'audio/mp4', aac: 'audio/aac', wav: 'audio/wav' };
+
+function sermonUploadHtml(note) {
+  return '<div class="pl-label-row"><span class="lbl">Drafts from the sermon</span>'
+    + '<button class="btn-sm" type="button" data-act="src-paste">Paste content instead</button></div>'
+    + (note || '<p class="hint">Upload this Sunday’s sermon (video or audio). It’s transcribed on the church’s server, and Draft with Claude writes from what was said.</p>')
+    + '<div class="btn-row"><button class="btn btn-gold" type="button" data-act="sermon-upload">Upload the sermon recording</button></div>'
+    + '<input type="file" data-sermon-file hidden accept="video/*,audio/*">'
+    + '<div class="pl-sermon-progress" hidden><span class="pl-bar pl-bar-wide"><span></span></span><span class="hint"></span></div>';
+}
+
+var sermonPoll;
+function loadSermonPanel(id) {
+  clearTimeout(sermonPoll);
+  var panel = $('pf-source');
+  if (!panel) return;
+  api('GET', '/api/pipeline/sermons/' + encodeURIComponent(id)).then(function(d){
+    if (!drawer.sourceRef || drawer.sourceRef.id !== id || !$('pf-source')) return;
+    var sm = d.sermon, html;
+    if (sm.status === 'ready') {
+      html = '<div class="pl-label-row"><span class="lbl">Drafts from the sermon</span>'
+        + '<span><button class="btn-sm" type="button" data-act="sermon-replace">Replace the recording</button></span></div>'
+        + '<p class="pl-src-title"><strong>'+esc(sm.title)+'</strong> <span class="pl-status pl-s-ready">Ready to draft</span></p>'
+        + '<p class="hint">'+esc(sm.duration)+' · <a href="/api/pipeline/sermons/'+encodeURIComponent(sm.id)+'/transcript" target="_blank" rel="noopener">Read the transcript</a></p>'
+        + (sm.excerpt ? '<p class="pl-src-excerpt">'+esc(sm.excerpt)+'…</p>' : '');
+    } else if (sm.status === 'error') {
+      html = sermonUploadHtml('<div class="alert alert-err">'+esc(sm.title)+' couldn’t be transcribed: '+esc(sm.error)
+        + ' <button class="btn-sm" type="button" data-act="sermon-retry" data-id="'+esc(sm.id)+'">Try again</button></div>');
+    } else if (sm.status === 'uploading') {
+      html = sermonUploadHtml('<div class="alert alert-warn">The upload of '+esc(sm.title)+' didn’t finish. Upload it again.</div>');
+    } else {
+      html = '<div class="pl-label-row"><span class="lbl">Drafts from the sermon</span></div>'
+        + '<p class="pl-src-title"><span class="spin pl-spin-dark"></span> Transcribing <strong>'+esc(sm.title)+'</strong>'
+        + (sm.progress ? ' ('+esc(sm.progress)+')' : '')+'…</p>'
+        + '<p class="hint">This runs on the church’s server and can take a while for a long sermon. You can close this; it carries on.</p>';
+      sermonPoll = setTimeout(function(){ loadSermonPanel(id); }, 4000);
+    }
+    panel.innerHTML = html; panel.hidden = false;
+  }).catch(function(e){ panel.innerHTML = '<div class="alert alert-err">'+esc(e.message)+'</div>'; });
+}
+
+// Big files go up in pieces (Cloudflare caps a request at 100 MB), each retried
+// a few times, so a blip on the church Wi-Fi doesn't lose a 2 GB upload.
+function uploadSermon(input) {
+  var file = input.files[0];
+  input.value = '';
+  if (!file) return;
+  var ext = (file.name.split('.').pop() || '').toLowerCase();
+  var type = file.type || SERMON_TYPES[ext] || '';
+  var box = document.querySelector('.pl-sermon-progress'), bar = box.querySelector('.pl-bar span'), note = box.querySelector('.hint');
+  var btn = document.querySelector('[data-act=sermon-upload]');
+  btn.disabled = true; box.hidden = false; note.textContent = 'Starting…';
+  var id, chunk;
+  var show = function(sent){ var pct = Math.floor(100 * sent / file.size); bar.style.width = pct + '%'; note.textContent = 'Uploading ' + pct + '% of ' + (file.size / 1048576).toFixed(0) + ' MB'; };
+  var sendFrom = function(offset, failures){
+    if (offset >= file.size) return Promise.resolve();
+    return fetch('/api/pipeline/sermons/' + encodeURIComponent(id) + '/chunk?offset=' + offset,
+      { method: 'PUT', headers: { 'Content-Type': 'application/octet-stream' }, body: file.slice(offset, offset + chunk) })
+      .then(function(r){ return r.json().catch(function(){ return {}; }).then(function(d){ return { status: r.status, d: d }; }); },
+            function(){ return { status: 0, d: {} }; })
+      .then(function(res){
+        if (res.status === 200) { show(res.d.received); return sendFrom(res.d.received, 0); }
+        if (res.status === 409 && typeof res.d.received === 'number') return sendFrom(res.d.received, failures);
+        if ((res.status === 0 || res.status >= 500) && failures < 5) {
+          note.textContent = 'Connection hiccup, retrying…';
+          return new Promise(function(ok){ setTimeout(ok, 1000 * (failures + 1)); }).then(function(){ return sendFrom(offset, failures + 1); });
+        }
+        throw new Error(res.d.error || 'The upload stopped (' + res.status + '). Try again.');
+      });
+  };
+  api('POST', '/api/pipeline/sermons', { fileName: file.name, size: file.size, type: type })
+    .then(function(d){ id = d.sermon.id; chunk = d.chunkBytes; show(0); return sendFrom(0, 0); })
+    .then(function(){ note.textContent = 'Finishing…'; return api('POST', '/api/pipeline/sermons/' + encodeURIComponent(id) + '/complete'); })
+    .then(function(d){
+      drawer.sourceRef = { kind: 'sermon', id: d.sermon.id, title: d.sermon.title };
+      // A saved post keeps its recording even if it's closed without saving.
+      if (drawer.id) {
+        api('PATCH', '/api/pipeline/content/' + encodeURIComponent(drawer.id), { sourceRef: drawer.sourceRef })
+          .then(function(r){ if (r.item) drawer.item.sourceRef = r.item.sourceRef; }).catch(function(){});
+      }
+      loadSermonPanel(d.sermon.id);
+    })
+    .catch(function(e){ btn.disabled = false; note.textContent = ''; box.hidden = true; toast(e.message, 'err'); });
 }
 
 function showSourceChoices(kind) {
@@ -1503,7 +1601,7 @@ function recFilesHtml() {
   }).join('') + '</div>' : '<p class="hint">No files. Add one if every post in the series uses the same image.</p>';
 }
 // The series' source: the event's, none, or (kept as-is) one set elsewhere.
-var SOURCE_CHOICES = [['', 'The event’s source'], ['none', 'None for these posts']];
+var SOURCE_CHOICES = [['', 'The event’s source'], ['none', 'None for these posts'], ['sermon', 'A sermon recording (uploaded to each post)']];
 function recSourceSelect(r) {
   var cur = r && r.drafting && r.drafting.source ? r.drafting.source.kind : '';
   var known = SOURCE_CHOICES.some(function(c){ return c[0] === cur; });
@@ -1896,6 +1994,12 @@ document.addEventListener('click', function(e){
     case 'remove-plan-row': el.closest('.pl-plan-row').remove(); break;
     case 'draft-all': draftAllFor(el.getAttribute('data-ids').split(','), el); break;
     case 'src-change': showSourceChoices(el.getAttribute('data-kind')); break;
+    case 'sermon-upload': document.querySelector('[data-sermon-file]').click(); break;
+    case 'sermon-replace': $('pf-source').innerHTML = sermonUploadHtml(); break;
+    case 'sermon-retry':
+      api('POST', '/api/pipeline/sermons/' + encodeURIComponent(el.getAttribute('data-id')) + '/retry')
+        .then(function(d){ loadSermonPanel(d.sermon.id); }).catch(function(err){ toast(err.message, 'err'); });
+      break;
     case 'src-pick':
       drawer.sourceRef = drawer.sourceChoices[Number(el.getAttribute('data-i'))].ref; loadSourcePanel(); break;
     case 'src-reset': drawer.sourceRef = null; loadSourcePanel(); break;
@@ -1993,6 +2097,7 @@ document.addEventListener('change', function(e){
   if (el.hasAttribute('data-mfield')) return saveMediaField(el.closest('[data-media]'), el);
   if (el.hasAttribute('data-mcollect')) return toggleCollected(el.closest('[data-media]'), el.checked);
   if (el.hasAttribute('data-upload')) return uploadMediaFile(el.closest('[data-media]'), el);
+  if (el.hasAttribute('data-sermon-file')) return uploadSermon(el);
   if (el.hasAttribute('data-upload-attach')) {
     var host = el.closest('[data-attach]');
     return uploadFile(el, host.querySelector('[data-act=attach-upload]')).then(function(f){

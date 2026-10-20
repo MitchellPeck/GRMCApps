@@ -65,7 +65,9 @@ between apps. Both are served to each app at `/assets/` (see *Shared UI* below).
   a source (a Mailchimp newsletter such as Grace Notes or the weekly blog, or a
   Buzzsprout podcast episode), instructions, and the event's notes, in the
   house voice set in Settings. Captions can be the same everywhere or
-  different per platform (X kept to 280). Posts go to Metricool from the
+  different per platform (X kept to 280). A post can also draft from the
+  Sunday sermon: upload the recording and it's transcribed on the host by the
+  same Whisper server Meeting Minutes uses. Posts go to Metricool from the
   editor; media can be ticked off as collected or linked to a signed-off file
   from Approvals. Podcast events can plan one post per angle from an episode;
   series events can plan their posts with Claude. Keys for Anthropic,

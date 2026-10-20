@@ -5,7 +5,7 @@ import { formatMonthDayYear } from "../dates";
 import { PLATFORMS } from "./config";
 
 export interface SourceContent {
-  kind: "mailchimp" | "buzzsprout" | "manual";
+  kind: "mailchimp" | "buzzsprout" | "manual" | "sermon";
   id: string; title: string; url: string; date: string; dateLine: string; content: string;
   isDraft?: boolean; notYetPublic?: boolean; durationLabel?: string;
 }
@@ -41,7 +41,11 @@ export function buildDraftPrompt(p: PromptInput): { system: string; user: string
   if (p.phase) lines.push("PHASE: " + p.phase);
 
   const s = p.source;
-  if (s && s.kind === "buzzsprout") {
+  if (s && s.kind === "sermon") {
+    lines.push("", "--- SOURCE ---", "SERMON RECORDING: " + (s.title || "this Sunday's sermon") + (s.dateLine ? ` (${s.dateLine})` : ""),
+      "This is an automatic transcript: names, places and scripture references may be misheard. Don't quote a verse reference unless it's clear from the text.",
+      "", "SERMON TRANSCRIPT:", s.content || "(not provided)");
+  } else if (s && s.kind === "buzzsprout") {
     lines.push("", "--- SOURCE ---", "EPISODE TITLE: " + (s.title || "(not available)"), "LISTEN URL: " + (s.url || "(not provided)"));
     if (s.durationLabel) lines.push("EPISODE LENGTH: " + s.durationLabel);
     if (s.notYetPublic) lines.push("NOT YET PUBLIC: this episode is " + s.dateLine + ". Write as though it is landing, not as though it is already out.");
