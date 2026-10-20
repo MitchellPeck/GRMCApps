@@ -210,4 +210,7 @@ CREATE TABLE IF NOT EXISTS sermons (
   created_at       timestamptz NOT NULL DEFAULT now(),
   updated_at       timestamptz NOT NULL DEFAULT now()
 );
+
+-- Why a Scheduled post hasn't become Published (e.g. Metricool's failure reason).
+ALTER TABLE content_items ADD COLUMN IF NOT EXISTS publish_check text NOT NULL DEFAULT '';
 `;

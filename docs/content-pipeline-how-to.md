@@ -193,12 +193,24 @@ with nothing captured.
 | Post | Means |
 | --- | --- |
 | Idea | A topic and a date, nothing more |
-| Planned | Brief written and media listed |
-| Drafted | Caption written, by hand or with Draft with Claude |
+| Planned | Brief written (a post moves here on its own when it gets a brief) |
+| Drafted | Caption written, by hand or with Draft with Claude (moves here on its own) |
 | Ready | Caption approved and all media captured |
 | Scheduled | Queued in Metricool (set automatically when you send it from the editor) |
-| Published | Live |
+| Published | Live (set automatically, see below) |
 | Cancelled | Off the calendars, kept for history |
+
+Posts move forward on their own, but never backward, and a status you pick
+yourself always wins. A post that got to **Scheduled** becomes **Published** once
+it has gone out:
+
+- Sent from the editor: the app asks Metricool every 30 minutes, or straight
+  away when you click **Check what's published** on the Board. If Metricool
+  couldn't post it (an expired login, a rejected image), the post stays
+  Scheduled and its card says why. Fix it in Metricool, then pick the status by
+  hand or check again.
+- Marked Scheduled by hand: it becomes Published once its date and time have
+  passed.
 
 Media goes **Needed → Scheduled → Collected → Final file**. Setting a gather
 date makes it Scheduled on its own; attaching the file from Approvals (or a

@@ -11,6 +11,7 @@ import { pipelineRoutes } from "./routes/pipeline";
 import { backfillOnce } from "./pipeline/sync";
 import { migrateDrafting } from "./pipeline/migrate-drafting";
 import { recoverSermons, sermonOpts } from "./pipeline/sermons";
+import { checkPublished } from "./pipeline/publish-check";
 import { referenceDate } from "./schedule";
 import { addDays } from "./dates";
 import { getSetting, setSetting } from "./settings";
@@ -58,6 +59,13 @@ async function start() {
   await keepRecurrencesAhead();
   // Daily, so the calendar always shows HORIZON_DAYS of recurring posts.
   setInterval(() => { keepRecurrencesAhead().catch((e) => app.log.error(e)); }, 24 * 60 * 60 * 1000).unref();
+  // Scheduled posts become Published: confirmed with Metricool, or once their
+  // time has passed. Once now, then every 30 minutes.
+  const publishCheck = () => checkPublished(pool)
+    .then((r) => { if (r.published || r.failed) app.log.info(r, "publish check"); })
+    .catch((e) => app.log.warn(e, "publish check failed"));
+  publishCheck();
+  setInterval(publishCheck, 30 * 60 * 1000).unref();
   await app.listen({ host: "0.0.0.0", port: config.port });
   app.log.info(`social-posts listening on ${config.port}`);
 }

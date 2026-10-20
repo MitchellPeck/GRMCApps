@@ -4,6 +4,7 @@ import { addDays } from "../dates";
 import { getSetting, setSetting } from "../settings";
 import { buildCaptureIcs } from "../pipeline/ical";
 import { draftAll, draftCaptions, parseDraftRequest, resolveForDraft } from "../pipeline/caption";
+import { checkPublished } from "../pipeline/publish-check";
 import { listDraftHistory } from "../pipeline/history";
 import { planFromEpisode, proposeSeriesPlan, saveSeriesPlan } from "../pipeline/planning";
 import { listCampaigns } from "../mailchimp";
@@ -331,6 +332,9 @@ export async function pipelineRoutes(app: FastifyInstance): Promise<void> {
     try { name = decodeURIComponent(String(req.headers["x-file-name"] || "upload")); } catch { /* keep the default */ }
     return { ok: true, ...(await storeUpload(pool, bytes, type, name)) };
   }));
+
+  // Run the Published check now (it also runs every 30 minutes).
+  app.post("/api/pipeline/publish-check", async () => guard(async () => ({ ok: true, ...(await checkPublished(pool)) })));
 
   // ── Sermon recordings ──
   // A recording arrives in 8 MB pieces (Cloudflare caps a request at 100 MB),

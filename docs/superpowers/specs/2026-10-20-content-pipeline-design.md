@@ -231,3 +231,32 @@ pulling recordings from a link or Buzzsprout are not built.
 **Deploy:** this changes `docker-compose.yml` (a volume and two env vars for
 social-posts), so after the image ships run `docker compose up -d social-posts`
 on the host. `socialpostsdata` is in the migration scripts' volume list.
+
+## Iteration 7: posts move along the board on their own
+
+- **Idea → Planned** when a post gets a brief, and **Idea or Planned →
+  Drafted** when it gets a caption (on any platform). This happens on create, on
+  any edit that doesn't set a status itself (an explicit status wins), and for
+  untouched Idea weeks when a recurring post's brief is set. Only forward; never
+  out of Ready or later.
+- **Scheduled → Published** (`pipeline/publish-check.ts`, at boot, every 30
+  minutes, and from **Check what's published** on the board) for Scheduled posts
+  whose publish time has passed in the church's timezone (no time = end of the
+  day):
+  - With `metricool_sends` rows (sent from the app): it reads Metricool's planner
+    (`GET /v2/scheduler/posts`) over the sends' dates. The post becomes
+    Published when every send from its latest sending has `PUBLISHED` (or a
+    public link) on every network. A failed network leaves the post Scheduled
+    with `content_items.publish_check` set to Metricool's reason, shown on the
+    card and in the editor. An unrecognised or pending status changes nothing.
+    If Metricool can't be reached, the note says so.
+  - With no send record (scheduled by hand): Published once its time has
+    passed.
+  - Choosing a status by hand clears the note.
+
+**Unverified:** Metricool doesn't publish its status values. Only `PENDING` is
+confirmed (from third-party client code). `PUBLISHED` and error statuses
+containing `ERROR`/`FAIL` are assumptions. Watch the first week on the host:
+a post sent through Metricool that stays Scheduled after it went out means the
+real "published" value is different, so check a planner response and extend
+`publicationState`.

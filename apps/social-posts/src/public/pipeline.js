@@ -461,7 +461,8 @@ function renderBoard(main) {
     var items = res.items, from = res.from;
     var cols = S.meta.contentStatuses.filter(function(s){ return s !== 'cancelled' || showCancelled; });
     var html = '<div class="pl-boardhead"><p class="hint">Posts publishing from '+esc(shortDate(from))+' on, plus undated ones. Drag a card to another column, or change its status on the card.</p>'
-      + '<label class="check"><input type="checkbox" data-act="toggle-cancelled"'+(showCancelled ? ' checked' : '')+'> Show cancelled</label></div>'
+      + '<div class="pl-boardtools"><button class="btn-sm" type="button" data-act="publish-check">Check what’s published</button>'
+      + '<label class="check"><input type="checkbox" data-act="toggle-cancelled"'+(showCancelled ? ' checked' : '')+'> Show cancelled</label></div></div>'
       + '<div class="pl-board">' + cols.map(function(s){
           var list = items.filter(function(i){ return i.status === s; });
           return '<section class="pl-col" data-drop="" data-status="'+s+'"><h3>'+statusBadge(s)+' <span class="pl-count">'+list.length+'</span></h3>'
@@ -478,9 +479,20 @@ function boardCard(i) {
     + '<span class="pl-title">'+recMark(i)+esc(i.title)+'</span>'
     + '<span class="pl-sub">'+esc(shortDate(i.publishDate))+(i.eventName ? ' · '+esc(i.eventName) : '')+'</span></button>'
     + '<div class="pl-bcard-foot">'+platformChips(i.platforms)+mediaProgress(i)+'</div>'
+    + (i.publishCheck ? '<p class="pl-bcard-warn">'+esc(i.publishCheck)+'</p>' : '')
     + '<select class="pl-quick" data-act="quick-status" data-id="'+esc(i.id)+'" aria-label="Status of '+esc(i.title)+'">'
     + S.meta.contentStatuses.map(function(s){ return '<option value="'+s+'"'+(s === i.status ? ' selected' : '')+'>'+label(s)+'</option>'; }).join('')
     + '</select></article>';
+}
+
+// Scheduled → Published, confirmed with Metricool (it also runs every 30 minutes).
+function checkPublishedNow(btn) {
+  btn.disabled = true;
+  api('POST', '/api/pipeline/publish-check', {}).then(function(res){
+    toast(res.published ? 'Moved '+res.published+' post'+(res.published === 1 ? '' : 's')+' to Published.' : 'Nothing new has gone out.', 'ok');
+    if (res.failed) toast(res.failed+' post'+(res.failed === 1 ? '' : 's')+' didn’t publish in Metricool. See the note on the card.', 'err');
+    render();
+  }).catch(function(err){ toast(err.message, 'err'); btn.disabled = false; });
 }
 
 function moveStatus(id, status) {
@@ -793,6 +805,7 @@ function editorHtml(i) {
   return '<form class="pl-drawer-body" data-form="content">'
     + '<div class="pl-drawer-head"><h2>'+(isNew ? 'New post' : 'Edit post')+'</h2><button class="pl-x" type="button" data-act="close" aria-label="Close">×</button></div>'
     + sourceHtml(drawer.source) + recurrenceBanner() + gatedWarning
+    + (!isNew && i.status === 'scheduled' && i.publishCheck ? '<div class="alert alert-warn">'+esc(i.publishCheck)+'</div>' : '')
     + '<div class="field"><label for="pf-title">Title</label><input id="pf-title" type="text" name="title" required value="'+esc(i.title)+'" placeholder="Kids Camp: first day recap"></div>'
     + '<div class="row2"><div class="field"><label for="pf-date">Publish date</label><input id="pf-date" type="date" name="publishDate" required value="'+esc(i.publishDate || '')+'"></div>'
     + '<div class="field"><label for="pf-time">Time (optional)</label><input id="pf-time" type="time" name="publishTime" value="'+esc(i.publishTime || '')+'"></div></div>'
@@ -1993,6 +2006,7 @@ document.addEventListener('click', function(e){
       $('ps-rows').insertAdjacentHTML('beforeend', planRowHtml({})); break;
     case 'remove-plan-row': el.closest('.pl-plan-row').remove(); break;
     case 'draft-all': draftAllFor(el.getAttribute('data-ids').split(','), el); break;
+    case 'publish-check': checkPublishedNow(el); break;
     case 'src-change': showSourceChoices(el.getAttribute('data-kind')); break;
     case 'sermon-upload': document.querySelector('[data-sermon-file]').click(); break;
     case 'sermon-replace': $('pf-source').innerHTML = sermonUploadHtml(); break;

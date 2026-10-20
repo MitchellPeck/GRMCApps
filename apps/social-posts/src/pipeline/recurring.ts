@@ -185,6 +185,13 @@ export async function propagate(db: Db, id: string, fromDate: string, input: Rec
         AND status = ANY($${n - 1}) AND id <> $${n}`,
     vals,
   );
+  // A brief arriving from the series moves untouched Idea weeks to Planned.
+  if (typeof input.brief === "string" && input.brief.trim()) {
+    await db.query(
+      `UPDATE content_items SET status = 'planned' WHERE recurrence_id = $1 AND occurrence_date >= $2 AND NOT detached
+         AND status = 'idea' AND brief <> '' AND id <> $3`,
+      [id, fromDate, exceptItemId ?? ""]);
+  }
 }
 
 /**

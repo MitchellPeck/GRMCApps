@@ -44,6 +44,8 @@ export interface ContentRow {
   mediaTotal: number; mediaDone: number;
   /** Files added straight to the post (not things to collect). */
   attachmentCount: number;
+  /** Why a Scheduled post hasn't become Published, if the last check found a reason. */
+  publishCheck: string;
   recurrenceId: string | null; occurrenceDate: string | null; detached: boolean;
 }
 
@@ -80,7 +82,7 @@ function contentOf(r: any): ContentRow {
     drafting: r.drafting || {}, sourceRef: r.source_ref ?? null, phase: r.phase || "", seriesId: r.series_id,
     postIdx: r.post_idx == null ? null : Number(r.post_idx),
     draftId: r.draft_id == null ? null : Number(r.draft_id), draftKey: r.draft_key,
-    mediaTotal: Number(r.media_total || 0), mediaDone: Number(r.media_done || 0), attachmentCount: Number(r.attachment_count || 0),
+    mediaTotal: Number(r.media_total || 0), mediaDone: Number(r.media_done || 0), attachmentCount: Number(r.attachment_count || 0), publishCheck: r.publish_check || "",
     recurrenceId: r.recurrence_id ?? null, occurrenceDate: r.occurrence_date ?? null, detached: !!r.detached,
   };
 }
@@ -277,11 +279,22 @@ async function eventExists(db: Db, id: string | null | undefined): Promise<boole
   return !!r.rowCount;
 }
 
+/**
+ * Idea → Planned once there's a brief; Idea or Planned → Drafted once there's
+ * a caption (on any platform). Only ever forward, and only from those two.
+ */
+export function autoStatus(s: ContentStatus, item: { brief?: string; caption?: string; captions?: Record<string, string> }): ContentStatus {
+  const hasCaption = !!(item.caption && item.caption.trim()) || Object.values(item.captions || {}).some((v) => v && v.trim());
+  if ((s === "idea" || s === "planned") && hasCaption) return "drafted";
+  if (s === "idea" && item.brief && item.brief.trim()) return "planned";
+  return s;
+}
+
 export async function createContent(db: Db, input: ContentInput, createdBy: string): Promise<Result<ContentRow>> {
   if (!(await eventExists(db, input.eventId))) return fail("That event no longer exists.");
   const imageErr = imageRuleError(input.platforms ?? DEFAULT_PLATFORMS, !!input.noMediaNeeded);
   if (imageErr) return fail(imageErr);
-  const status = input.status || (input.caption ? "drafted" : input.brief ? "planned" : "idea");
+  const status = autoStatus(input.status || "idea", input);
   // A brand-new post has no media, so the Ready gate applies to its first status too.
   const gate = checkStatusChange(status, { noMediaNeeded: !!input.noMediaNeeded }, []);
   if (!gate.ok) return gate;
@@ -362,7 +375,17 @@ export async function updateContent(
       await db.query("UPDATE content_items SET detached = true WHERE id = $1", [id]);
     }
   }
-  const item = (await getContentRow(db, id))!;
+  let item = (await getContentRow(db, id))!;
+  if ("status" in input) {
+    // A status chosen by a person replaces whatever the last publish check said.
+    await db.query("UPDATE content_items SET publish_check = '' WHERE id = $1 AND publish_check <> ''", [id]);
+  } else {
+    const next = autoStatus(item.status, item);
+    if (next !== item.status) {
+      await db.query("UPDATE content_items SET status = $2, updated_at = now() WHERE id = $1", [id, next]);
+      item = (await getContentRow(db, id))!;
+    }
+  }
 
   const warnings = media
     .filter((m) => lateMediaWarning(m.gatherDate, item.publishDate))

@@ -84,3 +84,15 @@ test("buildSchedulerPayload sends every image, in order, for a carousel", () => 
   const p = buildSchedulerPayload({ text: "x", networks: ["instagram"], dateTime: "2026-06-15T09:00:00", timezone: "America/New_York", mediaUrls: ["https://a/1.jpg", "https://a/2.jpg"] });
   assert.deepEqual(p.media, ["https://a/1.jpg", "https://a/2.jpg"]);
 });
+
+test("a Metricool post is published only when every network says so", async () => {
+  const { publicationState } = await import("./metricool");
+  const prov = (status: string, extra: Record<string, string> = {}) => ({ network: "facebook", status, detailedStatus: "", ...extra });
+  assert.deepEqual(publicationState({ providers: [prov("PUBLISHED"), prov("PUBLISHED")] }), { state: "published", detail: "" });
+  assert.equal(publicationState({ providers: [prov("PUBLISHED"), prov("PENDING")] }).state, "pending");
+  assert.equal(publicationState({ providers: [prov("SOMETHING_NEW", { publicUrl: "https://fb.com/p/1" })] }).state, "published", "a public link means it's out");
+  const failed = publicationState({ providers: [prov("ERROR", { network: "instagram", detailedStatus: "Media missing" })] });
+  assert.deepEqual(failed, { state: "failed", detail: "instagram: Media missing" });
+  assert.equal(publicationState({ providers: [] }).state, "unknown", "nothing to go on, change nothing");
+  assert.equal(publicationState({ providers: [prov("WEIRD")] }).state, "unknown");
+});

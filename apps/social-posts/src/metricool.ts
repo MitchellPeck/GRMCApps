@@ -126,3 +126,34 @@ export async function schedulePost(c: MetricoolCreds, payload: SchedulerPayload)
   }
   return String(data.id ?? data.postId ?? "");
 }
+
+export interface McProvider { network: string; status: string; detailedStatus?: string; publicUrl?: string }
+
+/**
+ * Has Metricool published this post? Each network reports a status; a post is
+ * out only when every one of them is (or has a public link). Failures name the
+ * network and Metricool's reason. Anything unrecognised is "unknown", and
+ * callers change nothing on an unknown.
+ */
+export function publicationState(post: { providers?: McProvider[] }): { state: "published" | "failed" | "pending" | "unknown"; detail: string } {
+  const provs = post.providers || [];
+  if (!provs.length) return { state: "unknown", detail: "" };
+  const failed = provs.filter((p) => /ERROR|FAIL|REJECT/i.test(p.status || ""));
+  if (failed.length) return { state: "failed", detail: failed.map((p) => `${p.network}: ${p.detailedStatus || p.status}`).join("; ") };
+  if (provs.every((p) => /^PUBLISHED$/i.test(p.status || "") || !!p.publicUrl)) return { state: "published", detail: "" };
+  if (provs.some((p) => /PENDING|SCHEDULED|QUEUED|DRAFT|PROCESSING/i.test(p.status || ""))) return { state: "pending", detail: "" };
+  return { state: "unknown", detail: "" };
+}
+
+/** Posts in Metricool's planner between two dates (YYYY-MM-DD), published or not. */
+export async function listSchedulerPosts(c: MetricoolCreds, start: string, end: string, timezone: string): Promise<Array<{ id: string; providers: McProvider[] }>> {
+  if (!c.blogId) throw new Error("No Metricool brand picked — open Settings, load brands, and choose one.");
+  const qs = new URLSearchParams({ userId: c.userId, blogId: c.blogId, start: `${start}T00:00:00`, end: `${end}T23:59:59`, timezone, extendedRange: "true" });
+  const res = await fetch(`${BASE}/v2/scheduler/posts?${qs}`, { headers: mcHeaders(c) });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`Metricool answered ${res.status}: ${text.trim().slice(0, 200)}`);
+  let data: any = {};
+  try { data = JSON.parse(text); } catch { throw new Error("Metricool's planner list wasn't readable."); }
+  const rows: any[] = Array.isArray(data) ? data : Array.isArray(data.data) ? data.data : [];
+  return rows.map((p) => ({ id: String(p.id ?? ""), providers: Array.isArray(p.providers) ? p.providers : [] }));
+}

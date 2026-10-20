@@ -824,3 +824,79 @@ test("a sermon upload is transcribed and drafts from its transcript", async (t) 
     await rm(dataDir, { recursive: true, force: true });
   }
 });
+
+// ── Statuses that move on their own ──
+
+test("a brief moves an Idea to Planned, and a saved caption moves it to Drafted", async () => {
+  const p = await createContent(pool, { title: "Auto status", publishDate: "2026-12-01", platforms: ["facebook"] }, "me@x.org");
+  assert.ok(p.ok);
+  assert.equal(p.value.status, "idea");
+  const planned = await updateContent(pool, p.value.id, { brief: "Invite people to the carol service." });
+  assert.ok(planned.ok); assert.equal(planned.value.item.status, "planned");
+  const drafted = await updateContent(pool, p.value.id, { caption: "Carols by candlelight, Dec 20." });
+  assert.ok(drafted.ok); assert.equal(drafted.value.item.status, "drafted");
+
+  const sep = await createContent(pool, { title: "Separate", publishDate: "2026-12-02", platforms: ["facebook", "x"], status: "idea",
+    captionMode: "separate", captions: { x: "Short one" } }, "me@x.org");
+  assert.ok(sep.ok); assert.equal(sep.value.status, "drafted", "a caption on any platform counts");
+
+  const chosen = await updateContent(pool, p.value.id, { status: "idea", brief: "Changed my mind." });
+  assert.ok(chosen.ok); assert.equal(chosen.value.item.status, "idea", "a status chosen in the same save wins");
+});
+
+test("a series brief moves its untouched Idea weeks to Planned", async () => {
+  const r = await createRecurrence(pool, { title: "Briefless", platforms: ["facebook"], noMediaNeeded: true, rule: weekly([5]) }, "me@x.org", REF);
+  assert.ok(r.ok);
+  assert.equal((await occ(r.value.id))[0].status, "idea");
+  await updateRecurrence(pool, r.value.id, { brief: "Friday encouragement." }, REF);
+  assert.ok((await occ(r.value.id)).every((w) => w.status === "planned"));
+});
+
+test("Scheduled posts become Published from Metricool, or once their time has passed", async () => {
+  const { checkPublished } = await import("./pipeline/publish-check");
+  const mk = async (title: string, date: string, time: string | null) => {
+    const r = await createContent(pool, { title, publishDate: date, publishTime: time, platforms: ["facebook"], noMediaNeeded: true }, "me@x.org");
+    assert.ok(r.ok);
+    await pool.query("UPDATE content_items SET status = 'scheduled' WHERE id = $1", [r.value.id]);
+    return r.value.id;
+  };
+  const sent = async (id: string, mcId: string, when: string) => pool.query(
+    `INSERT INTO metricool_sends (source_type, source_ref, text, networks, scheduled_for, timezone, metricool_post_id, status)
+     VALUES ('content', $1, 'x', 'facebook', $3, 'America/New_York', $2, 'sent')`, [id, mcId, when]);
+  const live = await mk("Went out", "2026-10-30", "09:00"); await sent(live, "101", "2026-10-30T09:00:00");
+  const broke = await mk("Failed", "2026-10-30", "09:00"); await sent(broke, "102", "2026-10-30T09:00:00");
+  const split = await mk("Two sends", "2026-10-30", "09:00"); await sent(split, "103", "2026-10-30T09:00:00"); await sent(split, "104", "2026-10-30T09:00:00");
+  const byHand = await mk("Scheduled by hand", "2026-10-30", null);
+  const later = await mk("Later today", "2026-11-01", "18:00");
+  const future = await mk("Next week", "2026-11-08", null);
+
+  await pool.query(`INSERT INTO settings (key, value) VALUES ('metricool_token','t'), ('metricool_user_id','u'), ('metricool_blog_id','b')
+                    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`);
+  const prov = (status: string, detail = "") => ({ network: "facebook", status, detailedStatus: detail });
+  const f = stubFetch([[/app\.metricool\.com\/api\/v2\/scheduler\/posts\?/, () => ({ data: [
+    { id: 101, providers: [prov("PUBLISHED")] },
+    { id: 102, providers: [prov("ERROR", "Token expired")] },
+    { id: 103, providers: [prov("PUBLISHED")] }, { id: 104, providers: [prov("PENDING")] },
+  ] })]]);
+  try {
+    const out = await checkPublished(pool, new Date("2026-11-01T16:00:00Z"));   // noon in New York
+    const status = async (id: string) => (await pool.query("SELECT status, publish_check FROM content_items WHERE id = $1", [id])).rows[0];
+    assert.equal((await status(live)).status, "published");
+    assert.deepEqual(await status(broke), { status: "scheduled", publish_check: "Metricool couldn't publish it: facebook: Token expired" });
+    assert.equal((await status(split)).status, "scheduled", "one of its two sends hasn't gone out");
+    assert.equal((await status(byHand)).status, "published", "no Metricool record: its date has passed");
+    assert.equal((await status(later)).status, "scheduled", "6pm hasn't come yet");
+    assert.equal((await status(future)).status, "scheduled");
+    assert.equal(out.published, 2);
+  } finally {
+    f.restore();
+    await pool.query("DELETE FROM settings WHERE key LIKE 'metricool_%'");
+  }
+
+  // Metricool not set up: posts it was meant to confirm stay put, with a note.
+  const waiting = await mk("Unconfirmed", "2026-10-29", "09:00"); await sent(waiting, "105", "2026-10-29T09:00:00");
+  await checkPublished(pool, new Date("2026-11-01T16:00:00Z"));
+  const w = (await pool.query("SELECT status, publish_check FROM content_items WHERE id = $1", [waiting])).rows[0];
+  assert.equal(w.status, "scheduled");
+  assert.match(w.publish_check, /Couldn't check Metricool/);
+});
