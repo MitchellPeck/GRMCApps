@@ -639,7 +639,7 @@ function readDraftingForm(form) {
 // One editor, the same wherever it's opened and whether or not the post has
 // been saved yet. Before the first save, media lives only here (drawer.media)
 // and is created along with the post.
-var drawer = { id: null, item: null, media: [], source: null, recurrence: null, opener: null, capTab: '' };
+var drawer = { id: null, item: null, media: [], source: null, recurrence: null, opener: null, capTab: '', sourceRef: null };
 var tmpSeq = 0;
 
 function openDrawer(html) {
@@ -663,6 +663,7 @@ function closeDrawer() {
 
 function newPost(defaults) {
   drawer.id = null; drawer.item = null; drawer.media = []; drawer.source = null; drawer.recurrence = null; drawer.capTab = '';
+  drawer.sourceRef = null;
   var f = S.filters;
   var item = {
     title: '', eventId: defaults.eventId || f.eventId || '', platforms: f.platform ? [f.platform] : ['instagram','facebook'],
@@ -670,6 +671,7 @@ function newPost(defaults) {
     noMediaNeeded: false, captionMode: 'same', captions: {},
   };
   openDrawer(editorHtml(item));
+  loadSourcePanel();
 }
 
 function openPost(id) {
@@ -678,7 +680,9 @@ function openPost(id) {
   api('GET', '/api/pipeline/content/' + encodeURIComponent(id)).then(function(d){
     if (drawer.id !== id) return;
     drawer.item = d.item; drawer.media = d.media; drawer.source = d.source; drawer.recurrence = d.recurrence;
+    drawer.sourceRef = d.item.sourceRef || null;
     $('pl-drawer').innerHTML = editorHtml(d.item);
+    loadSourcePanel();
   }).catch(function(e){
     $('pl-drawer').innerHTML = '<div class="pl-drawer-body"><div class="alert alert-err">'+esc(e.message)+'</div><button class="btn btn-secondary" data-act="close">Close</button></div>';
   });
@@ -686,11 +690,9 @@ function openPost(id) {
 
 function sourceHtml(src) {
   if (!src) return '';
-  if (src.kind === 'series') {
-    return '<p class="pl-source">Post '+src.postNumber+' of the “'+esc(src.seriesName)+'” series. <a href="/#series">Open it on the Series tab</a></p>';
-  }
+  if (src.kind === 'series') return '<p class="pl-source">Post '+src.postNumber+' of the “'+esc(src.seriesName)+'” series.</p>';
   var runs = { wednesday: 'Wednesday run', friday: 'Friday run', podcast: 'Podcast run' };
-  return '<p class="pl-source">Drafted by the '+esc(runs[src.run] || src.run)+' ('+esc(src.key)+') on '+esc(String(src.draftedAt).slice(0, 10))+'. <a href="/#drafts">See it in Drafts</a></p>';
+  return '<p class="pl-source">First drafted by the '+esc(runs[src.run] || src.run)+' on '+esc(String(src.draftedAt).slice(0, 10))+'.</p>';
 }
 
 function platformMeta(key){ return S.meta.platforms.filter(function(p){ return p.key === key; })[0]; }
@@ -735,6 +737,12 @@ function editorHtml(i) {
     + '<div class="field"><label for="pf-owner">Owner</label><input id="pf-owner" type="email" name="ownerEmail" list="pl-people" value="'+esc(i.ownerEmail)+'" placeholder="Who gets it published"></div>'
     + '<div class="field"><label for="pf-brief">Brief</label><textarea id="pf-brief" name="brief" placeholder="Purpose, angle and call to action in a sentence or two">'+esc(i.brief)+'</textarea></div>'
 
+    + (i.phase ? '<p class="hint">Phase: '+esc(i.phase)+'</p>' : '')
+    + '<section class="pl-source-panel" id="pf-source" aria-live="polite"><p class="hint">Checking where this post drafts from…</p></section>'
+    + '<details class="pl-override"'+((i.drafting && (i.drafting.instructions || i.drafting.source)) ? ' open' : '')+'><summary>Drafting for this post</summary>'
+    +   '<div class="field"><label for="pf-instr">Instructions</label><textarea id="pf-instr" name="draftInstructions" class="pl-instr" placeholder="Leave empty to use the event’s">'+esc((i.drafting && i.drafting.instructions) || '')+'</textarea></div>'
+    +   '<label class="check"><input type="checkbox" name="draftNoSource" data-act="src-toggle"'+(i.drafting && i.drafting.source && i.drafting.source.kind === 'none' ? ' checked' : '')+'> Don’t use the event’s source for this post</label>'
+    + '</details>'
     + '<div class="field pl-caption-block"><div class="pl-label-row"><span class="lbl">Caption</span>'
     + '<div class="pl-seg pl-seg-sm" role="group" aria-label="Caption per platform">'
     +   '<button type="button" data-act="cap-mode" data-mode="same" aria-pressed="'+!separate+'">Same everywhere</button>'
@@ -767,6 +775,7 @@ function editorHtml(i) {
     + '<button class="btn btn-secondary" type="button" data-act="close">'+(isNew ? 'Cancel' : 'Close')+'</button>'
     + (isNew ? '' : '<button class="btn btn-danger pl-right" type="button" data-act="delete-post">'+(drawer.recurrence ? 'Skip this date' : 'Delete post')+'</button>')
     + '</div></form>'
+    + (drawer.id ? '<details class="pl-history" data-act="history"><summary>Earlier drafts</summary><div id="pf-history"><p class="hint">Loading…</p></div></details>' : '')
     + mediaSectionHtml(i);
 }
 
@@ -939,6 +948,12 @@ function readForm(form) {
   out.captionMode = fd.get('captionMode') === 'separate' ? 'separate' : 'same';
   out.captions = {};
   S.meta.platforms.forEach(function(p){ var v = (fd.get('caption-' + p.key) || '').trim(); if (v) out.captions[p.key] = v; });
+  var instr = (fd.get('draftInstructions') || '').trim(), noSource = fd.get('draftNoSource') === 'on';
+  out.drafting = {};
+  if (instr) out.drafting.instructions = instr;
+  if (noSource) out.drafting.source = { kind: 'none' };
+  out.sourceRef = drawer.sourceRef;
+  out.phase = drawer.item ? drawer.item.phase || '' : '';
   return out;
 }
 function formScope(form) {
@@ -1062,13 +1077,95 @@ function applyImageRule(changed) {
   refreshCaptionUi();
 }
 
+// ── Source panel: what Draft with Claude will work from ──
+var sourceTimer;
+function loadSourcePanel() {
+  clearTimeout(sourceTimer);
+  sourceTimer = setTimeout(function(){
+    var form = document.querySelector('form[data-form=content]'), panel = $('pf-source');
+    if (!form || !panel) return;
+    var body = readForm(form); body.contentItemId = drawer.id;
+    api('POST', '/api/pipeline/source/preview', body).then(function(res){
+      drawer.preview = res;
+      panel.innerHTML = sourcePanelHtml(res);
+      panel.hidden = !panel.innerHTML;
+    }).catch(function(e){ panel.innerHTML = '<div class="alert alert-err">'+esc(e.message)+'</div>'; });
+  }, 250);
+}
+
+function sourcePanelHtml(res) {
+  var eff = res.effective, s = res.source, ref = drawer.sourceRef;
+  var paste = '<button class="btn-sm" type="button" data-act="src-paste">Paste content instead</button>';
+  var reset = ref ? ' <button class="pl-link" type="button" data-act="src-reset">Use the event’s choice</button>' : '';
+  if (res.error) {
+    return '<div class="alert alert-warn">Couldn’t reach the source: '+esc(res.error)+' <a href="#settings">Settings</a></div>' + paste;
+  }
+  var kind = ref ? ref.kind : (eff ? eff.source.kind : 'none');
+  if (kind === 'none') return '';
+  var head = '<div class="pl-label-row"><span class="lbl">Drafts from</span>'
+    + '<span>'+(kind !== 'manual' ? '<button class="btn-sm" type="button" data-act="src-change" data-kind="'+kind+'">Change</button> ' : '')+paste+'</span></div>';
+  if (kind === 'buzzsprout' && !s) return head + '<p class="pl-gaptext">Pick the episode this post is about.</p><div id="pf-src-list"></div>';
+  if (!s) return head + '<p class="hint">Nothing found to draft from.</p>' + reset;
+  var marks = (s.isDraft ? ' <span class="pl-status pl-s-drafted">Not sent yet</span>' : '')
+    + (s.notYetPublic ? ' <span class="pl-status pl-s-drafted">Not out yet</span>' : '');
+  return head
+    + '<p class="pl-src-title"><strong>'+esc(s.title)+'</strong>'+marks+'</p>'
+    + (s.dateLine ? '<p class="hint">'+esc(s.dateLine)+'</p>' : '')
+    + (s.url ? '<p class="hint"><a href="'+esc(s.url)+'" target="_blank" rel="noopener">'+esc(s.url)+'</a></p>' : '')
+    + (s.excerpt ? '<p class="pl-src-excerpt">'+esc(s.excerpt)+'…</p>' : '')
+    + (ref ? '<p class="hint">Picked for this post.'+reset+'</p>' : '')
+    + '<div id="pf-src-list"></div>';
+}
+
+function showSourceChoices(kind) {
+  var list = $('pf-src-list');
+  list.innerHTML = '<p class="hint">Loading…</p>';
+  var eff = drawer.preview && drawer.preview.effective;
+  var req = kind === 'buzzsprout'
+    ? api('GET', '/api/pipeline/sources/episodes').then(function(d){
+        return d.episodes.map(function(ep){
+          return { ref: { kind: 'buzzsprout', id: String(ep.id), title: ep.title, url: ep.listenUrl, date: ep.publishDate },
+                   label: ep.label + (ep.isPublished ? '' : ' (not out yet)') };
+        });
+      })
+    : api('GET', '/api/pipeline/sources/campaigns?subject=' + encodeURIComponent(eff.source.subjectContains || '')).then(function(d){
+        return d.campaigns.map(function(c){
+          return { ref: { kind: 'mailchimp', id: c.id, title: c.subject, url: c.archiveUrl, date: c.issueDate },
+                   label: c.subject + (c.isDraft ? ' (not sent)' : '') + (c.dateLine ? ' — ' + c.dateLine : '') };
+        });
+      });
+  req.then(function(rows){
+    drawer.sourceChoices = rows;
+    list.innerHTML = rows.length
+      ? '<ul class="pl-src-choices">' + rows.map(function(r, i){
+          return '<li><button type="button" class="pl-link" data-act="src-pick" data-i="'+i+'">'+esc(r.label)+'</button></li>';
+        }).join('') + '</ul>'
+      : '<p class="hint">Nothing to choose from.</p>';
+  }).catch(function(e){ list.innerHTML = '<p class="pl-gaptext">'+esc(e.message)+'</p>'; });
+}
+
+function loadHistory() {
+  var box = $('pf-history');
+  api('GET', '/api/pipeline/content/' + encodeURIComponent(drawer.id) + '/drafts').then(function(d){
+    drawer.history = d.drafts;
+    box.innerHTML = d.drafts.length
+      ? '<ul class="pl-history-list">' + d.drafts.map(function(h, i){
+          var first = (h.captionMode === 'separate' ? (h.captions.instagram || h.captions.facebook || h.captions.x || '') : h.caption).split('\n')[0];
+          return '<li><span class="hint">'+esc(new Date(h.at).toLocaleString())+' · '+(h.origin === 'run' ? 'weekly run' : 'Claude')
+            + (h.captionMode === 'separate' ? ' · per platform' : '')+'</span><span class="pl-history-text">'+esc(first)+'</span>'
+            + '<button class="btn-sm" type="button" data-act="restore-draft" data-i="'+i+'">Restore</button></li>';
+        }).join('') + '</ul>'
+      : '<p class="hint">No earlier drafts yet.</p>';
+  }).catch(function(e){ box.innerHTML = '<p class="pl-gaptext">'+esc(e.message)+'</p>'; });
+}
+
 function draftCaption(btn) {
   var form = document.querySelector('form[data-form=content]');
-  var cur = readForm(form);
   btn.disabled = true;
   var was = btn.textContent;
   btn.innerHTML = '<span class="spin pl-spin-dark"></span> Drafting…';
-  api('POST', '/api/pipeline/draft-caption', cur).then(function(res){
+  var req = readForm(form); req.contentItemId = drawer.id;
+  api('POST', '/api/pipeline/draft-caption', req).then(function(res){
     btn.disabled = false; btn.textContent = 'Redraft with Claude';
     if (res.captions) {
       Object.keys(res.captions).forEach(function(k){
@@ -1079,6 +1176,10 @@ function draftCaption(btn) {
       form.querySelector('[name=caption]').value = res.caption;
     }
     refreshCaptionUi();
+    if (res.source && res.source.kind !== 'manual') {
+      drawer.sourceRef = { kind: res.source.kind, id: res.source.id, title: res.source.title, url: res.source.url, date: res.source.date };
+    }
+    if ($('pf-history') && $('pf-history').closest('details').open) loadHistory();
     if (res.warnings && res.warnings.length) toast(res.warnings.join(' '), 'warn');
     else toast(res.captions ? 'Drafted for each platform. Review them, then save.' : 'Draft ready. Edit it if you like, then save.', 'ok');
   }).catch(function(e){
@@ -1529,6 +1630,29 @@ document.addEventListener('click', function(e){
       $('df-name').focus();
       break;
     case 'delete-media': deleteMedia(el.closest('[data-media]')); break;
+    case 'src-change': showSourceChoices(el.getAttribute('data-kind')); break;
+    case 'src-pick':
+      drawer.sourceRef = drawer.sourceChoices[Number(el.getAttribute('data-i'))].ref; loadSourcePanel(); break;
+    case 'src-reset': drawer.sourceRef = null; loadSourcePanel(); break;
+    case 'src-paste':
+      $('pf-source').insertAdjacentHTML('beforeend', '<div class="pl-paste"><textarea id="pf-paste" placeholder="Paste the newsletter or show notes text">'
+        + esc(drawer.sourceRef && drawer.sourceRef.kind === 'manual' ? drawer.sourceRef.content : '')
+        + '</textarea><input type="url" id="pf-paste-url" placeholder="Link to it (optional)" value="'
+        + esc(drawer.sourceRef && drawer.sourceRef.kind === 'manual' ? drawer.sourceRef.url || '' : '')
+        + '"><button class="btn-sm btn-sm-gold" type="button" data-act="src-use-paste">Use this</button></div>');
+      $('pf-paste').focus();
+      break;
+    case 'src-use-paste':
+      if (!$('pf-paste').value.trim()) { toast('Paste the content first.', 'err'); return; }
+      drawer.sourceRef = { kind: 'manual', content: $('pf-paste').value.trim(), url: $('pf-paste-url').value.trim(), title: 'Pasted content' };
+      loadSourcePanel(); break;
+    case 'restore-draft':
+      var h = drawer.history[Number(el.getAttribute('data-i'))], cf = document.querySelector('form[data-form=content]');
+      setCaptionMode(h.captionMode);
+      if (h.captionMode === 'separate') Object.keys(h.captions).forEach(function(k){ var box = cf.querySelector('[name="caption-'+k+'"]'); if (box) box.value = h.captions[k]; });
+      else cf.querySelector('[name=caption]').value = h.caption;
+      refreshCaptionUi(); toast('Restored. Save to keep it.', 'ok');
+      break;
     case 'add-angle':
       $('dr-angles').insertAdjacentHTML('beforeend', angleRowHtml({ key: '', label: '', offsetDays: 0, instructions: '' }));
       $('dr-angles').lastElementChild.querySelector('input').focus();
@@ -1584,6 +1708,7 @@ document.addEventListener('change', function(e){
   if (act === 'toggle-cancelled') { storeSet('pipeline.boardCancelled', el.checked); return render(); }
   if (act === 'toggle-archived') { storeSet('pipeline.eventsArchived', el.checked); return render(); }
   if (act === 'dr-kind') return showDraftingFields(el.closest('form'));
+  if (act === 'src-toggle' || ((el.name === 'publishDate' || el.name === 'eventId') && el.closest('form[data-form=content]'))) loadSourcePanel();
   if (el.hasAttribute('data-mfield')) return saveMediaField(el.closest('[data-media]'), el);
   if (el.hasAttribute('data-mcollect')) return toggleCollected(el.closest('[data-media]'), el.checked);
   if (act === 'no-media' || act === 'platform') {
@@ -1635,6 +1760,9 @@ document.addEventListener('submit', function(e){
   }
 });
 
+document.addEventListener('toggle', function(e){
+  if (e.target.matches && e.target.matches('details.pl-history') && e.target.open) loadHistory();
+}, true);
 $('pl-scrim').addEventListener('click', closeDrawer);
 // Calendar cards are divs (draggable buttons misbehave in Firefox), so give
 // them a button's keyboard behaviour.
