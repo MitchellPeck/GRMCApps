@@ -402,36 +402,6 @@ test("an existing post can start a series on its own date", async () => {
   assert.equal(rows.filter((x) => x.publish_date === "2026-11-02").length, 1);
 });
 
-test("Draft with Claude writes one caption per platform and keeps X under 280", async () => {
-  const { draftCaptions } = await import("./pipeline/caption");
-  await pool.query("INSERT INTO settings (key, value) VALUES ('anthropic_api_key','test-key') ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value");
-  const realFetch = globalThis.fetch;
-  const prompts: string[] = [];
-  const replies = [
-    { instagram: "IG post, link in bio", facebook: "FB post https://grmc.org/advent", x: "Too long ".repeat(40) },
-    { x: "Advent starts Sunday. Come light the first candle with us. https://grmc.org/advent" },
-  ];
-  globalThis.fetch = (async (_url: unknown, init: { body: string }) => {
-    prompts.push(JSON.parse(init.body).messages[0].content);
-    const text = JSON.stringify(replies.shift());
-    return { json: async () => ({ content: [{ text }] }) } as unknown as Response;
-  }) as typeof fetch;
-  try {
-    const r = await draftCaptions(pool, {
-      title: "Advent begins", brief: "Invite people to the first Sunday", eventId: null, publishDate: "2026-11-29",
-      platforms: ["instagram", "facebook", "x"], captionMode: "separate", caption: "", captions: {},
-    });
-    assert.ok(r.ok);
-    assert.deepEqual(Object.keys(r.value.captions!).sort(), ["facebook", "instagram", "x"]);
-    assert.match(r.value.captions!.x, /^Advent starts Sunday/, "the long X draft was shortened");
-    assert.equal(r.value.warnings.length, 0);
-    assert.match(prompts[0], /link in bio/, "Instagram guidance sent");
-    assert.match(prompts[0], /280 characters/, "X limit sent");
-  } finally {
-    globalThis.fetch = realFetch;
-    await pool.query("DELETE FROM settings WHERE key = 'anthropic_api_key'");
-  }
-});
 
 test("profiles and overrides are stored, and a recurrence's override reaches its posts", async () => {
   const ev = await createEvent(pool, { name: "Newsletter", kind: "department" });
@@ -501,4 +471,94 @@ test("a Mailchimp source picks the issue for the post's week, and a pinned ref w
     f.restore();
     await pool.query("DELETE FROM settings WHERE key IN ('mailchimp_api_key','mailchimp_server')");
   }
+});
+
+const anthropicReply = (obj: unknown) => ({ content: [{ text: JSON.stringify(obj) }] });
+
+async function withKeys<T>(fn: () => Promise<T>): Promise<T> {
+  await pool.query(`INSERT INTO settings (key, value) VALUES ('anthropic_api_key','t'), ('mailchimp_api_key','k'), ('mailchimp_server','us1')
+                    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`);
+  try { return await fn(); }
+  finally { await pool.query("DELETE FROM settings WHERE key IN ('anthropic_api_key','mailchimp_api_key','mailchimp_server')"); }
+}
+
+test("Draft with Claude drafts a Grace Notes post from that week's issue, and logs it", async () => {
+  const { draftAndSave } = await import("./pipeline/caption");
+  const { listDraftHistory } = await import("./pipeline/history");
+  const { GRACE_NOTES_PROFILE } = await import("./pipeline/drafting-seed");
+  const ev = await createEvent(pool, { name: "GN test", kind: "series" });
+  await updateEvent(pool, ev.id, { drafting: GRACE_NOTES_PROFILE });
+  const post = await createContent(pool, { title: "Grace Notes", publishDate: "2026-10-14", eventId: ev.id, platforms: ["facebook"] }, "me@x.org");
+  assert.ok(post.ok);
+  const prompts: string[] = [];
+  const f = stubFetch([
+    [/\/campaigns\?/, () => CAMPAIGNS],
+    [/\/campaigns\/(\w+)\/content/, (u) => ({ plain_text: "Text of " + /campaigns\/(\w+)\//.exec(u)![1] })],
+    [/api\.anthropic\.com/, (_u, init) => { prompts.push(JSON.parse(init.body).messages[0].content); return anthropicReply({ post: "This week in Grace Notes…" }); }],
+  ]);
+  try {
+    const r = await withKeys(() => draftAndSave(pool, post.value.id, "me@x.org"));
+    assert.ok(r.ok);
+    assert.equal(r.value.caption, "This week in Grace Notes…");
+    assert.equal(r.value.status, "drafted");
+    assert.equal(r.value.sourceRef?.id, "c18", "remembers the issue it drafted from");
+    assert.ok(prompts[0].includes(GRACE_NOTES_PROFILE.instructions!), "the Wednesday instructions, word for word");
+    assert.match(prompts[0], /Text of c18/);
+    assert.equal((await listDraftHistory(pool, post.value.id)).length, 1);
+
+    // The event's profile changes; the drafted post keeps its issue.
+    await updateEvent(pool, ev.id, { drafting: { ...GRACE_NOTES_PROFILE, source: { kind: "mailchimp", subjectContains: "grace notes", cutoff: "latest" } } });
+    await withKeys(() => draftAndSave(pool, post.value.id, "me@x.org"));
+    assert.match(prompts[1], /Text of c18/);
+    assert.equal((await listDraftHistory(pool, post.value.id)).length, 2);
+  } finally { f.restore(); }
+});
+
+test("drafting without Mailchimp set up still works from pasted content", async () => {
+  const { draftCaptions, parseDraftRequest, resolveForDraft } = await import("./pipeline/caption");
+  const { GRACE_NOTES_PROFILE } = await import("./pipeline/drafting-seed");
+  const ev = await createEvent(pool, { name: "GN no keys", kind: "series" });
+  await updateEvent(pool, ev.id, { drafting: GRACE_NOTES_PROFILE });
+  const req = parseDraftRequest({ title: "Grace Notes", eventId: ev.id, platforms: ["facebook"], publishDate: "2026-10-14" });
+  assert.ok(req.ok);
+  await assert.rejects(() => resolveForDraft(pool, req.value), /Mailchimp credentials not configured/);
+  const pasted = parseDraftRequest({ title: "Grace Notes", eventId: ev.id, platforms: ["facebook"], publishDate: "2026-10-14",
+    sourceRef: { kind: "manual", content: "Pasted issue text", url: "https://mc/x" } });
+  assert.ok(pasted.ok);
+  await pool.query("INSERT INTO settings (key, value) VALUES ('anthropic_api_key','t') ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value");
+  const f = stubFetch([[/api\.anthropic\.com/, () => anthropicReply({ post: "From the paste" })]]);
+  try {
+    const r = await draftCaptions(pool, pasted.value, "me@x.org");
+    assert.ok(r.ok);
+    assert.equal(r.value.caption, "From the paste");
+  } finally { f.restore(); await pool.query("DELETE FROM settings WHERE key = 'anthropic_api_key'"); }
+});
+
+test("a bad reply from Claude saves nothing, and Draft all carries on past it", async () => {
+  const { draftAll } = await import("./pipeline/caption");
+  const a = await createContent(pool, { title: "A", publishDate: "2026-11-02", platforms: ["facebook"], caption: "keep me" }, "me@x.org");
+  const b = await createContent(pool, { title: "B", publishDate: "2026-11-03", platforms: ["facebook", "x"], captionMode: "separate" }, "me@x.org");
+  const c = await createContent(pool, { title: "C", publishDate: "2026-11-04", platforms: ["facebook"] }, "me@x.org");
+  assert.ok(a.ok && b.ok && c.ok);
+  const replies = ["not json at all", JSON.stringify({ facebook: "FB only" }), JSON.stringify({ post: "C drafted" })];
+  await pool.query("INSERT INTO settings (key, value) VALUES ('anthropic_api_key','t') ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value");
+  const f = stubFetch([[/api\.anthropic\.com/, () => ({ content: [{ text: replies.shift() }] })]]);
+  try {
+    const results = await draftAll(pool, [a.value.id, b.value.id, c.value.id], "me@x.org");
+    assert.deepEqual(results.map((r) => r.ok), [false, false, true]);
+    assert.match(results[0].error!, /wasn't readable/);
+    assert.match(results[1].error!, /didn't write the X caption/);
+    assert.equal((await getContent(pool, a.value.id)).ok && (await pool.query("SELECT caption FROM content_items WHERE id=$1", [a.value.id])).rows[0].caption, "keep me");
+  } finally { f.restore(); await pool.query("DELETE FROM settings WHERE key = 'anthropic_api_key'"); }
+});
+
+test("a podcast post can't draft until its episode is picked", async () => {
+  const { draftCaptions, parseDraftRequest } = await import("./pipeline/caption");
+  const ev = await createEvent(pool, { name: "Pod test", kind: "series" });
+  await updateEvent(pool, ev.id, { drafting: { source: { kind: "buzzsprout" } } });
+  const req = parseDraftRequest({ title: "Episode post", eventId: ev.id, platforms: ["facebook"], publishDate: "2026-11-02" });
+  assert.ok(req.ok);
+  const r = await draftCaptions(pool, req.value, "me@x.org");
+  assert.ok(!r.ok);
+  assert.match(r.error, /Pick the episode this post is about/);
 });

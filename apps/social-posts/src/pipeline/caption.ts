@@ -1,37 +1,69 @@
-// Draft captions with Claude, in the same house voice the automated runs use.
-// Works from what's in the editor (saved or not), so a brand-new post can be
-// drafted before it's created. Returns text; saving it is the person's call.
+// Draft with Claude. Works out the profile in force for the post (its own
+// override, its recurrence's, its event's), fetches the source item that
+// profile points at for the post's date, builds one prompt, and asks Claude.
+// Works from the editor's state, saved or not; draftAndSave works from a
+// saved post and stores the result.
 import { Pool } from "pg";
 import { callClaude, stripJsonFences } from "../claude";
-import { VOICE } from "../voice";
+import { getSetting } from "../settings";
 import { formatMonthDayYear } from "../dates";
 import { DEFAULT_PLATFORMS, PLATFORMS } from "./config";
 import { countChars } from "./platforms";
 import { Result } from "./rules";
+import { Effective, Override, SourceRef, effectiveProfile, parseOverride, parseSourceRef } from "./drafting";
+import { DEFAULT_VOICE } from "./drafting-seed";
+import { SourceContent, buildDraftPrompt } from "./prompt";
+import { resolveSource } from "./sources";
+import { logDraft } from "./history";
+import { ContentRow, getContentRow } from "./repo";
 
 export interface DraftRequest {
-  title: string; brief: string; eventId: string | null; platforms: string[]; publishDate: string | null;
-  captionMode: "same" | "separate"; caption: string; captions: Record<string, string>;
+  contentItemId: string | null; title: string; brief: string; phase: string; eventId: string | null;
+  platforms: string[]; publishDate: string | null; captionMode: "same" | "separate";
+  caption: string; captions: Record<string, string>; drafting: Override; sourceRef: SourceRef | null;
 }
-export interface DraftResult { caption?: string; captions?: Record<string, string>; warnings: string[] }
+export interface DraftResult { caption?: string; captions?: Record<string, string>; warnings: string[]; source: SourceContent | null }
 
-const SYS = "You draft social media posts for Grace Resurrection Methodist Church (GRMC) in Marietta, GA. "
-  + "Return ONLY a JSON object, no markdown fences, just valid JSON.";
+const fail = (error: string): { ok: false; error: string } => ({ ok: false, error });
 
-export function parseDraftRequest(raw: unknown): Result<DraftRequest> {
+export function parseDraftRequest(raw: unknown, opts: { preview?: boolean } = {}): Result<DraftRequest> {
   const b = (raw && typeof raw === "object" ? raw : {}) as Record<string, any>;
   const known = PLATFORMS.map((p) => p.key);
   const platforms = Array.isArray(b.platforms) ? b.platforms.filter((p: unknown) => known.includes(p as string)) : [];
   const title = String(b.title ?? "").trim(), brief = String(b.brief ?? "").trim();
-  if (!title && !brief) return { ok: false, error: "Write a title or a brief first so there's something to draft from." };
+  if (!opts.preview && !title && !brief) return fail("Write a title or a brief first so there's something to draft from.");
+  const drafting = parseOverride(b.drafting ?? {});
+  if (!drafting.ok) return drafting;
+  const sourceRef = parseSourceRef(b.sourceRef ?? null);
+  if (!sourceRef.ok) return sourceRef;
   return { ok: true, value: {
-    title, brief, eventId: b.eventId || null,
+    contentItemId: typeof b.contentItemId === "string" && b.contentItemId ? b.contentItemId : null,
+    title, brief, phase: String(b.phase ?? ""), eventId: b.eventId || null,
     platforms: platforms.length ? platforms : DEFAULT_PLATFORMS,
     publishDate: typeof b.publishDate === "string" && b.publishDate ? b.publishDate : null,
     captionMode: b.captionMode === "separate" ? "separate" : "same",
-    caption: String(b.caption ?? ""),
-    captions: b.captions && typeof b.captions === "object" ? b.captions : {},
+    caption: String(b.caption ?? ""), captions: b.captions && typeof b.captions === "object" ? b.captions : {},
+    drafting: drafting.value, sourceRef: sourceRef.value,
   } };
+}
+
+/** The profile in force and its source item. Throws if a source service fails. */
+export async function resolveForDraft(pool: Pool, req: DraftRequest) {
+  const ev = req.eventId
+    ? (await pool.query("SELECT name, kind, notes, drafting, start_date::text, end_date::text FROM events WHERE id = $1", [req.eventId])).rows[0]
+    : null;
+  const rec = req.contentItemId
+    ? (await pool.query(
+        "SELECT r.drafting FROM content_items ci JOIN recurrences r ON r.id = ci.recurrence_id WHERE ci.id = $1", [req.contentItemId])).rows[0]
+    : null;
+  const effective: Effective = effectiveProfile(
+    ev ? { notes: ev.notes || "", drafting: ev.drafting || {} } : null,
+    rec ? { drafting: rec.drafting || {} } : null,
+    { drafting: req.drafting },
+  );
+  const source = await resolveSource(pool, effective.source, req.sourceRef, req.publishDate);
+  const event = ev ? { name: ev.name, kind: ev.kind, notes: ev.notes || "", startDate: ev.start_date, endDate: ev.end_date } : null;
+  return { effective, source, event };
 }
 
 function overLimit(key: string, text: string): string {
@@ -40,71 +72,102 @@ function overLimit(key: string, text: string): string {
   return n > p.limit ? `${p.label} draft is ${n} characters; the limit is ${p.limit}. Trim it before sending.` : "";
 }
 
-export async function draftCaptions(pool: Pool, req: DraftRequest): Promise<Result<DraftResult>> {
-  const event = req.eventId
-    ? (await pool.query("SELECT name, kind, notes, start_date::text, end_date::text FROM events WHERE id = $1", [req.eventId])).rows[0]
-    : null;
-  const selected = PLATFORMS.filter((p) => req.platforms.includes(p.key));
-  const context = [
-    "--- CONTEXT ---",
-    "POST TITLE: " + (req.title || "(none)"),
-    "BRIEF (purpose, angle, call to action): " + (req.brief || "(none — work from the title)"),
-    "PUBLISH DATE: " + (req.publishDate ? formatMonthDayYear(req.publishDate) : "not set"),
-  ];
-  if (event) {
-    context.push("EVENT/DEPARTMENT: " + event.name + " (" + event.kind + ")");
-    if (event.start_date) context.push("EVENT DATES: " + formatMonthDayYear(event.start_date) + (event.end_date ? " to " + formatMonthDayYear(event.end_date) : ""));
-    if (event.notes) context.push("EVENT NOTES AND KEY MESSAGES: " + event.notes);
-  }
-
+async function shortenForX(pool: Pool, text: string): Promise<string> {
+  const raw = await callClaude(pool, 'Return ONLY a JSON object with key "x", no markdown fences.',
+    `Shorten this X post to at most 250 characters (links count as 23), keeping its point and any link:\n\n${text}`);
   try {
-    if (req.captionMode === "separate") {
-      const lines = [`Draft one GRMC post for each of these platforms: ${selected.map((p) => p.label).join(", ")}.`,
-        "Same message, written natively for each platform.", "", VOICE, "", ...context, "", "--- PLATFORMS ---",
-        ...selected.map((p) => p.guidance)];
-      const current = selected.filter((p) => req.captions[p.key]);
-      if (current.length) {
-        lines.push("", "CURRENT DRAFTS (improve on them, keep what works):");
-        for (const p of current) lines.push(`${p.label.toUpperCase()}: ${req.captions[p.key]}`);
-      }
-      const keys = selected.map((p) => `"${p.key}"`).join(", ");
-      const sys = SYS + ` Keys: ${keys}, each a string holding that platform's post.`;
-      let captions = pickKeys(JSON.parse(stripJsonFences(await callClaude(pool, sys, lines.join("\n")))), selected.map((p) => p.key));
-
-      // One retry for X if it ran long; Claude counts characters loosely.
-      if (captions.x && overLimit("x", captions.x)) {
-        const retry = JSON.parse(stripJsonFences(await callClaude(pool, SYS + ' Key: "x".',
-          `Shorten this X post to at most 250 characters (links count as 23), keeping its point and any link:\n\n${captions.x}`)));
-        if (typeof retry.x === "string" && retry.x.trim()) captions = { ...captions, x: retry.x.trim() };
-      }
-      const warnings = Object.entries(captions).map(([k, v]) => overLimit(k, v)).filter(Boolean);
-      return { ok: true, value: { captions, warnings } };
-    }
-
-    // One caption for every platform: it has to fit the tightest of them.
-    const strictest = selected.reduce((a, p) => (p.limit < a.limit ? p : a), selected[0] || PLATFORMS[0]);
-    const lines = ["Draft one GRMC social media post that will go out unchanged on: " + selected.map((p) => p.label).join(", ") + ".",
-      "", VOICE, "", ...context];
-    if (strictest.key === "x") lines.push("", "It must fit X: at most 280 characters, any link counting as 23.");
-    if (selected.some((p) => p.key === "instagram")) lines.push("It goes under an image on Instagram, where links aren't clickable; if there's a link, also say where to find it.");
-    if (req.caption) lines.push("", "CURRENT DRAFT (improve on it, keep what works):", req.caption);
-    let caption = String(JSON.parse(stripJsonFences(await callClaude(pool, SYS + ' Key: "post".', lines.join("\n")))).post || "").trim();
-    if (!caption) return { ok: false, error: "Claude came back without a draft. Try again." };
-    if (strictest.key === "x" && overLimit("x", caption)) {
-      const retry = JSON.parse(stripJsonFences(await callClaude(pool, SYS + ' Key: "post".',
-        `Shorten this post to at most 250 characters (links count as 23), keeping its point and any link:\n\n${caption}`)));
-      if (typeof retry.post === "string" && retry.post.trim()) caption = retry.post.trim();
-    }
-    const warnings = selected.map((p) => overLimit(p.key, caption)).filter(Boolean);
-    return { ok: true, value: { caption, warnings } };
-  } catch (e) {
-    return { ok: false, error: (e as Error).message };
-  }
+    const x = JSON.parse(stripJsonFences(raw)).x;
+    return typeof x === "string" && x.trim() ? x.trim() : text;
+  } catch { return text; }
 }
 
-function pickKeys(obj: Record<string, unknown>, keys: string[]): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const k of keys) if (typeof obj?.[k] === "string" && (obj[k] as string).trim()) out[k] = (obj[k] as string).trim();
-  if (!Object.keys(out).length) throw new Error("Claude came back without drafts. Try again.");
+export async function draftCaptions(pool: Pool, req: DraftRequest, createdBy: string): Promise<Result<DraftResult>> {
+  let resolved;
+  try { resolved = await resolveForDraft(pool, req); }
+  catch (e) { return fail((e as Error).message); }
+  const { effective, source, event } = resolved;
+  if (effective.source.kind === "buzzsprout" && !source) return fail("Pick the episode this post is about.");
+
+  let seriesPosition: { n: number; of: number } | null = null;
+  if (event?.kind === "series" && req.contentItemId && req.eventId) {
+    const ids = (await pool.query(
+      "SELECT id FROM content_items WHERE event_id = $1 AND status <> 'cancelled' ORDER BY publish_date NULLS LAST, created_at",
+      [req.eventId])).rows.map((r) => r.id);
+    const n = ids.indexOf(req.contentItemId);
+    if (n !== -1) seriesPosition = { n: n + 1, of: ids.length };
+  }
+
+  const prompt = buildDraftPrompt({
+    voice: (await getSetting(pool, "house_voice")) || DEFAULT_VOICE,
+    context: effective.context, instructions: effective.instructions,
+    eventName: event?.name || "", eventKind: event?.kind || "",
+    eventDates: event?.startDate ? formatMonthDayYear(event.startDate) + (event.endDate ? " to " + formatMonthDayYear(event.endDate) : "") : "",
+    title: req.title, brief: req.brief, phase: req.phase, publishDate: req.publishDate, seriesPosition, source,
+    platforms: req.platforms, captionMode: req.captionMode, caption: req.caption, captions: req.captions,
+  });
+
+  let parsed: Record<string, unknown>;
+  try { parsed = JSON.parse(stripJsonFences(await callClaude(pool, prompt.system, prompt.user))); }
+  catch (e) {
+    const msg = (e as Error).message;
+    return fail(e instanceof SyntaxError ? "Claude's reply wasn't readable. Try again." : msg);
+  }
+
+  const result: DraftResult = { warnings: [], source };
+  if (prompt.keys[0] === "post") {
+    let caption = typeof parsed.post === "string" ? parsed.post.trim() : "";
+    if (!caption) return fail("Claude came back without a draft. Try again.");
+    if (req.platforms.includes("x") && overLimit("x", caption)) caption = await shortenForX(pool, caption);
+    result.caption = caption;
+    result.warnings = req.platforms.map((k) => overLimit(k, caption)).filter(Boolean);
+  } else {
+    const captions: Record<string, string> = {};
+    const missing: string[] = [];
+    for (const k of prompt.keys) {
+      const v = parsed[k];
+      if (typeof v === "string" && v.trim()) captions[k] = v.trim();
+      else missing.push(PLATFORMS.find((p) => p.key === k)!.label);
+    }
+    if (missing.length) return fail(`Claude didn't write the ${missing.join(" and ")} caption. Try again.`);
+    if (captions.x && overLimit("x", captions.x)) captions.x = await shortenForX(pool, captions.x);
+    result.captions = captions;
+    result.warnings = Object.entries(captions).map(([k, v]) => overLimit(k, v)).filter(Boolean);
+  }
+  if (req.contentItemId) {
+    await logDraft(pool, req.contentItemId, { captionMode: req.captionMode, caption: result.caption, captions: result.captions }, createdBy);
+  }
+  return { ok: true, value: result };
+}
+
+/** Draft a saved post and store the result: caption(s), the source it used, and Drafted. */
+export async function draftAndSave(pool: Pool, id: string, createdBy: string): Promise<Result<ContentRow>> {
+  const item = await getContentRow(pool, id);
+  if (!item) return fail("Post not found.");
+  const r = await draftCaptions(pool, {
+    contentItemId: id, title: item.title, brief: item.brief, phase: item.phase, eventId: item.eventId,
+    platforms: item.platforms.length ? item.platforms : DEFAULT_PLATFORMS, publishDate: item.publishDate,
+    captionMode: item.captionMode, caption: item.caption, captions: item.captions,
+    drafting: item.drafting, sourceRef: item.sourceRef,
+  }, createdBy);
+  if (!r.ok) return r;
+  const s = r.value.source;
+  const ref = s && s.kind !== "manual" ? { kind: s.kind, id: s.id, title: s.title, url: s.url, date: s.date } : item.sourceRef;
+  await pool.query(
+    `UPDATE content_items
+        SET caption = COALESCE($2, caption), captions = COALESCE($3, captions), source_ref = $4,
+            status = CASE WHEN status IN ('idea','planned') THEN 'drafted' ELSE status END, updated_at = now()
+      WHERE id = $1`,
+    [id, r.value.caption ?? null, r.value.captions ?? null, ref ?? null],
+  );
+  return { ok: true, value: (await getContentRow(pool, id))! };
+}
+
+/** Draft several saved posts in turn; one failing doesn't stop the rest. */
+export async function draftAll(pool: Pool, ids: string[], createdBy: string): Promise<Array<{ id: string; ok: boolean; error?: string }>> {
+  const out: Array<{ id: string; ok: boolean; error?: string }> = [];
+  for (const id of ids) {
+    const r = await draftAndSave(pool, id, createdBy);
+    out.push(r.ok ? { id, ok: true } : { id, ok: false, error: r.error });
+  }
   return out;
 }

@@ -3,7 +3,10 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { addDays } from "../dates";
 import { getSetting, setSetting } from "../settings";
 import { buildCaptureIcs } from "../pipeline/ical";
-import { draftCaptions, parseDraftRequest } from "../pipeline/caption";
+import { draftAll, draftCaptions, parseDraftRequest, resolveForDraft } from "../pipeline/caption";
+import { listDraftHistory } from "../pipeline/history";
+import { listCampaigns } from "../mailchimp";
+import { listEpisodes } from "../buzzsprout";
 import { getApprovedImageBytes } from "../approvals-client";
 import { describeRule, occurrences, parseRecurrenceInput, parseRule } from "../pipeline/recurrence";
 import {
@@ -152,12 +155,44 @@ export async function pipelineRoutes(app: FastifyInstance): Promise<void> {
     return r.ok ? { ok: true, ...r.value } : r;
   }));
 
-  // Drafts from the editor's current (possibly unsaved) state.
+  // Drafts from the editor's current (possibly unsaved) state; logs it when the post exists.
   app.post("/api/pipeline/draft-caption", async (req) => guard(async () => {
     const input = parseDraftRequest(req.body);
     if (!input.ok) return input;
-    const r = await draftCaptions(pool, input.value);
+    const r = await draftCaptions(pool, input.value, getIdentity(req).email);
     return r.ok ? { ok: true, ...r.value } : r;
+  }));
+
+  // What Draft with Claude would use, for the editor's source panel. A source
+  // service failing is reported here, not raised: pasting by hand still works.
+  app.post("/api/pipeline/source/preview", async (req) => guard(async () => {
+    const input = parseDraftRequest(req.body, { preview: true });
+    if (!input.ok) return input;
+    try {
+      const { effective, source } = await resolveForDraft(pool, input.value);
+      const { content, ...rest } = source || ({} as Record<string, string>);
+      return { ok: true, effective: { source: effective.source, instructions: effective.instructions, from: effective.from },
+               source: source ? { ...rest, excerpt: (content || "").slice(0, 400) } : null };
+    } catch (e) {
+      return { ok: true, effective: null, source: null, error: (e as Error).message };
+    }
+  }));
+
+  app.get("/api/pipeline/sources/campaigns", async (req) => guard(async () => {
+    const subject = String((req.query as Query).subject || "").trim();
+    if (!subject) return { ok: false, error: "Say which campaigns: text their subject contains." };
+    return { ok: true, campaigns: await listCampaigns(pool, subject) };
+  }));
+
+  app.get("/api/pipeline/sources/episodes", async () => guard(async () => ({ ok: true, episodes: await listEpisodes(pool) })));
+
+  app.get("/api/pipeline/content/:id/drafts", async (req) => guard(async () =>
+    ({ ok: true, drafts: await listDraftHistory(pool, (req.params as { id: string }).id) })));
+
+  app.post("/api/pipeline/draft-all", async (req) => guard(async () => {
+    const ids = (req.body as { ids?: unknown } | null)?.ids;
+    if (!Array.isArray(ids) || !ids.every((i) => typeof i === "string")) return { ok: false, error: "Say which posts to draft." };
+    return { ok: true, results: await draftAll(pool, ids as string[], getIdentity(req).email) };
   }));
 
   // Thumbnails of approved files for media items (the list itself is
