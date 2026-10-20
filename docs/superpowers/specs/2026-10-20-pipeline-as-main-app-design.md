@@ -1,6 +1,6 @@
 # The Content Pipeline becomes the Social Posts app
 
-Date: 2026-10-20 · Status: approved in conversation, awaiting spec review
+Date: 2026-10-20 · Status: implemented
 
 ## Goal
 

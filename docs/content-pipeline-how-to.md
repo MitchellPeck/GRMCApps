@@ -1,6 +1,6 @@
 # Content Pipeline: how to use it
 
-**Where:** social.grmc.app/pipeline, or the **Content pipeline** tab in Social Posts.
+**Where:** social.grmc.app
 
 The pipeline answers three questions: what are we posting, when, and what do
 we need to capture to post it? Everything you see (dashboard, calendars,
@@ -10,12 +10,56 @@ change made anywhere shows up everywhere.
 ## The pieces
 
 - **Events and departments** group the work, for example *Kids Camp: GALAXY*
-  (an event with dates) or *Youth Ministry* (ongoing). Every post series, and
-  each weekly run (Grace Notes, Weekly blog, Podcast), has one automatically.
+  (an event with dates) or *Youth Ministry* (ongoing). Every post series has
+  one, and so do the weekly posts: Grace Notes, Sunday worship, Weekly blog
+  and Podcast.
 - **Posts** have a title, a publish date, platforms, an owner, a brief and a
   caption.
 - **Media** is each thing a post needs captured: a photo, a video, an
   interview. Each has a gather date and the person capturing it.
+
+## Where drafts come from
+
+Each event, department and series has a **Drafting** section on its page:
+
+- **Source:** where material comes from. None; a Mailchimp newsletter (say
+  which by text in its subject, such as "grace notes", and which issue to
+  use); or a podcast episode from Buzzsprout.
+- **Instructions:** what each post should do.
+- **Background:** the event's notes, which Claude reads too.
+
+**Draft with Claude** on any post uses its event's drafting. The editor shows
+which issue or episode it will use. Click **Change** to pick another, or
+**Paste content instead** if Mailchimp or Buzzsprout isn't reachable. A post
+remembers the issue it was drafted from.
+
+A post, or a recurring post, can have its own instructions under **Drafting
+for this post**. The Saturday invite works this way: its instructions write an
+invite, and each week's brief holds that Sunday's service details.
+
+**Earlier drafts** in the editor lists every draft of a post. **Restore**
+brings one back.
+
+The weekly posts are set up like this already:
+
+- **Grace Notes:** the newsletter issue for that week.
+- **Sunday worship:** the Saturday invite, from the brief.
+- **Weekly blog:** the latest blog email.
+- **Podcast:** episodes.
+
+## Planning several posts at once
+
+- **Podcast:** on its event page, **Plan posts from an episode**. Pick the
+  episode, tick the angles, and you get one post per angle on its day. Then
+  **Draft all with Claude**.
+- **Series:** on its event page, **Plan posts with Claude**. Claude proposes
+  titles and angles; you edit them, save, and draft.
+
+## Settings
+
+Keys for Anthropic, Mailchimp, Buzzsprout, Metricool and image hosting, the
+default post time, and the **house voice** (the rules every draft follows)
+are in the **Settings** tab.
 
 ## Every week
 
@@ -52,8 +96,8 @@ adds more.
   its editor. Upcoming posts nobody started are removed; everything else stays.
 
 The Wednesday Grace Notes, Saturday invite and Friday blog are already set up
-this way, so their slots sit on the calendar weeks ahead. When the run drafts
-a post, it fills that slot.
+this way, so their slots sit on the calendar weeks ahead, ready to draft with
+Claude when the week comes.
 
 ## The post editor
 
@@ -107,9 +151,9 @@ with nothing captured.
 | --- | --- |
 | Idea | A topic and a date, nothing more |
 | Planned | Brief written and media listed |
-| Drafted | Caption written (the weekly runs land here automatically) |
+| Drafted | Caption written, by hand or with Draft with Claude |
 | Ready | Caption approved and all media captured |
-| Scheduled | Queued in Metricool (set automatically when you send it from Social Posts) |
+| Scheduled | Queued in Metricool (set automatically when you send it from the editor) |
 | Published | Live |
 | Cancelled | Off the calendars, kept for history |
 
@@ -124,7 +168,6 @@ is collected; the editor tells you what is still missing.
   move between screens. **Clear filters** resets them.
 - If media is set to be gathered after its post goes out, it turns red and
   shows up on the dashboard.
-- Drafts from the Wednesday, Friday and Podcast runs, and from series, appear
-  in the pipeline as **Drafted** on their date. Re-running a draft updates the
-  same post instead of adding a second one.
+- Every draft of a post is kept: open **Earlier drafts** in its editor to
+  bring one back.
 - Files aren't uploaded here: pick them from Approvals, or paste a link.

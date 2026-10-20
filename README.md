@@ -57,47 +57,20 @@ the wordmark links back to the hub and an **Apps** switcher jumps straight
 between apps. Both are served to each app at `/assets/` (see *Shared UI* below).
 
 - **whoami** (`whoami.grmc.app`) — validation app echoing identity headers.
-- **Social Posts** (`social.grmc.app`) — drafts GRMC social posts with Claude,
-  pulls Grace Notes / blog from Mailchimp, manages multi-week post series. Three
-  runs: **Wednesday** (Grace Notes post + Saturday invite), **Friday** (weekly
-  blog post) and **Podcast** (below). Configure the Anthropic + Mailchimp keys
-  in its Settings tab (stored in the `socialposts` database). Source ported
-  from the Apps Script tool in `docs/reference/social-posts/`. Send drafted
-  posts straight to Metricool as scheduled drafts on Facebook, Instagram and X
-  (Settings → Metricool: API token + User ID + Blog ID via 'Load brands'). A
-  post with an associated weekday opens the scheduler on that day of the
-  current week, and a podcast post on the episode's own date. You can attach an
-  image by **uploading one** or by picking an **approved graphic from the
-  Approvals app** — either is published to a public Cloudflare R2 URL so
-  Metricool can fetch it (Settings → Image hosting). Requires the Metricool
-  Advanced plan.
-
-  **Podcast run.** Promote an episode straight from Buzzsprout (Settings →
-  Podcast: paste an API token from Buzzsprout's *Profile → API*, then **Load
-  podcasts** and pick the show). The Podcast tab lists recent episodes newest
-  first and fills in the title, show notes and listen link — all editable, and
-  all paste-able by hand if you would rather not pull from Buzzsprout at all.
-  Episodes that **have not dropped yet** are listed too and clearly marked, so
-  you can line posts up ahead of a release; Claude is told not to announce an
-  unreleased episode as though it is already out. Tick the **angles** you want
-  for that episode — announcement, the question it wrestles with, a pull quote,
-  a guest or topic spotlight, an invite to Sunday — and each one is drafted as
-  its own post. Podcast posts are scheduled from the **episode's publish date**
-  rather than the current week, so an episode landing three weeks out gets posts
-  three weeks out.
-
-  **Content pipeline** (`social.grmc.app/pipeline`). One planning surface over
-  what is publishing when, for which event or department, and what media has
-  to be captured first: a dashboard of gaps, publish and capture calendars
-  (drag to reschedule), a status board, and a page per event. Every run's and
-  series' drafts land in it as Drafted posts. Recurring posts (weekly, every N
-  weeks, monthly by date or weekday) keep their next 8 weeks on the calendar;
-  posts can be drafted with Claude and sent to Metricool from the editor, with
-  one caption for every platform or a separate one each (X kept to 280); media
-  can be ticked off as collected or linked to a signed-off file from Approvals;
-  each person gets a My work view and a capture-calendar feed for their phone. Staff guide:
-  `docs/content-pipeline-how-to.md`; design and rollout notes:
-  `docs/superpowers/specs/2026-10-20-content-pipeline-design.md`.
+- **Social Posts** (`social.grmc.app`) — the church's content pipeline: what
+  publishes when, for which event or department, and what media has to be
+  collected first. A dashboard of gaps, publish and capture calendars (drag to
+  reschedule), a status board, recurring posts, and a page per event.
+  **Draft with Claude** writes each post from its event's *drafting profile*:
+  a source (a Mailchimp newsletter such as Grace Notes or the weekly blog, or a
+  Buzzsprout podcast episode), instructions, and the event's notes, in the
+  house voice set in Settings. Captions can be the same everywhere or
+  different per platform (X kept to 280). Posts go to Metricool from the
+  editor; media can be ticked off as collected or linked to a signed-off file
+  from Approvals. Podcast events can plan one post per angle from an episode;
+  series events can plan their posts with Claude. Keys for Anthropic,
+  Mailchimp, Buzzsprout, Metricool and R2 are in its Settings tab (stored in
+  the `socialposts` database). Staff guide: `docs/content-pipeline-how-to.md`.
 - **Approvals** (`approvals.grmc.app`) — request and grant sign-off on graphics.
   Submitters upload an image and pick an approver from a roster (managed in
   Settings); the approver approves, rejects, or requests changes. Change
