@@ -51,8 +51,8 @@ export function buildDraftPrompt(p: PromptInput): { system: string; user: string
       "SOURCE URL: " + (s.url || "(not provided)"), "", "SOURCE CONTENT:", s.content || "(not provided)");
   }
 
-  lines.push("", "--- WHAT TO WRITE ---", p.instructions);
-
+  // Platform notes and current drafts come before the instructions, so the
+  // instructions are the last word (as they were in the old weekly runs).
   let keys: string[];
   if (separate) {
     keys = selected.map((x) => x.key);
@@ -63,11 +63,13 @@ export function buildDraftPrompt(p: PromptInput): { system: string; user: string
       for (const x of current) lines.push(`${x.label.toUpperCase()}: ${p.captions[x.key]}`);
     }
   } else {
+    // One text goes everywhere, so no single platform's habits (like
+    // Instagram's "link in bio") get to override the instructions.
     keys = ["post"];
     if (selected.some((x) => x.key === "x")) lines.push("", "It must fit X: at most 280 characters, any link counting as 23.");
-    if (selected.some((x) => x.key === "instagram")) lines.push("It goes under an image on Instagram, where links aren't clickable; if there's a link, also say where to find it.");
     if (p.caption) lines.push("", "CURRENT DRAFT (improve on it, keep what works):", p.caption);
   }
+  lines.push("", "--- WHAT TO WRITE ---", p.instructions);
   const system = SYS + ` Keys: ${keys.map((k) => `"${k}"`).join(", ")}, each a string holding that post's text.`;
   return { system, user: lines.join("\n"), keys };
 }

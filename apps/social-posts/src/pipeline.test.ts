@@ -645,3 +645,20 @@ test("re-saving a recurring post's unchanged override doesn't detach it", async 
   assert.ok(u.ok);
   assert.equal((await pool.query("SELECT detached FROM content_items WHERE id = $1", [first.id])).rows[0].detached, false);
 });
+
+test("weekly-run posts aren't told they're post N of a series", async () => {
+  const { draftCaptions, parseDraftRequest } = await import("./pipeline/caption");
+  const post = await createContent(pool, { title: "Grace Notes", publishDate: "2026-10-28", eventId: "run-wednesday", platforms: ["facebook"],
+    sourceRef: { kind: "manual", content: "Issue text" } }, "me@x.org");
+  assert.ok(post.ok);
+  const req = parseDraftRequest({ contentItemId: post.value.id, title: "Grace Notes", eventId: "run-wednesday", platforms: ["facebook"],
+    publishDate: "2026-10-28", sourceRef: { kind: "manual", content: "Issue text" } });
+  assert.ok(req.ok);
+  let prompt = "";
+  await pool.query("INSERT INTO settings (key, value) VALUES ('anthropic_api_key','t') ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value");
+  const f = stubFetch([[/api\.anthropic\.com/, (_u, init) => { prompt = JSON.parse(init.body).messages[0].content; return anthropicReply({ post: "ok" }); }]]);
+  try {
+    assert.ok((await draftCaptions(pool, req.value, "me@x.org")).ok);
+    assert.doesNotMatch(prompt, /THIS POST: \d+ of \d+/);
+  } finally { f.restore(); await pool.query("DELETE FROM settings WHERE key = 'anthropic_api_key'"); }
+});

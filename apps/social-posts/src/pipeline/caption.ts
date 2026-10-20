@@ -7,7 +7,7 @@ import { Pool } from "pg";
 import { callClaude, stripJsonFences } from "../claude";
 import { getSetting } from "../settings";
 import { formatMonthDayYear } from "../dates";
-import { DEFAULT_PLATFORMS, PLATFORMS } from "./config";
+import { DEFAULT_PLATFORMS, PLATFORMS, RUN_EVENTS } from "./config";
 import { countChars } from "./platforms";
 import { Result } from "./rules";
 import { Effective, Override, SourceRef, effectiveProfile, parseOverride, parseSourceRef } from "./drafting";
@@ -89,7 +89,10 @@ export async function draftCaptions(pool: Pool, req: DraftRequest, createdBy: st
   if (effective.source.kind === "buzzsprout" && !source) return fail("Pick the episode this post is about.");
 
   let seriesPosition: { n: number; of: number } | null = null;
-  if (event?.kind === "series" && req.contentItemId && req.eventId) {
+  // Only a real series (an arc of posts) has a position; the weekly runs'
+  // standing events are "series" in kind but each post stands alone.
+  const isRunEvent = Object.values(RUN_EVENTS).some((r) => r.id === req.eventId);
+  if (event?.kind === "series" && !isRunEvent && req.contentItemId && req.eventId) {
     const ids = (await pool.query(
       "SELECT id FROM content_items WHERE event_id = $1 AND status <> 'cancelled' ORDER BY publish_date NULLS LAST, created_at",
       [req.eventId])).rows.map((r) => r.id);

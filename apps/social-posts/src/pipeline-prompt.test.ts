@@ -62,3 +62,10 @@ test("same caption going to X must fit X; series posts say where they sit", () =
   assert.match(p.user, /PHASE: Our roots/);
   assert.match(p.user, /BACKGROUND AND KEY MESSAGES: Founded 2022\./);
 });
+
+test("one caption for every platform keeps the instructions' link — no 'link in bio' override", () => {
+  const p = buildDraftPrompt({ ...base, platforms: ["instagram", "facebook"], instructions: GRACE_NOTES_PROFILE.instructions!,
+    source: { kind: "mailchimp", id: "c", title: "Grace Notes", url: "https://mailchi.mp/x", date: "", dateLine: "", content: "x" } });
+  assert.doesNotMatch(p.user, /links aren't clickable|link in bio/i, "the same text also goes to Facebook, where the link works");
+  assert.ok(p.user.trimEnd().endsWith(GRACE_NOTES_PROFILE.instructions!), "the instructions are the last word");
+});
