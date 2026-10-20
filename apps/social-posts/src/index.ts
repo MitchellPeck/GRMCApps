@@ -5,9 +5,6 @@ import { config } from "./config";
 import { ensureSchema, pool } from "./db";
 import { meRoutes } from "./routes/me";
 import { settingsRoutes } from "./routes/settings";
-import { mailchimpRoutes } from "./routes/mailchimp";
-import { seriesRoutes } from "./routes/series";
-import { draftsRoutes } from "./routes/drafts";
 import { metricoolRoutes } from "./routes/metricool";
 import { podcastRoutes } from "./routes/podcast";
 import { pipelineRoutes } from "./routes/pipeline";
@@ -25,12 +22,11 @@ const app = Fastify({ logger: true, trustProxy: true });
 app.register(fastifyStatic, { root: join(__dirname, "public"), prefix: "/" });
 app.register(meRoutes);
 app.register(settingsRoutes);
-app.register(mailchimpRoutes);
-app.register(seriesRoutes);
-app.register(draftsRoutes);
 app.register(metricoolRoutes);
 app.register(podcastRoutes);
 app.register(pipelineRoutes);
+// The pipeline is the app now; old bookmarks to /pipeline land on it.
+app.get("/pipeline", async (_req, reply) => reply.redirect("/", 301));
 
 app.get("/healthz", async () => ({ ok: true }));
 

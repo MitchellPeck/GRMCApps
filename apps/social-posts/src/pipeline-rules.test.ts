@@ -2,7 +2,7 @@ import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import {
   checkStatusChange, computeGaps, isIsoDate, lateMediaWarning, parseContentInput, parseEventInput,
-  parseMediaInput, pipelineStatusToSeries, readyBlockers, resolveMediaStatus, seriesStatusToPipeline,
+  parseMediaInput, readyBlockers, resolveMediaStatus, seriesStatusToPipeline,
   GapItem, GapMedia,
 } from "./pipeline/rules";
 import { captionWarnings, countChars, imageRuleError } from "./pipeline/platforms";
@@ -94,15 +94,11 @@ test("the Ready gate", () => {
   assert.ok(checkStatusChange("published", { noMediaNeeded: false }, [photo]).ok);
 });
 
-test("legacy series statuses map both ways", () => {
+test("legacy series statuses map onto pipeline statuses", () => {
   assert.equal(seriesStatusToPipeline("pending"), "idea");
   assert.equal(seriesStatusToPipeline("drafted"), "drafted");
   assert.equal(seriesStatusToPipeline("posted"), "published");
   assert.equal(seriesStatusToPipeline("weird"), "idea");
-  assert.equal(pipelineStatusToSeries("ready"), "drafted");
-  assert.equal(pipelineStatusToSeries("scheduled"), "drafted");
-  assert.equal(pipelineStatusToSeries("published"), "posted");
-  assert.equal(pipelineStatusToSeries("planned"), "pending");
 });
 
 test("late media warning", () => {

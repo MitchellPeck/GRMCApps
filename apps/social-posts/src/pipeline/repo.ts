@@ -7,7 +7,7 @@ import { EVENT_COLORS, GAP_THRESHOLDS, DEFAULT_PLATFORMS, UPCOMING_DAYS } from "
 import { addDays } from "../dates";
 import {
   ContentInput, ContentStatus, EventInput, Gap, MediaInput, MediaStatus, Result,
-  checkStatusChange, computeGaps, lateMediaWarning, pipelineStatusToSeries, resolveMediaStatus,
+  checkStatusChange, computeGaps, lateMediaWarning, resolveMediaStatus,
   CONTENT_STATUSES,
 } from "./rules";
 import { propagate } from "./recurring";
@@ -344,25 +344,12 @@ export async function updateContent(
     }
   }
   const item = (await getContentRow(db, id))!;
-  await writeBackToSeries(db, item);
 
   const warnings = media
     .filter((m) => lateMediaWarning(m.gatherDate, item.publishDate))
     .map((m) => `${m.description}: ${lateMediaWarning(m.gatherDate, item.publishDate)}`)
     .concat(captionWarnings(item));
   return { ok: true, value: { item, warnings } };
-}
-
-// The Series tab reads a linked post's status and draft from its content item,
-// but the legacy columns are kept current too so rolling back to an image
-// without the pipeline loses nothing.
-export async function writeBackToSeries(db: Db, item: ContentRow): Promise<void> {
-  if (item.seriesId == null || item.postIdx == null) return;
-  await db.query(
-    `UPDATE series_posts SET status = $1, draft = $2, title = $3, sub = $4
-      WHERE series_id = $5 AND post_idx = $6`,
-    [pipelineStatusToSeries(item.status), item.caption, item.title, item.brief, item.seriesId, item.postIdx],
-  );
 }
 
 export async function deleteContent(db: Db, id: string): Promise<Result<{ mediaDeleted: number; skipped?: boolean }>> {

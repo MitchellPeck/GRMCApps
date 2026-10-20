@@ -347,6 +347,4 @@ export async function pipelineRoutes(app: FastifyInstance): Promise<void> {
   app.get("/api/pipeline/dashboard/gaps", async () => guard(async () =>
     ({ ok: true, ...(await dashboardGaps(pool, await referenceDate(pool))) })));
 
-  // The pipeline page itself.
-  app.get("/pipeline", async (_req, reply) => reply.sendFile("pipeline.html"));
 }

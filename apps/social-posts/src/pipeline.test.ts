@@ -2,13 +2,11 @@ import { strict as assert } from "node:assert";
 import { test, before, after } from "node:test";
 import { Pool } from "pg";
 import { SCHEMA_SQL } from "./schema";
-import { savePostDrafts } from "./drafts";
-import { createSeries, getSeriesPosts, updateSeriesPostField, updateSeriesMeta } from "./series";
 import {
   createContent, createEvent, createMedia, dashboardGaps, deleteContent, deleteEvent, getContent,
   getEvent, listContent, listMedia, updateContent, updateEvent, updateMedia,
 } from "./pipeline/repo";
-import { BACKFILL_SETTING, backfillOnce, markSentToMetricool, recordRunDrafts } from "./pipeline/sync";
+import { BACKFILL_SETTING, backfillOnce, markSentToMetricool } from "./pipeline/sync";
 import { RUN_EVENTS } from "./pipeline/config";
 import { applyImageRule, createRecurrence, deleteRecurrence, materialize, seedRunRecurrences, updateRecurrence } from "./pipeline/recurring";
 import { duplicateEvent } from "./pipeline/repo";
@@ -70,76 +68,6 @@ test("backfill maps existing series posts once, and only once", async () => {
   ]);
   assert.equal(items.rows[1].caption, "Peace draft");
   assert.equal(items.rows[1].brief, "angle");
-});
-
-test("the Series tab reads from, and writes through to, the content item", async () => {
-  const before = await getSeriesPosts(pool, "s-old");
-  assert.ok(before.ok);
-  const peace = before.posts[1];
-  assert.ok(peace.contentItemId);
-
-  // A pipeline edit shows up on the Series tab...
-  await updateContent(pool, peace.contentItemId, { platforms: ["facebook"], noMediaNeeded: true, status: "ready", caption: "Peace v2" });
-  const viaSeries = await getSeriesPosts(pool, "s-old");
-  assert.ok(viaSeries.ok);
-  assert.equal(viaSeries.posts[1].status, "drafted", "Ready shows as drafted to the Series tab");
-  assert.equal(viaSeries.posts[1].draft, "Peace v2");
-  const legacy = await pool.query("SELECT status, draft FROM series_posts WHERE series_id='s-old' AND post_idx=1");
-  assert.deepEqual(legacy.rows[0], { status: "drafted", draft: "Peace v2" }, "legacy columns kept current");
-
-  // ...re-saying "drafted" from the Series tab doesn't knock Ready backwards...
-  await updateSeriesPostField(pool, "s-old", 1, "status", "drafted");
-  assert.equal((await getContent(pool, peace.contentItemId)).ok && (await pool.query("SELECT status FROM content_items WHERE id=$1", [peace.contentItemId])).rows[0].status, "ready");
-
-  // ...but "posted" moves it on.
-  await updateSeriesPostField(pool, "s-old", 1, "status", "posted");
-  const posted = await pool.query("SELECT status FROM content_items WHERE id=$1", [peace.contentItemId]);
-  assert.equal(posted.rows[0].status, "published");
-
-  await updateSeriesMeta(pool, "s-old", { name: "Advent 2026" });
-  const ev = await pool.query("SELECT name FROM events WHERE series_id='s-old'");
-  assert.equal(ev.rows[0].name, "Advent 2026");
-});
-
-test("a new series lands in the pipeline straight away", async () => {
-  const created = await createSeries(pool, { name: "Kids Camp countdown", posts: [{ date: "Nov 10", title: "Ten days" }] });
-  assert.ok(created.ok);
-  const posts = await getSeriesPosts(pool, created.id);
-  assert.ok(posts.ok);
-  assert.ok(posts.posts[0].contentItemId);
-  assert.equal(posts.posts[0].scheduleDate.slice(5), "11-10");
-});
-
-test("automated runs land as Drafted items and re-runs refresh instead of duplicating", async () => {
-  const ids = await savePostDrafts(pool, "wednesday", "2026-11-08", { wednesday: "GN v1", saturday: "Invite v1" }, "me@x.org");
-  assert.equal(typeof ids.wednesday, "number");
-  const dates = { wednesday: "2026-11-04", saturday: "2026-11-07" };
-  const first = await recordRunDrafts(pool, "wednesday", [
-    { key: "wednesday", text: "GN v1", date: dates.wednesday, draftId: ids.wednesday, title: "Grace Notes" },
-    { key: "saturday", text: "Invite v1", date: dates.saturday, draftId: ids.saturday, title: "Sunday invite" },
-  ], "me@x.org");
-  const again = await recordRunDrafts(pool, "wednesday", [
-    { key: "wednesday", text: "GN v2", date: dates.wednesday, draftId: ids.wednesday, title: "Grace Notes" },
-  ], "me@x.org");
-  assert.equal(again.wednesday, first.wednesday, "same slot, same item");
-
-  const detail = await getContent(pool, first.wednesday);
-  assert.ok(detail.ok);
-  assert.equal(detail.value.item.caption, "GN v2");
-  assert.equal(detail.value.item.status, "drafted");
-  assert.equal(detail.value.item.eventId, RUN_EVENTS.wednesday.id);
-  assert.equal(detail.value.source?.kind, "run");
-
-  // Once it has moved past Drafted, a re-run adds a fresh item instead.
-  await markSentToMetricool(pool, first.wednesday, "2026-11-04T10:30:00");
-  const sent = await getContent(pool, first.wednesday);
-  assert.ok(sent.ok);
-  assert.equal(sent.value.item.status, "scheduled");
-  assert.equal(sent.value.item.publishTime, "10:30");
-  const third = await recordRunDrafts(pool, "wednesday", [
-    { key: "wednesday", text: "GN v3", date: dates.wednesday, draftId: ids.wednesday, title: "Grace Notes" },
-  ], "me@x.org");
-  assert.notEqual(third.wednesday, first.wednesday);
 });
 
 test("media, the Ready gate, warnings and deletes", async () => {
@@ -297,24 +225,26 @@ test("skipping a date sticks; changing the rule moves untouched posts only", asy
   assert.equal(kept.rows[0].recurrence_id, null, "worked-on posts outlive the series");
 });
 
-test("weekly runs become recurrences and fill their own slots", async () => {
+test("weekly runs are recurring posts in their own events", async () => {
+  // This test seeds them; later tests (the image rule, the migration) rely on it.
   assert.equal(await seedRunRecurrences(pool, REF), 3);
   assert.equal(await seedRunRecurrences(pool, REF), 0, "seeded once");
-  const slots = await pool.query(
-    `SELECT id, publish_date FROM content_items WHERE event_id = $1 AND draft_key = 'wednesday' AND recurrence_id IS NOT NULL
-      ORDER BY publish_date`, [RUN_EVENTS.wednesday.id]);
-  // Nov 4 already had a drafted Grace Notes from the earlier run test, so no empty twin.
-  assert.equal(slots.rows[0].publish_date, "2026-11-11");
-  const ids = await savePostDrafts(pool, "wednesday", "2026-11-15", { wednesday: "GN Nov 11" }, "me@x.org");
-  const filled = await recordRunDrafts(pool, "wednesday", [
-    { key: "wednesday", text: "GN Nov 11", date: "2026-11-11", draftId: ids.wednesday, title: "Grace Notes: Advent" },
-  ], "me@x.org");
-  assert.equal(filled.wednesday, slots.rows[0].id, "the run filled the slot instead of adding a post");
-  const item = await getContent(pool, filled.wednesday);
-  assert.ok(item.ok);
-  assert.equal(item.value.item.status, "drafted");
-  assert.ok(item.value.recurrence);
-  assert.equal((await pool.query("SELECT event_id FROM recurrences WHERE draft_key = 'saturday'")).rows[0].event_id, "run-sunday");
+  const recs = (await pool.query("SELECT draft_key, event_id FROM recurrences WHERE draft_key <> '' ORDER BY draft_key")).rows;
+  assert.deepEqual(recs, [
+    { draft_key: "friday", event_id: "run-friday" },
+    { draft_key: "saturday", event_id: "run-sunday" },
+    { draft_key: "wednesday", event_id: "run-wednesday" },
+  ]);
+});
+
+test("a Metricool send marks the post Scheduled at the booked time", async () => {
+  const p = await createContent(pool, { title: "Send me", publishDate: "2026-11-04", platforms: ["facebook"] }, "me@x.org");
+  assert.ok(p.ok);
+  await markSentToMetricool(pool, p.value.id, "2026-11-04T10:30:00");
+  const after = await getContent(pool, p.value.id);
+  assert.ok(after.ok);
+  assert.equal(after.value.item.status, "scheduled");
+  assert.equal(after.value.item.publishTime, "10:30");
 });
 
 test("duplicating an event shifts every date and starts the copies over", async () => {

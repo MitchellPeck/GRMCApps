@@ -300,12 +300,6 @@ export function seriesStatusToPipeline(legacy: string): ContentStatus {
   return "idea";
 }
 
-export function pipelineStatusToSeries(status: string): string {
-  if (status === "published") return "posted";
-  if (status === "drafted" || status === "ready" || status === "scheduled") return "drafted";
-  return "pending";
-}
-
 // ── Gap alerts ───────────────────────────────────────────────────────────────
 
 export interface GapItem {

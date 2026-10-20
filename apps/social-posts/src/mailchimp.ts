@@ -82,19 +82,6 @@ export function campaignDateLine(c: CampaignDates, tz: string = DEFAULT_TZ): str
   return parts.join(" · ");
 }
 
-export interface CampaignContent {
-  subject: string;
-  archiveUrl: string;
-  status: string;
-  /** Empty unless Mailchimp actually sent or scheduled the campaign. */
-  sentAt: string;
-  createdAt: string;
-  /** Parsed out of the subject line; empty when the subject carries no date. */
-  issueDate: string;
-  isDraft: boolean;
-  dateLine: string;
-  preview: string;
-}
 
 export interface CampaignSummary {
   id: string; subject: string; status: string; archiveUrl: string;
@@ -128,24 +115,4 @@ export async function getCampaignText(pool: Pool, id: string): Promise<string> {
   const mc = await getMailchimpAuth(pool);
   const res: any = await (await fetch(mc.base + "/campaigns/" + encodeURIComponent(id) + "/content?fields=plain_text", { headers: mc.headers })).json();
   return cleanCampaignText(res.plain_text || "").substring(0, 4000);
-}
-
-async function getLatestCampaign(pool: Pool, subjectMatch: string, beforeDate: string | null): Promise<CampaignContent> {
-  const matches = await listCampaigns(pool, subjectMatch);
-  if (!matches.length) throw new Error(`No ${subjectMatch} campaigns found in Mailchimp.`);
-  let target = matches[0];
-  if (beforeDate) {
-    const cutoff = new Date(beforeDate + "T23:59:59");
-    for (const c of matches) if (new Date(c.createdAt) <= cutoff) { target = c; break; }
-  }
-  const { id: _id, ...rest } = target;
-  return { ...rest, preview: await getCampaignText(pool, target.id) };
-}
-
-export function getLatestGraceNotes(pool: Pool, beforeDate: string | null): Promise<CampaignContent> {
-  return getLatestCampaign(pool, "grace notes", beforeDate);
-}
-
-export function getLatestBlog(pool: Pool): Promise<CampaignContent> {
-  return getLatestCampaign(pool, "weekly blog", null);
 }

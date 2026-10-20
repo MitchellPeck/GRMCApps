@@ -89,11 +89,3 @@ export function addDays(iso: string, days: number): string {
   if (isNaN(d.getTime())) return "";
   return isoOf(new Date(d.getTime() + days * 86400000));
 }
-
-// A draft's suggested date. Weekday keys ("wednesday") mean that day in the
-// current week; every other key — a podcast angle, say — carries its own date
-// on the draft row, which is the episode's, and that is what we honour.
-export function draftScheduleDate(key: string, postDate: string, refDate: string): string {
-  if (isWeekday(key)) return suggestDate({ kind: "weekday", weekday: key }, refDate);
-  return /^\d{4}-\d{2}-\d{2}$/.test(postDate || "") ? postDate : "";
-}
