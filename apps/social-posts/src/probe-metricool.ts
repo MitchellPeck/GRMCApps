@@ -84,7 +84,7 @@ async function main(): Promise<void> {
   const when = new Date(Date.now() + 26 * 60 * 60 * 1000).toISOString().slice(0, 19);
   const payload = buildSchedulerPayload({
     text: arg("text", `Metricool API probe — ignore. ${new Date().toISOString()}`),
-    networks, dateTime: when, timezone: arg("timezone", "America/New_York"), mediaUrl,
+    networks, dateTime: when, timezone: arg("timezone", "America/New_York"), mediaUrls: mediaUrl ? [mediaUrl] : [],
   });
   console.log(`\n3. Payload the app would send for [${networks.join(", ")}]:`);
   console.log(JSON.stringify(payload, null, 2));

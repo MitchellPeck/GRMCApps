@@ -124,6 +124,21 @@ Once it's sent, the post moves to Scheduled.
 
 ## Media
 
+Each post has two lists:
+
+- **Media:** the files that go out with the post. Add them with **Add from
+  Approvals** or **Upload**; a file you collect (below) appears here too. Use
+  the arrows to set the order. **Send to Metricool** sends every file, in
+  this order, so several images become a carousel; untick any in the send box.
+- **To collect:** things someone still has to gather, with who and when.
+
+A recurring post can carry its own files under **Media for every post**, for
+example the same image each week. Each week gets a copy and can swap it for
+that week only; changing the series' file updates the weeks nobody has
+changed.
+
+### To collect
+
 Each thing a post needs has a **Collected** box: tick it when you have it. No
 link is needed. To attach the finished file, click **Choose from Approvals**
 and pick anything that's been signed off, **Upload a file** (a photo or video,

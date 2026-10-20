@@ -5,7 +5,7 @@
 import { Pool, PoolClient } from "pg";
 import { addDays } from "../dates";
 import { DEFAULT_PLATFORMS, RUN_EVENTS } from "./config";
-import { MediaTemplateItem, RecurrenceInput, Rule, describeRule, occurrences } from "./recurrence";
+import { AttachmentTemplate, MediaTemplateItem, RecurrenceInput, Rule, describeRule, occurrences } from "./recurrence";
 import { Result } from "./rules";
 import { imageRuleError } from "./platforms";
 import { Override } from "./drafting";
@@ -24,7 +24,7 @@ const UNTOUCHED = ["idea", "planned"];
 export interface RecurrenceRow {
   id: string; title: string; brief: string; eventId: string | null; eventName: string; eventColor: string;
   platforms: string[]; publishTime: string | null; ownerEmail: string; noMediaNeeded: boolean;
-  mediaTemplate: MediaTemplateItem[]; draftKey: string; active: boolean; drafting: Override;
+  mediaTemplate: MediaTemplateItem[]; attachments: AttachmentTemplate[]; draftKey: string; active: boolean; drafting: Override;
   rule: Rule; summary: string; nextDates: string[];
 }
 
@@ -42,7 +42,7 @@ function recurrenceOf(r: any, today: string): RecurrenceRow {
     eventName: r.event_name || "", eventColor: r.event_color || "",
     platforms: r.platforms || [], publishTime: r.publish_time ? String(r.publish_time).slice(0, 5) : null,
     ownerEmail: r.owner_email, noMediaNeeded: r.no_media_needed, mediaTemplate: r.media_template || [],
-    draftKey: r.draft_key, active: r.active, drafting: r.drafting || {}, rule, summary: describeRule(rule),
+    attachments: r.attachments || [], draftKey: r.draft_key, active: r.active, drafting: r.drafting || {}, rule, summary: describeRule(rule),
     nextDates: r.active ? occurrences(rule, addDays(today, 366)).filter((d) => d >= today).slice(0, 4) : [],
   };
 }
@@ -94,7 +94,7 @@ export async function createRecurrence(
     title: input.title, brief: input.brief || "", event_id: input.eventId ?? null,
     platforms: input.platforms ?? DEFAULT_PLATFORMS, publish_time: input.publishTime ?? null,
     owner_email: input.ownerEmail || "", no_media_needed: !!input.noMediaNeeded,
-    media_template: JSON.stringify(input.mediaTemplate || []), draft_key: draftKey,
+    media_template: JSON.stringify(input.mediaTemplate || []), attachments: JSON.stringify(input.attachments || []), draft_key: draftKey,
     active: input.active ?? true, drafting: input.drafting || {}, created_by: createdBy, ...ruleColumns(input.rule!),
   };
   const keys = Object.keys(cols);
@@ -135,6 +135,7 @@ export async function updateRecurrence(
   const cols: Record<string, unknown> = {};
   for (const [key, col] of TEMPLATE_FIELDS) if (key in input) cols[col] = input[key];
   if (input.mediaTemplate) cols.media_template = JSON.stringify(input.mediaTemplate);
+  if (input.attachments) cols.attachments = JSON.stringify(input.attachments);
   if ("active" in input) cols.active = input.active;
   if (input.rule) Object.assign(cols, ruleColumns(input.rule));
   const keys = Object.keys(cols);
@@ -147,6 +148,7 @@ export async function updateRecurrence(
 
   await propagate(db, id, today, input);
   if (input.mediaTemplate) await refreshTemplateMedia(db, id, today, input.mediaTemplate);
+  if (input.attachments) await refreshTemplateAttachments(db, id, today, current.attachments, input.attachments);
 
   // A paused recurrence, or a changed rule, leaves untouched future slots that
   // no longer belong on the calendar.
@@ -200,6 +202,40 @@ async function refreshTemplateMedia(db: Db, id: string, today: string, template:
       [it.id],
     );
     await insertTemplateMedia(db, it.id, it.occurrence_date, template);
+  }
+}
+
+/**
+ * Swap the series' files on future untouched weeks. A week whose files
+ * someone changed by hand (one added, or a series file removed) keeps its own.
+ */
+async function refreshTemplateAttachments(
+  db: Db, id: string, today: string, before: AttachmentTemplate[], after: AttachmentTemplate[],
+): Promise<void> {
+  const items = await db.query(
+    `SELECT id FROM content_items
+      WHERE recurrence_id = $1 AND occurrence_date >= $2 AND NOT detached AND status = ANY($3)`,
+    [id, today, UNTOUCHED],
+  );
+  for (const it of items.rows) {
+    const files = (await db.query(
+      "SELECT from_template FROM media_assets WHERE content_item_id = $1 AND kind = 'attachment'", [it.id])).rows;
+    if (files.some((f) => !f.from_template) || files.length !== before.length) continue;
+    await db.query("DELETE FROM media_assets WHERE content_item_id = $1 AND kind = 'attachment'", [it.id]);
+    await insertTemplateAttachments(db, it.id, after);
+  }
+}
+
+async function insertTemplateAttachments(db: Db, itemId: string, files: AttachmentTemplate[]): Promise<void> {
+  for (let i = 0; i < files.length; i++) {
+    const a = files[i];
+    await db.query(
+      `INSERT INTO media_assets (content_item_id, description, type, status, kind, position, from_template,
+                                 approval_id, approval_title, file_link, file_name, file_type)
+       VALUES ($1,$2,$3,'edited','attachment',$4,true,$5,$6,$7,$8,$9)`,
+      [itemId, a.approvalTitle || a.fileName || "Attached file", a.fileType === "video" ? "video" : "photo", -100 + i,
+       a.approvalId ?? null, a.approvalTitle || "", a.fileLink || "", a.fileName || "", a.fileType || ""],
+    );
   }
 }
 
@@ -267,6 +303,7 @@ export async function materialize(db: Db, today: string, until: string, onlyId?:
       );
       if (!r.rowCount) continue;
       created++;
+      await insertTemplateAttachments(db, r.rows[0].id, rec.attachments || []);
       await insertTemplateMedia(db, r.rows[0].id, date, rec.media_template || []);
     }
   }

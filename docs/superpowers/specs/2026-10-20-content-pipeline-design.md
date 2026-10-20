@@ -195,3 +195,20 @@ URL. The editor saves it as the item's `file_link` with `file_name` and
 `file_type`, which works before the post is first saved. Attaching makes the
 item "Final file"; Remove detaches it but leaves the object in R2. Send to
 Metricool preselects an Approvals file, else an uploaded photo.
+
+## Iteration 5: the Media field
+
+`media_assets.kind` is `collect` (a thing to gather; the checklist) or
+`attachment` (a file added straight to the post, already final: no gather
+date, assignee or status work). The editor's **Media** field shows every file
+in `position` order: attachments, plus collect items once their file is
+attached. Attachments never reach the capture calendar, My work, event
+"media to gather" tables, the iCal feed or gap alerts (`listMedia` excludes
+them unless it's listing one post's media), but they count as the post's
+media for Ready, "no media planned" and Instagram. `content_items` gains an
+`attachment_count`, and `media_total`/`media_done` now count collect items
+only. Recurrences gain `attachments`, copied onto each occurrence as template
+attachments; a series edit replaces them only on untouched weeks whose files
+weren't changed by hand. Send to Metricool sends every ticked file in order
+(`media: [...]` on `/api/metricool/send`, prepared by `gatherSendMedia`), so
+several images make a carousel.

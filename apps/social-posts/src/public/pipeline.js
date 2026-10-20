@@ -101,7 +101,8 @@ function mediaLabel(s){ return MEDIA_LABELS[s] || label(s); }
 function statusBadge(s, kind){ return '<span class="pl-status pl-s-'+esc(s)+(kind === 'media' ? ' pl-media-s' : '')+'">'+esc(kind === 'media' ? mediaLabel(s) : label(s))+'</span>'; }
 function mediaProgress(item){
   if (item.noMediaNeeded) return '<span class="pl-prog pl-prog-none">No media needed</span>';
-  if (!item.mediaTotal) return '<span class="pl-prog pl-prog-gap">No media planned</span>';
+  var attached = item.attachmentCount ? '<span class="pl-prog">'+item.attachmentCount+' attached</span>' : '';
+  if (!item.mediaTotal) return attached || '<span class="pl-prog pl-prog-gap">No media planned</span>';
   var pct = Math.round(100 * item.mediaDone / item.mediaTotal);
   return '<span class="pl-prog" title="'+item.mediaDone+' of '+item.mediaTotal+' collected">'
     + '<span class="pl-bar"><span style="width:'+pct+'%"></span></span>'+item.mediaDone+' of '+item.mediaTotal+' collected</span>';
@@ -868,11 +869,53 @@ function readyBlockers(item, media) {
 }
 
 // ── Media: one row design for every post ──
+// ── Media: the post's files (Media field) and the things to collect ──
+// One record per file: an attachment is a file added straight to the post; a
+// thing to collect joins the Media field once its file is attached.
+function hasFile(x){ return !!(x.approvalId || (x.fileLink && x.fileType)); }
+function mediaFiles(){ return drawer.media.filter(function(m){ return m.kind === 'attachment' || hasFile(m); }); }
+function fileThumb(x){
+  if (x.approvalId) return '<img src="/api/pipeline/approved/'+encodeURIComponent(x.approvalId)+'/image" alt="" loading="lazy">';
+  if (x.fileType === 'image') return '<img src="'+esc(x.fileLink)+'" alt="" loading="lazy">';
+  return '<span class="pl-file-video" aria-hidden="true">▶</span>';
+}
+function fileLabel(x){ return x.approvalId ? (x.approvalTitle || 'Approved file') : (x.fileName || 'Uploaded file'); }
+function fileSource(x){
+  if (x.kind !== 'attachment') return 'Collected: ' + x.description;
+  return x.approvalId ? 'From Approvals' : 'Uploaded ' + (x.fileType === 'video' ? 'video' : 'photo');
+}
+function fileCardHtml(x, i, n, removeAct) {
+  return '<div class="pl-filecard" data-file="'+esc(x.id || i)+'" data-name="'+esc(fileLabel(x))+'">' + fileThumb(x)
+    + '<span class="pl-filecard-text"><strong>'+esc(fileLabel(x))+'</strong><br><span class="muted">'+esc(fileSource(x))+'</span></span>'
+    + '<span class="pl-filecard-acts">'
+    + (n > 1 ? '<button class="btn-sm" type="button" data-act="move-file" data-dir="-1" aria-label="Move earlier"'+(i === 0 ? ' disabled' : '')+'>↑</button>'
+             + '<button class="btn-sm" type="button" data-act="move-file" data-dir="1" aria-label="Move later"'+(i === n - 1 ? ' disabled' : '')+'>↓</button>' : '')
+    + '<button class="btn-sm" type="button" data-act="'+removeAct+'" data-i="'+i+'">Remove</button></span></div>';
+}
+function attachControlsHtml(target) {
+  return '<div class="pl-attach-add" data-attach data-target="'+target+'">'
+    + '<button class="btn-sm" type="button" data-act="attach-approval">Add from Approvals</button>'
+    + '<button class="btn-sm" type="button" data-act="attach-upload">Upload</button>'
+    + '<input type="file" data-upload-attach hidden accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/quicktime">'
+    + '<div class="pl-picker" hidden></div></div>';
+}
+function mediaFieldHtml() {
+  var files = mediaFiles();
+  return '<section class="pl-mediafield" aria-label="Media"><div class="pl-drawer-head"><h3>Media</h3>'
+    + '<span class="pl-prog">'+(files.length ? files.length + ' file' + (files.length === 1 ? '' : 's') + ', sent in this order' : '')+'</span></div>'
+    + (files.length ? '<div class="pl-files">' + files.map(function(x, i){ return fileCardHtml(x, i, files.length, 'remove-file'); }).join('') + '</div>'
+        : '<p class="hint">No files yet. Add them here, or collect them below and they’ll appear here.</p>')
+    + attachControlsHtml('post') + '</section>';
+}
 function mediaSectionHtml(item) {
-  var media = drawer.media, m = S.meta;
+  return '<div class="pl-media-wrap">' + mediaFieldHtml() + collectSectionHtml(item) + '</div>';
+}
+
+function collectSectionHtml(item) {
+  var media = drawer.media.filter(function(x){ return x.kind !== 'attachment'; }), m = S.meta;
   var done = media.filter(isCollected).length;
   var types = function(sel){ return m.mediaTypes.map(function(t){ return '<option value="'+t+'"'+(t === sel ? ' selected' : '')+'>'+label(t)+'</option>'; }).join(''); };
-  var html = '<section class="pl-checklist" aria-label="Media"><div class="pl-drawer-head"><h3>Media</h3>'
+  var html = '<section class="pl-checklist" aria-label="To collect"><div class="pl-drawer-head"><h3>To collect</h3>'
     + '<span class="pl-prog">'+(media.length ? done+' of '+media.length+' collected' : item.noMediaNeeded ? 'Not needed' : 'None listed yet')+'</span></div>';
   html += media.map(function(x){
     var late = x.gatherDate && item.publishDate && x.gatherDate > item.publishDate;
@@ -912,7 +955,7 @@ function mediaSectionHtml(item) {
 }
 
 function redrawMedia() {
-  var list = document.querySelector('.pl-checklist');
+  var list = document.querySelector('.pl-media-wrap');
   if (list) list.outerHTML = mediaSectionHtml(drawer.item || readForm(document.querySelector('form[data-form=content]')));
 }
 
@@ -986,8 +1029,8 @@ function addMedia(form) {
   }).catch(function(e){ toast(e.message, 'err'); });
 }
 
-function deleteMedia(row) {
-  var id = row.getAttribute('data-media');
+function deleteMedia(row) { deleteMediaById(row.getAttribute('data-media')); }
+function deleteMediaById(id) {
   if (!drawer.id) { drawer.media = drawer.media.filter(function(m){ return m.id !== id; }); redrawMedia(); return; }
   api('DELETE', '/api/pipeline/media/' + encodeURIComponent(id)).then(function(){
     return reloadDrawer().then(render);
@@ -997,29 +1040,79 @@ function deleteMedia(row) {
 // ── Uploading a file straight to a media item ──
 var UPLOAD_TYPES = { 'image/jpeg': 'image', 'image/png': 'image', 'image/gif': 'image', 'image/webp': 'image', 'video/mp4': 'video', 'video/quicktime': 'video' };
 var MAX_UPLOAD = 100000000;
-function uploadMediaFile(row, input) {
+// Resolves with { fileLink, fileName, fileType }, or rejects with a message already shown.
+function uploadFile(input, btn) {
   var file = input.files[0];
   input.value = '';
-  if (!file) return;
-  if (!UPLOAD_TYPES[file.type]) { toast('Upload a photo (JPG, PNG, GIF or WebP) or a video (MP4 or MOV).', 'err'); return; }
-  if (file.size > MAX_UPLOAD) { toast('That file is larger than 100 MB. Share a link to it instead.', 'err'); return; }
-  var btn = row.querySelector('[data-act=upload-file]');
+  if (!file) return Promise.reject(new Error(''));
+  var fail = function(msg){ toast(msg, 'err'); return Promise.reject(new Error(msg)); };
+  if (!UPLOAD_TYPES[file.type]) return fail('Upload a photo (JPG, PNG, GIF or WebP) or a video (MP4 or MOV).');
+  if (file.size > MAX_UPLOAD) return fail('That file is larger than 100 MB. Share a link to it instead.');
+  var was = btn.textContent;
   btn.disabled = true; btn.innerHTML = '<span class="spin pl-spin-dark"></span> Uploading…';
   // Raw bytes, not base64: the server stores them in R2 and hands back the link.
-  fetch('/api/pipeline/uploads', { method: 'POST', headers: { 'Content-Type': file.type, 'X-File-Name': encodeURIComponent(file.name) }, body: file })
+  return fetch('/api/pipeline/uploads', { method: 'POST', headers: { 'Content-Type': file.type, 'X-File-Name': encodeURIComponent(file.name) }, body: file })
     .then(function(r){ if (!r.ok) throw new Error(r.status === 413 ? 'That file is too large to upload.' : 'The upload failed (' + r.status + '). Try again.'); return r.json(); })
     .then(function(d){
       if (!d.ok) throw new Error(d.error);
-      // A file attached is the finished file.
-      mediaChange(row.getAttribute('data-media'), { fileLink: d.url, fileName: d.name, fileType: d.type, status: 'edited' });
+      btn.disabled = false; btn.textContent = was;
+      return { fileLink: d.url, fileName: d.name, fileType: d.type };
     })
-    .catch(function(e){ btn.disabled = false; btn.textContent = 'Upload a file'; toast(e.message, 'err'); });
+    .catch(function(e){ btn.disabled = false; btn.textContent = was; toast(e.message, 'err'); throw e; });
+}
+
+function uploadMediaFile(row, input) {
+  // A file attached to a thing to collect is its finished file.
+  uploadFile(input, row.querySelector('[data-act=upload-file]')).then(function(f){
+    mediaChange(row.getAttribute('data-media'), { fileLink: f.fileLink, fileName: f.fileName, fileType: f.fileType, status: 'edited' });
+  }).catch(function(){ /* shown */ });
+}
+
+// A file added straight to the post's Media field.
+function addAttachment(f) {
+  if (!drawer.id) {
+    drawer.media.push({ id: 'tmp-' + (++tmpSeq), kind: 'attachment', description: f.approvalTitle || f.fileName || 'Attached file',
+      type: f.fileType === 'video' ? 'video' : 'photo', gatherDate: null, gatherLocation: '', assigneeEmail: '', notes: '',
+      approvalId: f.approvalId || null, approvalTitle: f.approvalTitle || '', fileLink: f.fileLink || '', fileName: f.fileName || '',
+      fileType: f.fileType || '', status: 'edited' });
+    redrawMedia();
+    return;
+  }
+  var body = { kind: 'attachment' };
+  Object.keys(f).forEach(function(k){ body[k] = f[k]; });
+  api('POST', '/api/pipeline/content/' + encodeURIComponent(drawer.id) + '/media', body)
+    .then(function(){ return reloadDrawer().then(render); })
+    .catch(function(e){ toast(e.message, 'err'); });
+}
+
+function removeFile(i) {
+  var x = mediaFiles()[i];
+  if (!x) return;
+  if (x.kind === 'attachment') return deleteMediaById(x.id);
+  // A collected item keeps its place on the list; only its file comes off.
+  mediaChange(x.id, { approvalId: null, approvalTitle: '', fileLink: '', fileName: '', fileType: '' });
+}
+
+// The Media field's order is the order a Metricool send uses.
+function moveFile(i, dir) {
+  var files = mediaFiles(), j = i + dir;
+  if (j < 0 || j >= files.length) return;
+  var moved = files.slice(); var t = moved[i]; moved[i] = moved[j]; moved[j] = t;
+  if (!drawer.id) {
+    var rest = drawer.media.filter(function(m){ return moved.indexOf(m) === -1; });
+    drawer.media = moved.concat(rest);
+    redrawMedia();
+    return;
+  }
+  moved.reduce(function(chain, m, pos){
+    return chain.then(function(){ return m.position === pos ? null : api('PATCH', '/api/pipeline/media/' + encodeURIComponent(m.id), { position: pos }); });
+  }, Promise.resolve()).then(function(){ return reloadDrawer(); }).catch(function(e){ toast(e.message, 'err'); reloadDrawer(); });
 }
 
 // ── Picking a finished file from Approvals ──
 var approvedCache = null;
-function openApprovalPicker(row) {
-  var picker = row.querySelector('.pl-picker');
+function openApprovalPicker(host) {
+  var picker = host.querySelector('.pl-picker');
   picker.hidden = false;
   picker.innerHTML = '<p class="hint">Loading approved files…</p>';
   (approvedCache ? Promise.resolve(approvedCache) : api('GET', '/api/metricool/approved-images').then(function(d){ approvedCache = d.images || []; return approvedCache; }))
@@ -1106,6 +1199,7 @@ function savePost(form, opts) {
             description: x.description, type: x.type, gatherDate: x.gatherDate, gatherLocation: x.gatherLocation,
             assigneeEmail: x.assigneeEmail, fileLink: x.fileLink, notes: x.notes,
             approvalId: x.approvalId, approvalTitle: x.approvalTitle, fileName: x.fileName, fileType: x.fileType, status: x.status,
+            kind: x.kind || 'collect',
           });
         });
       }, Promise.resolve()).then(function(){ return res; });
@@ -1322,13 +1416,14 @@ function sendToMetricool() {
   // Sending needs a saved post to mark as Scheduled afterwards.
   savePost(form, { quiet: true }).then(function(res){
     var id = res.item.id;
-    var approved = drawer.media.filter(function(m){ return m.approvalId; })[0];
-    var uploaded = drawer.media.filter(function(m){ return m.fileType === 'image' && m.fileLink; })[0];
+    var files = mediaFiles().map(function(x){
+      return { label: fileLabel(x) + (x.fileType === 'video' ? ' (video)' : ''),
+               approvedImageId: x.approvalId ? String(x.approvalId) : '', imageUrl: x.approvalId ? '' : x.fileLink };
+    });
     openMetricool(cur.caption, {
+      files: files,
       date: cur.publishDate, time: cur.publishTime, texts: texts,
       networks: cur.platforms.map(function(p){ return METRICOOL_NETWORK[p]; }).filter(Boolean),
-      approvedImageId: approved ? approved.approvalId : '',
-      imageUrl: !approved && uploaded ? uploaded.fileLink : '',
       sourceType: 'content', sourceRef: id, contentItemId: id,
       // The server marks the post Scheduled; show that.
       onSent: function(){ openPost(id); render(); },
@@ -1339,7 +1434,11 @@ function sendToMetricool() {
 // "Make it repeat" from any one-off post: this post becomes the first in the series.
 function makeRecurring(form) {
   var cur = readForm(form);
-  cur.mediaTemplate = drawer.media.map(function(x){
+  cur.attachments = drawer.media.filter(function(x){ return x.kind === 'attachment'; }).map(function(x){
+    return x.approvalId ? { approvalId: x.approvalId, approvalTitle: x.approvalTitle }
+                        : { fileLink: x.fileLink, fileName: x.fileName, fileType: x.fileType };
+  });
+  cur.mediaTemplate = drawer.media.filter(function(x){ return x.kind !== 'attachment'; }).map(function(x){
     var offset = x.gatherDate && cur.publishDate
       ? Math.round((parseIso(x.gatherDate) - parseIso(cur.publishDate)) / 86400000) : 0;
     return { description: x.description, type: x.type, offsetDays: offset, assigneeEmail: x.assigneeEmail };
@@ -1388,12 +1487,23 @@ function openRecurrence(id, prefill, fromContentId) {
                 : Promise.resolve(null);
   openDrawer('<div class="pl-drawer-body"><p class="empty">Loading…</p></div>');
   load.then(function(r){
+    drawer.recAttachments = ((r ? r.attachments : (prefill || {}).attachments) || []).slice();
     $('pl-drawer').innerHTML = recurrenceFormHtml(r, prefill || {}, fromContentId);
     applyImageRuleTo(document.querySelector('form[data-form=recurrence]'));
     previewRule();
   })
     .catch(function(e){ $('pl-drawer').innerHTML = '<div class="pl-drawer-body"><div class="alert alert-err">'+esc(e.message)+'</div></div>'; });
 }
+
+function recFilesHtml() {
+  var files = drawer.recAttachments || [];
+  return files.length ? '<div class="pl-files">' + files.map(function(f, i){
+    var x = { kind: 'attachment', approvalId: f.approvalId, approvalTitle: f.approvalTitle, fileLink: f.fileLink, fileName: f.fileName, fileType: f.fileType };
+    return fileCardHtml(x, i, 1, 'remove-rec-file');
+  }).join('') + '</div>' : '<p class="hint">No files. Add one if every post in the series uses the same image.</p>';
+}
+function redrawRecFiles() { var el = $('rf-files'); if (el) el.innerHTML = recFilesHtml(); }
+function addRecAttachment(f) { drawer.recAttachments = (drawer.recAttachments || []).concat([f]); redrawRecFiles(); }
 
 function recurrenceFormHtml(r, pre, fromContentId) {
   var start = pre.publishDate || S.meta.today, startDow = parseIso(start).getDay();
@@ -1444,7 +1554,10 @@ function recurrenceFormHtml(r, pre, fromContentId) {
     + '<div class="field"><label for="rf-instr">Drafting instructions for each post</label>'
     +   '<textarea id="rf-instr" name="draftInstructions" class="pl-instr" placeholder="Leave empty to use the event’s">'+esc((r && r.drafting && r.drafting.instructions) || (pre.drafting && pre.drafting.instructions) || '')+'</textarea>'
     +   '<div class="hint">For posts that need different drafting from the rest of their event, like the Saturday invite.</div></div>'
-    + '<div class="field"><span class="lbl">Media each time</span><div id="rf-tpl">'+(v.mediaTemplate || []).map(tplRowHtml).join('')+'</div>'
+    + '<div class="field"><span class="lbl">Media for every post</span><div id="rf-files">'+recFilesHtml()+'</div>'
+    +   attachControlsHtml('rec')
+    +   '<div class="hint">Each week gets a copy and can swap it for that week only.</div></div>'
+    + '<div class="field"><span class="lbl">To collect each time</span><div id="rf-tpl">'+(v.mediaTemplate || []).map(tplRowHtml).join('')+'</div>'
     +   '<button class="btn-sm" type="button" data-act="add-tpl-row">Add something to capture</button>'
     +   (r ? '<div class="hint">Changes reach upcoming posts nobody has started on. Media someone added or already collected stays.</div>' : '')+'</div>'
     + '<label class="check pl-nomedia"><input type="checkbox" name="noMediaNeeded" data-act="no-media"'+(v.noMediaNeeded ? ' checked' : '')+'> No media needed (text-only posts)</label>'
@@ -1501,6 +1614,7 @@ function saveRecurrence(form) {
     platforms: fd.getAll('platforms'), publishTime: fd.get('publishTime') || null,
     ownerEmail: (fd.get('ownerEmail') || '').trim(), noMediaNeeded: fd.get('noMediaNeeded') === 'on',
     rule: readRule(form), fromContentId: form.getAttribute('data-from') || undefined,
+    attachments: drawer.recAttachments || [],
     drafting: (function(){
       var d = { instructions: (fd.get('draftInstructions') || '').trim() };
       var src = JSON.parse(form.getAttribute('data-source') || 'null');
@@ -1808,10 +1922,22 @@ document.addEventListener('click', function(e){
     case 'pick-approval': openApprovalPicker(el.closest('[data-media]')); break;
     case 'close-picker': el.closest('.pl-picker').hidden = true; break;
     case 'choose-approval':
-      // A signed-off file is the finished file, so the item is done.
-      mediaChange(el.closest('[data-media]').getAttribute('data-media'),
-        { approvalId: Number(el.getAttribute('data-approval')), approvalTitle: el.getAttribute('data-title'), status: 'edited' });
+      var picked = { approvalId: Number(el.getAttribute('data-approval')), approvalTitle: el.getAttribute('data-title') };
+      var forItem = el.closest('[data-media]'), attachHost = el.closest('[data-attach]');
+      if (forItem) {
+        // A signed-off file is the finished file, so the item is done.
+        mediaChange(forItem.getAttribute('data-media'), { approvalId: picked.approvalId, approvalTitle: picked.approvalTitle, status: 'edited' });
+      } else if (attachHost && attachHost.getAttribute('data-target') === 'rec') {
+        addRecAttachment(picked); el.closest('.pl-picker').hidden = true;
+      } else {
+        addAttachment(picked);
+      }
       break;
+    case 'attach-approval': openApprovalPicker(el.closest('[data-attach]')); break;
+    case 'attach-upload': el.closest('[data-attach]').querySelector('[data-upload-attach]').click(); break;
+    case 'move-file': moveFile(Array.prototype.indexOf.call(el.closest('.pl-files').children, el.closest('.pl-filecard')), Number(el.getAttribute('data-dir'))); break;
+    case 'remove-file': removeFile(Number(el.getAttribute('data-i'))); break;
+    case 'remove-rec-file': drawer.recAttachments.splice(Number(el.getAttribute('data-i')), 1); redrawRecFiles(); break;
     case 'upload-file': el.closest('[data-media]').querySelector('[data-upload]').click(); break;
     case 'clear-file':
       mediaChange(el.closest('[data-media]').getAttribute('data-media'), { fileLink: '', fileName: '', fileType: '' });
@@ -1851,6 +1977,12 @@ document.addEventListener('change', function(e){
   if (el.hasAttribute('data-mfield')) return saveMediaField(el.closest('[data-media]'), el);
   if (el.hasAttribute('data-mcollect')) return toggleCollected(el.closest('[data-media]'), el.checked);
   if (el.hasAttribute('data-upload')) return uploadMediaFile(el.closest('[data-media]'), el);
+  if (el.hasAttribute('data-upload-attach')) {
+    var host = el.closest('[data-attach]');
+    return uploadFile(el, host.querySelector('[data-act=attach-upload]')).then(function(f){
+      if (host.getAttribute('data-target') === 'rec') addRecAttachment(f); else addAttachment(f);
+    }).catch(function(){ /* shown */ });
+  }
   if (act === 'no-media' || act === 'platform') {
     var f = el.closest('form');
     if (f.getAttribute('data-form') === 'content') return act === 'no-media' ? applyImageRule('no-media') : refreshCaptionUi();

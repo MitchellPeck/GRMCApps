@@ -42,6 +42,8 @@ export interface ContentRow {
   drafting: Override; sourceRef: SourceRef | null; phase: string;
   seriesId: string | null; postIdx: number | null; draftId: number | null; draftKey: string;
   mediaTotal: number; mediaDone: number;
+  /** Files added straight to the post (not things to collect). */
+  attachmentCount: number;
   recurrenceId: string | null; occurrenceDate: string | null; detached: boolean;
 }
 
@@ -49,7 +51,7 @@ export interface MediaRow {
   id: string; contentItemId: string; description: string; type: string;
   gatherDate: string | null; gatherLocation: string; assigneeEmail: string; status: MediaStatus;
   fileLink: string; notes: string; approvalId: number | null; approvalTitle: string;
-  fileName: string; fileType: string;
+  fileName: string; fileType: string; kind: "collect" | "attachment"; position: number;
   itemTitle: string; itemPublishDate: string | null; itemStatus: ContentStatus;
   eventId: string | null; eventName: string; eventColor: string;
 }
@@ -78,7 +80,7 @@ function contentOf(r: any): ContentRow {
     drafting: r.drafting || {}, sourceRef: r.source_ref ?? null, phase: r.phase || "", seriesId: r.series_id,
     postIdx: r.post_idx == null ? null : Number(r.post_idx),
     draftId: r.draft_id == null ? null : Number(r.draft_id), draftKey: r.draft_key,
-    mediaTotal: Number(r.media_total || 0), mediaDone: Number(r.media_done || 0),
+    mediaTotal: Number(r.media_total || 0), mediaDone: Number(r.media_done || 0), attachmentCount: Number(r.attachment_count || 0),
     recurrenceId: r.recurrence_id ?? null, occurrenceDate: r.occurrence_date ?? null, detached: !!r.detached,
   };
 }
@@ -89,7 +91,7 @@ function mediaOf(r: any): MediaRow {
     gatherDate: r.gather_date, gatherLocation: r.gather_location, assigneeEmail: r.assignee_email,
     status: r.status, fileLink: r.file_link, notes: r.notes,
     approvalId: r.approval_id ?? null, approvalTitle: r.approval_title || "",
-    fileName: r.file_name || "", fileType: r.file_type || "",
+    fileName: r.file_name || "", fileType: r.file_type || "", kind: r.kind || "collect", position: Number(r.position || 0),
     itemTitle: r.item_title || "", itemPublishDate: r.item_publish_date ?? null, itemStatus: r.item_status,
     eventId: r.event_id ?? null, eventName: r.event_name || "", eventColor: r.event_color || "",
   };
@@ -97,12 +99,14 @@ function mediaOf(r: any): MediaRow {
 
 const CONTENT_SELECT = `
   SELECT ci.*, e.name AS event_name, e.color AS event_color, e.kind AS event_kind,
-         COALESCE(m.total, 0) AS media_total, COALESCE(m.done, 0) AS media_done
+         COALESCE(m.total, 0) AS media_total, COALESCE(m.done, 0) AS media_done, COALESCE(m.attached, 0) AS attachment_count
     FROM content_items ci
     LEFT JOIN events e ON e.id = ci.event_id
     LEFT JOIN (
-      SELECT content_item_id, count(*) AS total,
-             count(*) FILTER (WHERE status IN ('captured','edited')) AS done
+      SELECT content_item_id,
+             count(*) FILTER (WHERE kind = 'collect') AS total,
+             count(*) FILTER (WHERE kind = 'collect' AND status IN ('captured','edited')) AS done,
+             count(*) FILTER (WHERE kind = 'attachment') AS attached
         FROM media_assets GROUP BY content_item_id
     ) m ON m.content_item_id = ci.id`;
 
@@ -388,6 +392,8 @@ export interface MediaFilters {
   unscheduled?: boolean; contentItemId?: string; ids?: string[]; includeCancelled?: boolean;
 }
 
+/** One post's media in its Media-field order; elsewhere media means things to collect. */
+
 export async function listMedia(db: Db, f: MediaFilters): Promise<MediaRow[]> {
   const where: string[] = [];
   const vals: unknown[] = [];
@@ -401,9 +407,12 @@ export async function listMedia(db: Db, f: MediaFilters): Promise<MediaRow[]> {
   if (f.contentItemId) add("ma.content_item_id = ?", f.contentItemId);
   if (f.ids) add("ma.id = ANY(?)", f.ids);
   if (!f.includeCancelled && !f.contentItemId && !f.eventId) where.push("ci.status <> 'cancelled'");
+  // Attachments aren't things to gather: capture calendars, My work, event
+  // tables and gap alerts never see them. A post's own media includes them.
+  if (!f.contentItemId) where.push("ma.kind = 'collect'");
+  const order = f.contentItemId ? "ma.position, ma.created_at" : "ma.gather_date NULLS LAST, ci.publish_date NULLS LAST, ma.created_at";
   const r = await db.query(
-    `${MEDIA_SELECT} ${where.length ? "WHERE " + where.join(" AND ") : ""}
-      ORDER BY ma.gather_date NULLS LAST, ci.publish_date NULLS LAST, ma.created_at`,
+    `${MEDIA_SELECT} ${where.length ? "WHERE " + where.join(" AND ") : ""} ORDER BY ${order}`,
     vals,
   );
   return r.rows.map(mediaOf);
@@ -418,6 +427,7 @@ const MEDIA_COLUMNS: Record<string, string> = {
   description: "description", type: "type", gatherDate: "gather_date", gatherLocation: "gather_location",
   assigneeEmail: "assignee_email", status: "status", fileLink: "file_link", notes: "notes",
   approvalId: "approval_id", approvalTitle: "approval_title", fileName: "file_name", fileType: "file_type",
+  position: "position",
 };
 
 export async function createMedia(
@@ -425,15 +435,24 @@ export async function createMedia(
 ): Promise<Result<{ media: MediaRow; warnings: string[] }>> {
   const item = await getContentRow(db, contentItemId);
   if (!item) return fail("Post not found.");
-  const status = resolveMediaStatus({ status: "needed", gatherDate: null, fileLink: "", approvalId: null }, input);
+  const attachment = input.kind === "attachment";
+  if (attachment) {
+    // An attachment is its file, named after it unless given a name.
+    if (!input.approvalId && !input.fileLink) return fail("Attach a file: choose one from Approvals or upload it.");
+    input = { ...input, description: input.description || input.approvalTitle || input.fileName || "Attached file" };
+  }
+  const status = attachment ? { ok: true as const, value: "edited" as MediaStatus }
+    : resolveMediaStatus({ status: "needed", gatherDate: null, fileLink: "", approvalId: null }, input);
   if (!status.ok) return status;
+  const pos = (await db.query("SELECT COALESCE(max(position), -1) + 1 AS p FROM media_assets WHERE content_item_id = $1", [contentItemId])).rows[0].p;
   const r = await db.query(
     `INSERT INTO media_assets (content_item_id, description, type, gather_date, gather_location,
-                               assignee_email, status, file_link, notes, approval_id, approval_title, file_name, file_type)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
+                               assignee_email, status, file_link, notes, approval_id, approval_title, file_name, file_type, kind, position)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id`,
     [contentItemId, input.description, input.type || "photo", input.gatherDate ?? null,
      input.gatherLocation || "", input.assigneeEmail || "", status.value, input.fileLink || "", input.notes || "",
-     input.approvalId ?? null, input.approvalTitle || "", input.fileName || "", input.fileType || ""],
+     input.approvalId ?? null, input.approvalTitle || "", input.fileName || "", input.fileType || "",
+     attachment ? "attachment" : "collect", pos],
   );
   const media = (await getMediaRow(db, r.rows[0].id))!;
   const w = lateMediaWarning(media.gatherDate, media.itemPublishDate);
@@ -483,7 +502,7 @@ export async function dashboardSummary(db: Db, today: string) {
 
 export async function dashboardGaps(db: Db, today: string): Promise<{ today: string; gaps: Gap[] }> {
   const items = (await listContent(db, {})).map((i) => ({
-    id: i.id, publishDate: i.publishDate, status: i.status, noMediaNeeded: i.noMediaNeeded, mediaCount: i.mediaTotal,
+    id: i.id, publishDate: i.publishDate, status: i.status, noMediaNeeded: i.noMediaNeeded, mediaCount: i.mediaTotal + i.attachmentCount,
   }));
   const media = (await listMedia(db, {})).map((m) => ({
     id: m.id, contentItemId: m.contentItemId, gatherDate: m.gatherDate, status: m.status,
@@ -537,10 +556,16 @@ export async function duplicateEvent(
     const media = await db.query("SELECT * FROM media_assets WHERE content_item_id = $1 ORDER BY created_at", [it.id]);
     for (const m of media.rows) {
       const gather = shift(m.gather_date, offset);
+      // Attachments are files, so they come along as they are; things to
+      // collect start over.
+      const att = m.kind === "attachment";
       await db.query(
-        `INSERT INTO media_assets (content_item_id, description, type, gather_date, gather_location, assignee_email, status, notes)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-        [r.rows[0].id, m.description, m.type, gather, m.gather_location, m.assignee_email, gather ? "scheduled" : "needed", m.notes],
+        `INSERT INTO media_assets (content_item_id, description, type, gather_date, gather_location, assignee_email, status, notes,
+                                   kind, position, approval_id, approval_title, file_link, file_name, file_type)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+        [r.rows[0].id, m.description, m.type, att ? null : gather, m.gather_location, m.assignee_email,
+         att ? "edited" : gather ? "scheduled" : "needed", m.notes, m.kind, m.position,
+         att ? m.approval_id : null, att ? m.approval_title : "", att ? m.file_link : "", att ? m.file_name : "", att ? m.file_type : ""],
       );
       mediaCount++;
     }

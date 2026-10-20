@@ -6,7 +6,8 @@ export interface PayloadInput {
   networks: string[];
   dateTime: string;
   timezone: string;
-  mediaUrl: string;
+  /** Every image (or video) to attach, in order; several make a carousel. */
+  mediaUrls: string[];
 }
 export interface SchedulerPayload {
   publicationDate: { dateTime: string; timezone: string };
@@ -33,7 +34,7 @@ export function buildSchedulerPayload(i: PayloadInput): SchedulerPayload {
     draft: !autoPublish,
   };
   if (i.networks.includes("facebook")) payload.facebookData = { type: "POST" };
-  if (i.mediaUrl) payload.media = [i.mediaUrl];
+  if (i.mediaUrls.length) payload.media = i.mediaUrls.slice();
   return payload;
 }
 

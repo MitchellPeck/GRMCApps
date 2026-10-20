@@ -4,11 +4,11 @@ import { Pool } from "pg";
 import { SCHEMA_SQL } from "./schema";
 import {
   createContent, createEvent, createMedia, dashboardGaps, deleteContent, deleteEvent, getContent,
-  getEvent, listContent, listMedia, updateContent, updateEvent, updateMedia,
+  deleteMedia, getEvent, listContent, listMedia, updateContent, updateEvent, updateMedia,
 } from "./pipeline/repo";
 import { BACKFILL_SETTING, backfillOnce, markSentToMetricool } from "./pipeline/sync";
 import { RUN_EVENTS } from "./pipeline/config";
-import { applyImageRule, createRecurrence, deleteRecurrence, materialize, seedRunRecurrences, updateRecurrence } from "./pipeline/recurring";
+import { applyImageRule, createRecurrence, deleteRecurrence, getRecurrence, materialize, seedRunRecurrences, updateRecurrence } from "./pipeline/recurring";
 import { duplicateEvent } from "./pipeline/repo";
 import { Rule } from "./pipeline/recurrence";
 
@@ -695,4 +695,51 @@ test("an uploaded file is stored in R2 and attaches to media as its final file",
   } finally {
     await pool.query("DELETE FROM settings WHERE key LIKE 'r2_%'");
   }
+});
+
+// ── The post's Media field: attachments, apart from things to collect ──
+
+test("an attachment is final media, but never a capture to-do", async () => {
+  const p = await createContent(pool, { title: "Attach only", publishDate: "2026-11-24", platforms: ["instagram"] }, "me@x.org");
+  assert.ok(p.ok);
+  const bad = await createMedia(pool, p.value.id, { kind: "attachment" });
+  assert.ok(!bad.ok, "an attachment needs its file");
+  const a = await createMedia(pool, p.value.id, { kind: "attachment", approvalId: 12, approvalTitle: "Kids Camp banner" });
+  assert.ok(a.ok);
+  assert.equal(a.value.media.status, "edited");
+  assert.equal(a.value.media.kind, "attachment");
+  assert.equal(a.value.media.description, "Kids Camp banner", "named after its file");
+  const b = await createMedia(pool, p.value.id, { kind: "attachment", fileLink: "https://media.example/media/x.jpg", fileName: "x.jpg", fileType: "image" });
+  assert.ok(b.ok);
+  assert.ok(b.value.media.position > a.value.media.position, "added to the end");
+
+  assert.ok(!(await listMedia(pool, {})).some((m) => m.contentItemId === p.value.id), "not on capture calendars, My work or gaps");
+  assert.equal((await listMedia(pool, { contentItemId: p.value.id })).length, 2, "but part of the post");
+  const row = (await listContent(pool, { ids: [p.value.id] }))[0];
+  assert.deepEqual([row.mediaTotal, row.attachmentCount], [0, 2]);
+  const { gaps } = await dashboardGaps(pool, REF);
+  assert.ok(!gaps.find((g) => g.key === "no-media")!.ids.includes(p.value.id), "attached media counts as media");
+  assert.ok((await updateContent(pool, p.value.id, { status: "ready" })).ok, "and can be Ready");
+});
+
+test("a recurring post's image is copied to each week, and a week can swap its own", async () => {
+  const r = await createRecurrence(pool, { title: "Weekly verse card", platforms: ["instagram", "facebook"], rule: weekly([4]),
+    attachments: [{ approvalId: 21, approvalTitle: "Verse card" }] }, "me@x.org", REF);
+  assert.ok(r.ok);
+  const weeks = await occ(r.value.id);
+  const filesOf = async (id: string) => (await listMedia(pool, { contentItemId: id })).map((m) => [m.kind, m.approvalId, m.fileLink].join("|"));
+  assert.deepEqual(await filesOf(weeks[0].id), ["attachment|21|"]);
+  assert.deepEqual(await filesOf(weeks[3].id), ["attachment|21|"]);
+
+  // Week 2 swaps its image for one of its own.
+  const own = (await listMedia(pool, { contentItemId: weeks[1].id }))[0];
+  await deleteMedia(pool, own.id);
+  await createMedia(pool, weeks[1].id, { kind: "attachment", approvalId: 99, approvalTitle: "Special" });
+
+  const upd = await updateRecurrence(pool, r.value.id, { attachments: [{ approvalId: 22, approvalTitle: "New verse card" }] }, REF);
+  assert.ok(upd.ok);
+  assert.deepEqual(await filesOf(weeks[0].id), ["attachment|22|"], "untouched weeks follow the series");
+  assert.deepEqual(await filesOf(weeks[1].id), ["attachment|99|"], "the swapped week keeps its own");
+  const again = (await getRecurrence(pool, r.value.id, REF))!;
+  assert.deepEqual(again.attachments.map((x) => x.approvalId), [22]);
 });

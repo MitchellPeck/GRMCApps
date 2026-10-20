@@ -179,4 +179,12 @@ CREATE INDEX IF NOT EXISTS post_drafts_item_idx ON post_drafts (content_item_id)
 -- A file uploaded straight to a media item (stored in R2; file_link is its URL).
 ALTER TABLE media_assets ADD COLUMN IF NOT EXISTS file_name text NOT NULL DEFAULT '';
 ALTER TABLE media_assets ADD COLUMN IF NOT EXISTS file_type text NOT NULL DEFAULT '';
+
+-- The post's Media field: "collect" items are things to gather (the checklist);
+-- "attachment" items are files added straight to the post. Both carry an
+-- order, which is the order a Metricool send uses.
+ALTER TABLE media_assets ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'collect';
+ALTER TABLE media_assets ADD COLUMN IF NOT EXISTS position integer NOT NULL DEFAULT 0;
+-- A recurring post's files (e.g. the same image every week), copied to each week.
+ALTER TABLE recurrences ADD COLUMN IF NOT EXISTS attachments jsonb NOT NULL DEFAULT '[]';
 `;

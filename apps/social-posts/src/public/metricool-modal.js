@@ -5,6 +5,8 @@
 // opts: { date, time, networks: ['facebook','instagram','twitter'],
 //         texts: { facebook: '…', instagram: '…', twitter: '…' }  — a different
 //                text per network; each distinct text is sent as its own post,
+//         files: [{ label, approvedImageId, imageUrl }] — the post's Media field,
+//                in order; each is listed ticked, and all ticked ones are sent,
 //         approvedImageId, imageUrl (a public image to attach),
 //         sourceType, sourceRef, contentItemId, onSent(res) }
 
@@ -36,6 +38,8 @@ document.getElementById('mc-date').addEventListener('change', function(){ update
 // Per-network texts render here, in place of the single text box, when a
 // caller has a different caption for each network.
 document.getElementById('mc-text').closest('.field').insertAdjacentHTML('afterend', '<div id="mc-texts"></div>');
+// The post's files, when the caller has them (the pipeline's Media field).
+document.getElementById('mc-image-area').insertAdjacentHTML('beforebegin', '<div id="mc-files"></div>');
 var MC_NETWORK_LABELS = { facebook: 'Facebook', instagram: 'Instagram', twitter: 'X' };
 
 var _mcCtx = { sourceType:'', sourceRef:'', contentItemId:'' };
@@ -92,6 +96,12 @@ function openMetricool(text, opts){
   if (!window._mcDefaults) loadMetricoolDefaults();
   document.getElementById('mc-text').value = text || '';
   _mcCtx.texts = opts.texts || null;
+  _mcCtx.files = opts.files && opts.files.length ? opts.files : null;
+  document.getElementById('mc-files').innerHTML = !_mcCtx.files ? '' : '<div class="field"><label>Images and videos (sent in this order)</label>'
+    + _mcCtx.files.map(function(f, i){
+        return '<label class="check" style="display:flex"><input type="checkbox" data-mcfile="'+i+'" checked> '+mcEsc(f.label)+'</label>';
+      }).join('') + '</div>';
+  document.getElementById('mc-image-area').style.display = _mcCtx.files ? 'none' : '';
   document.getElementById('mc-text').closest('.field').style.display = opts.texts ? 'none' : '';
   document.getElementById('mc-texts').innerHTML = !opts.texts ? '' : Object.keys(opts.texts).map(function(n){
     return '<div class="field"><label for="mc-text-'+n+'">'+mcEsc(MC_NETWORK_LABELS[n] || n)+' text</label>'
@@ -133,6 +143,11 @@ function closeMetricool(){ document.getElementById('mc-modal').style.display='no
 // are read into a data URL here; the server puts them on R2 like it already
 // does for approved images.
 function readMetricoolImage(){
+  if (_mcCtx.files) {
+    var media = _mcCtx.files.filter(function(_f, i){ return document.querySelector('[data-mcfile="'+i+'"]').checked; })
+      .map(function(f){ return f.approvedImageId ? { approvedImageId: f.approvedImageId } : { imageUrl: f.imageUrl }; });
+    return Promise.resolve({ media: media });
+  }
   var mode=document.getElementById('mc-image-source').value;
   if(mode==='approved') return Promise.resolve({ approvedImageId: document.getElementById('mc-approved').value });
   if(mode==='url') return Promise.resolve({ imageUrl: document.getElementById('mc-imgurl').value.trim() });

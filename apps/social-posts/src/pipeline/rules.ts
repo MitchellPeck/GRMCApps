@@ -180,6 +180,8 @@ export interface MediaInput {
   approvalId?: number | null; approvalTitle?: string;
   /** An uploaded file's original name and kind ("image" | "video"); "" when the link was pasted. */
   fileName?: string; fileType?: string;
+  /** "collect" (a thing to gather) or "attachment" (a file added straight to the post). */
+  kind?: "collect" | "attachment"; position?: number;
 }
 
 export function parseMediaInput(raw: unknown, mode: "create" | "patch"): Result<MediaInput> {
@@ -195,6 +197,8 @@ export function parseMediaInput(raw: unknown, mode: "create" | "patch"): Result<
     ["approvalId", approvalId],
     ["approvalTitle", optText(body, "approvalTitle", "Approved file title", 300)],
     ["fileName", optText(body, "fileName", "File name", 200)],
+    ["kind", optEnum(body, "kind", "Media kind", ["collect", "attachment"] as const)],
+    ["position", "position" in body ? (Number.isInteger(body.position) ? { ok: true, value: body.position as number } : fail("Position must be a whole number.")) : undefined],
     ["fileType", "fileType" in body ? (["", "image", "video"].includes(body.fileType as string)
       ? { ok: true, value: body.fileType as string } : fail("File type must be image or video.")) : undefined],
     ["description", optText(body, "description", "Description", 500)],
@@ -210,7 +214,9 @@ export function parseMediaInput(raw: unknown, mode: "create" | "patch"): Result<
   if (typeof out.fileLink === "string" && out.fileLink && !/^https?:\/\//i.test(out.fileLink)) {
     return fail("File link must start with http:// or https://.");
   }
-  if (("description" in out || mode === "create") && !out.description) return fail("Describe what needs collecting.");
+  // An attachment is named after its file (createMedia sees to that), so only
+  // things to collect need a description.
+  if (("description" in out || (mode === "create" && out.kind !== "attachment")) && !out.description) return fail("Describe what needs collecting.");
   return { ok: true, value: out as MediaInput };
 }
 

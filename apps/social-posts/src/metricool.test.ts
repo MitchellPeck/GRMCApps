@@ -6,7 +6,7 @@ import { decodeImageDataUrl } from "./r2";
 test("buildSchedulerPayload shapes the Metricool body", () => {
   const p = buildSchedulerPayload({
     text: "Hello", networks: ["facebook", "instagram"],
-    dateTime: "2026-06-15T09:00:00", timezone: "America/New_York", mediaUrl: "",
+    dateTime: "2026-06-15T09:00:00", timezone: "America/New_York", mediaUrls: [],
   });
   assert.deepEqual(p.publicationDate, { dateTime: "2026-06-15T09:00:00", timezone: "America/New_York" });
   assert.deepEqual(p.providers, [{ network: "facebook" }, { network: "instagram" }]);
@@ -20,24 +20,24 @@ test("buildSchedulerPayload shapes the Metricool body", () => {
 // post lands in the planner and never goes anywhere. Instagram has to publish
 // itself, so selecting it turns publishing on for the whole post.
 test("buildSchedulerPayload auto-publishes when Instagram is selected", () => {
-  const ig = buildSchedulerPayload({ text: "x", networks: ["facebook", "instagram"], dateTime: "2026-06-15T09:00:00", timezone: "America/New_York", mediaUrl: "" });
+  const ig = buildSchedulerPayload({ text: "x", networks: ["facebook", "instagram"], dateTime: "2026-06-15T09:00:00", timezone: "America/New_York", mediaUrls: [] });
   assert.equal(ig.autoPublish, true);
   assert.equal(ig.draft, false);
 });
 
 test("buildSchedulerPayload leaves non-Instagram sends as approvable drafts", () => {
-  const fb = buildSchedulerPayload({ text: "x", networks: ["facebook", "twitter"], dateTime: "2026-06-15T09:00:00", timezone: "America/New_York", mediaUrl: "" });
+  const fb = buildSchedulerPayload({ text: "x", networks: ["facebook", "twitter"], dateTime: "2026-06-15T09:00:00", timezone: "America/New_York", mediaUrls: [] });
   assert.equal(fb.autoPublish, false);
   assert.equal(fb.draft, true);
 });
 
 test("buildSchedulerPayload includes media when given a url", () => {
-  const p = buildSchedulerPayload({ text: "x", networks: ["instagram"], dateTime: "2026-06-15T09:00:00", timezone: "America/New_York", mediaUrl: "https://pub/x.jpg" });
+  const p = buildSchedulerPayload({ text: "x", networks: ["instagram"], dateTime: "2026-06-15T09:00:00", timezone: "America/New_York", mediaUrls: ["https://pub/x.jpg"] });
   assert.deepEqual(p.media, ["https://pub/x.jpg"]);
 });
 
 test("buildSchedulerPayload carries X through as Metricool's twitter provider", () => {
-  const p = buildSchedulerPayload({ text: "x", networks: ["facebook", "instagram", "twitter"], dateTime: "2026-06-15T09:00:00", timezone: "America/New_York", mediaUrl: "" });
+  const p = buildSchedulerPayload({ text: "x", networks: ["facebook", "instagram", "twitter"], dateTime: "2026-06-15T09:00:00", timezone: "America/New_York", mediaUrls: [] });
   assert.deepEqual(p.providers, [{ network: "facebook" }, { network: "instagram" }, { network: "twitter" }]);
 });
 
@@ -78,4 +78,9 @@ test("decodeImageDataUrl accepts image data urls and rejects anything else", () 
   assert.throws(() => decodeImageDataUrl("data:application/pdf;base64,AAAA"), /must be an image/);
   assert.throws(() => decodeImageDataUrl("https://example.com/x.jpg"), /must be an image/);
   assert.throws(() => decodeImageDataUrl(""), /must be an image/);
+});
+
+test("buildSchedulerPayload sends every image, in order, for a carousel", () => {
+  const p = buildSchedulerPayload({ text: "x", networks: ["instagram"], dateTime: "2026-06-15T09:00:00", timezone: "America/New_York", mediaUrls: ["https://a/1.jpg", "https://a/2.jpg"] });
+  assert.deepEqual(p.media, ["https://a/1.jpg", "https://a/2.jpg"]);
 });

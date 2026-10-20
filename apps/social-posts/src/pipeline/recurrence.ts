@@ -121,11 +121,15 @@ export interface MediaTemplateItem {
   offsetDays: number;
 }
 
+/** A file every occurrence carries, e.g. the same image each week. */
+export interface AttachmentTemplate { approvalId?: number; approvalTitle?: string; fileLink?: string; fileName?: string; fileType?: string }
+
 export interface RecurrenceInput {
   title?: string; brief?: string; eventId?: string | null; platforms?: string[];
   publishTime?: string | null; ownerEmail?: string; noMediaNeeded?: boolean;
   mediaTemplate?: MediaTemplateItem[]; active?: boolean;
   drafting?: Override;
+  attachments?: AttachmentTemplate[];
   rule?: Rule;
 }
 
@@ -204,6 +208,20 @@ export function parseRecurrenceInput(raw: unknown, mode: "create" | "patch"): Re
       items.push({ description: description.slice(0, 500), type: m.type, assigneeEmail, offsetDays });
     }
     out.mediaTemplate = items;
+  }
+  if ("attachments" in b) {
+    if (!Array.isArray(b.attachments)) return fail("The media list is malformed.");
+    const list: AttachmentTemplate[] = [];
+    for (const a of b.attachments) {
+      const approvalId = Number(a?.approvalId);
+      if (Number.isInteger(approvalId) && approvalId > 0) {
+        list.push({ approvalId, approvalTitle: String(a.approvalTitle ?? "").slice(0, 300) });
+      } else if (typeof a?.fileLink === "string" && /^https?:\/\//i.test(a.fileLink)) {
+        list.push({ fileLink: a.fileLink.slice(0, 2000), fileName: String(a.fileName ?? "").slice(0, 200),
+                    fileType: ["image", "video"].includes(a.fileType) ? a.fileType : "" });
+      } else return fail("Each file needs to come from Approvals or an upload.");
+    }
+    out.attachments = list;
   }
   if ("drafting" in b) {
     const d = parseOverride(b.drafting);
