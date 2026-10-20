@@ -1,15 +1,20 @@
 import { createHash } from "node:crypto";
-import { ActionItem } from "./claude";
+import { ActionItem, ReportBodyInput } from "./claude";
 
-// The minutes are assembled here, in code, from what the per-item summarizer
-// already wrote. A second Claude pass over every transcript was slow and, on a
-// long meeting, ran past its token limit and failed; this cannot do either.
+// The minutes are written by Claude from every item's transcript, notes and
+// summary, so the write-up is organized across the whole meeting rather than
+// stitched together item by item. The parts that must be exact (title,
+// attendance, guests, the action item list) are laid out here, in code.
 
 export interface ReportItemInput {
   id: number;
   title: string;
+  description: string;
   presenters: string[];
+  guestPresenters: string[];
   summary: string;
+  notes: string;
+  transcript: string;
   actionItems: ActionItem[];
   hasContent: boolean; // a transcript or typed notes exist
 }
@@ -46,19 +51,39 @@ function listOrNone(names: string[]): string {
   return names.length ? names.join(", ") : "None recorded";
 }
 
-function attendanceLines(input: ReportInput): string[] {
-  const lines = [`**Present:** ${listOrNone(input.present)}`];
-  if (input.guests.length) lines.push(`**Guests:** ${input.guests.map(guestLabel).join(", ")}`);
-  lines.push(`**Absent:** ${input.absent.length ? input.absent.join(", ") : "None"}`);
+// Library presenters, then guest presenters marked as such.
+export function presentedBy(it: Pick<ReportItemInput, "presenters" | "guestPresenters">): string {
+  return [...it.presenters, ...it.guestPresenters.map((n) => `${n} (Guest)`)].join(", ");
+}
+
+function headerLines(input: ReportInput): string[] {
+  const meta = [
+    input.meetingDate ? `**Date:** ${input.meetingDate}` : "",
+    input.location ? `**Location:** ${input.location}` : "",
+  ].filter(Boolean).join(" · ");
+  return [`# ${input.title}`, ...(meta ? [meta] : [])];
+}
+
+// Guests get their own section at the top, with what each presented.
+function guestLines(input: ReportInput): string[] {
+  if (!input.guests.length) return [];
+  const lines = ["## Guests"];
+  for (const g of input.guests) {
+    const key = g.name.trim().toLowerCase();
+    const items = input.items
+      .filter((it) => it.guestPresenters.some((n) => n.trim().toLowerCase() === key))
+      .map((it) => it.title);
+    lines.push(`- **${g.name}**${g.title ? ` — ${g.title}` : ""}${items.length ? ` · Presented: ${items.join(", ")}` : ""}`);
+  }
   return lines;
 }
 
-function itemLines(it: ReportItemInput, n: number): string[] {
-  const lines = [`### ${n}. ${it.title}`];
-  if (it.presenters.length) lines.push(`**Presented by:** ${it.presenters.join(", ")}`);
-  if (it.summary.trim()) lines.push(...it.summary.trim().split(/\r?\n/).filter((l) => l.trim()));
-  else lines.push(it.hasContent ? "Summary not available." : "No discussion recorded.");
-  return lines;
+function attendanceLines(input: ReportInput): string[] {
+  return [
+    "## Attendance",
+    `**Present:** ${listOrNone(input.present)}`,
+    `**Absent:** ${input.absent.length ? input.absent.join(", ") : "None"}`,
+  ];
 }
 
 // Every action item across the meeting, tagged with the item it came from.
@@ -84,27 +109,59 @@ function hash(parts: string[]): string {
   return createHash("sha256").update(parts.join("\n")).digest("hex").slice(0, 16);
 }
 
-export function buildReport(input: ReportInput): BuiltReport {
-  const meta = [
-    input.meetingDate ? `**Date:** ${input.meetingDate}` : "",
-    input.location ? `**Location:** ${input.location}` : "",
-  ].filter(Boolean).join(" · ");
-  const header = [`# ${input.title}`, ...(meta ? [meta] : [])];
-  const attendance = attendanceLines(input);
-  const actions = consolidateActionItems(input.items);
-
-  const md: string[] = [...header, "", ...attendance, "", "## Agenda"];
-  const sources: ReportSources = { header: hash(header), attendance: hash(attendance) };
-  input.items.forEach((it, i) => {
-    const lines = itemLines(it, i + 1);
-    md.push("", ...lines);
+// Fingerprints of what a report is written from. Laid out as the earlier
+// code-assembled report was, so reports saved before stay comparable.
+export function reportSources(input: ReportInput): ReportSources {
+  const attendance = [`**Present:** ${listOrNone(input.present)}`];
+  if (input.guests.length) attendance.push(`**Guests:** ${input.guests.map(guestLabel).join(", ")}`);
+  attendance.push(`**Absent:** ${input.absent.length ? input.absent.join(", ") : "None"}`);
+  const sources: ReportSources = { header: hash(headerLines(input)), attendance: hash(attendance) };
+  for (const it of input.items) {
+    const by = presentedBy(it);
+    const lines = by ? [`**Presented by:** ${by}`] : [];
+    if (it.summary.trim()) lines.push(...it.summary.trim().split(/\r?\n/).filter((l) => l.trim()));
+    else lines.push(it.hasContent ? "Summary not available." : "No discussion recorded.");
     // Keyed by id with the position left out, so reordering alone does not
     // read as every item having changed.
-    sources[`item:${it.id}`] = hash([...lines.slice(1), it.title, JSON.stringify(it.actionItems)]);
-  });
-  md.push("", "## Action Items", ...(actions.length ? actions : ["None recorded."]));
+    sources[`item:${it.id}`] = hash([...lines, it.title, JSON.stringify(it.actionItems)]);
+  }
   sources.order = hash(input.items.map((it) => String(it.id)));
-  return { markdown: md.join("\n") + "\n", sources };
+  return sources;
+}
+
+// What Claude is given to write the body from.
+export function reportBodyInput(input: ReportInput): ReportBodyInput {
+  return {
+    title: input.title,
+    meetingDate: input.meetingDate,
+    location: input.location,
+    present: input.present,
+    guests: input.guests.map(guestLabel),
+    items: input.items.map((it) => ({
+      title: it.title,
+      description: it.description,
+      presentedBy: presentedBy(it),
+      summary: it.summary.trim(),
+      actionItems: it.actionItems,
+      notes: it.notes.trim(),
+      transcript: it.transcript.trim(),
+    })),
+  };
+}
+
+// The full report around Claude's body: header, guests, attendance, then the
+// body, then the consolidated action items.
+export function buildReport(input: ReportInput, body: string): BuiltReport {
+  const actions = consolidateActionItems(input.items);
+  const guests = guestLines(input);
+  const md: string[] = [
+    ...headerLines(input), "",
+    ...(guests.length ? [...guests, ""] : []),
+    ...attendanceLines(input), "",
+    body.trim(), "",
+    "## Action Items", ...(actions.length ? actions : ["None recorded."]),
+  ];
+  return { markdown: md.join("\n") + "\n", sources: reportSources(input) };
 }
 
 // What has changed since a report was generated, in words a person can act

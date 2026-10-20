@@ -55,9 +55,10 @@ export interface AgendaItem {
   speaker_stats: SpeakerStat[];
   transcript_source: string;
   presenter_ids: number[];
+  guest_presenter_ids: number[];
 }
 
-function mapItemRow(row: any, presenterIds: number[]): AgendaItem {
+function mapItemRow(row: any, presenterIds: number[], guestPresenterIds: number[]): AgendaItem {
   return {
     id: Number(row.id),
     meeting_id: Number(row.meeting_id),
@@ -78,6 +79,7 @@ function mapItemRow(row: any, presenterIds: number[]): AgendaItem {
     speaker_stats: speakerStats(Array.isArray(row.transcript_segments) ? row.transcript_segments : []),
     transcript_source: row.transcript_source ?? "",
     presenter_ids: presenterIds,
+    guest_presenter_ids: guestPresenterIds,
   };
 }
 
@@ -234,6 +236,25 @@ export async function removeGuest(pool: Pool, guestId: number): Promise<void> {
   await pool.query("DELETE FROM meeting_guests WHERE id = $1", [guestId]);
 }
 
+// An item's presenters by name: library people, then guests, each name once.
+export function itemPresenterNames(
+  item: Pick<AgendaItem, "presenter_ids" | "guest_presenter_ids">,
+  peopleNames: Map<number, string>,
+  guestNames: Map<number, string>
+): string[] {
+  const names = [
+    ...item.presenter_ids.map((id) => peopleNames.get(id) ?? ""),
+    ...item.guest_presenter_ids.map((id) => guestNames.get(id) ?? ""),
+  ].filter(Boolean);
+  const seen = new Set<string>();
+  return names.filter((n) => {
+    const k = n.trim().toLowerCase();
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+
 // Everyone who can be named as a speaker: library attendees, then guests, as
 // "Name (Title)" strings. A guest sharing an attendee's name is listed once.
 export async function presentPeople(pool: Pool, meetingId: number): Promise<Array<{ name: string; title: string }>> {
@@ -328,13 +349,22 @@ export async function listAgendaItems(pool: Pool, meetingId: number): Promise<Ag
     "SELECT item_id, person_id FROM agenda_item_presenters WHERE item_id = ANY($1)",
     [ids]
   );
-  const byItem = new Map<number, number[]>();
-  for (const row of pres.rows) {
-    const k = Number(row.item_id);
-    if (!byItem.has(k)) byItem.set(k, []);
-    byItem.get(k)!.push(Number(row.person_id));
-  }
-  return r.rows.map((row) => mapItemRow(row, byItem.get(Number(row.id)) ?? []));
+  const guestPres = await pool.query(
+    "SELECT item_id, guest_id FROM agenda_item_guest_presenters WHERE item_id = ANY($1) ORDER BY guest_id",
+    [ids]
+  );
+  const group = (rows: any[], col: string) => {
+    const byItem = new Map<number, number[]>();
+    for (const row of rows) {
+      const k = Number(row.item_id);
+      if (!byItem.has(k)) byItem.set(k, []);
+      byItem.get(k)!.push(Number(row[col]));
+    }
+    return byItem;
+  };
+  const people = group(pres.rows, "person_id");
+  const guests = group(guestPres.rows, "guest_id");
+  return r.rows.map((row) => mapItemRow(row, people.get(Number(row.id)) ?? [], guests.get(Number(row.id)) ?? []));
 }
 
 export async function getAgendaItem(pool: Pool, itemId: number): Promise<AgendaItem | null> {
@@ -342,11 +372,14 @@ export async function getAgendaItem(pool: Pool, itemId: number): Promise<AgendaI
   const row = r.rows[0];
   if (!row) return null;
   const pres = await pool.query("SELECT person_id FROM agenda_item_presenters WHERE item_id = $1", [itemId]);
-  return mapItemRow(row, pres.rows.map((p) => Number(p.person_id)));
+  const guestPres = await pool.query(
+    "SELECT guest_id FROM agenda_item_guest_presenters WHERE item_id = $1 ORDER BY guest_id", [itemId]
+  );
+  return mapItemRow(row, pres.rows.map((p) => Number(p.person_id)), guestPres.rows.map((g) => Number(g.guest_id)));
 }
 
-// Patch mutable fields on an agenda item. `presenterIds` (when provided)
-// replaces the presenter set. `appendTranscript` adds to the existing
+// Patch mutable fields on an agenda item. `presenterIds` and
+// `guestPresenterIds` (when provided) replace the respective presenter set. `appendTranscript` adds to the existing
 // transcript rather than overwriting (used by live speech chunks).
 export async function updateAgendaItem(
   pool: Pool,
@@ -363,6 +396,7 @@ export async function updateAgendaItem(
     summary?: string;
     actionItems?: ActionItem[];
     presenterIds?: number[];
+    guestPresenterIds?: number[];
     transcriptSource?: string;
     speakerOrder?: string[];
   }
@@ -410,6 +444,19 @@ export async function updateAgendaItem(
         await client.query(
           "INSERT INTO agenda_item_presenters (item_id, person_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
           [itemId, pid]
+        );
+      }
+    }
+    if (fields.guestPresenterIds !== undefined) {
+      const ids = [...new Set(fields.guestPresenterIds.filter((n) => Number.isFinite(n)))];
+      await client.query("DELETE FROM agenda_item_guest_presenters WHERE item_id = $1", [itemId]);
+      // Only this meeting's guests: an id from another meeting is ignored.
+      if (ids.length) {
+        await client.query(
+          `INSERT INTO agenda_item_guest_presenters (item_id, guest_id)
+           SELECT $1, id FROM meeting_guests WHERE meeting_id = $2 AND id = ANY($3)
+           ON CONFLICT DO NOTHING`,
+          [itemId, existing.meeting_id, ids]
         );
       }
     }

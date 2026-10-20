@@ -258,6 +258,7 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
       summary: b.summary,
       actionItems: Array.isArray(b.actionItems) ? b.actionItems : undefined,
       presenterIds: b.presenterIds ? (b.presenterIds as any[]).map(Number) : undefined,
+      guestPresenterIds: Array.isArray(b.guestPresenterIds) ? (b.guestPresenterIds as any[]).map(Number) : undefined,
     });
     if (!r.ok) { reply.code(r.status); return r; }
     if (contentChanged) await requestSummary(itemId, EDIT_SUMMARY_DELAY_MS);

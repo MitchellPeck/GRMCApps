@@ -1,6 +1,16 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { buildReport, consolidateActionItems, reportChanges, reportHtml, ReportInput } from "./report";
+import {
+  buildReport, consolidateActionItems, presentedBy, reportBodyInput, reportChanges, reportHtml,
+  ReportInput, ReportItemInput, reportSources,
+} from "./report";
+
+function item(over: Partial<ReportItemInput> & Pick<ReportItemInput, "id" | "title">): ReportItemInput {
+  return {
+    description: "", presenters: [], guestPresenters: [], summary: "", notes: "", transcript: "",
+    actionItems: [], hasContent: false, ...over,
+  };
+}
 
 function input(over: Partial<ReportInput> = {}): ReportInput {
   return {
@@ -11,68 +21,92 @@ function input(over: Partial<ReportInput> = {}): ReportInput {
     guests: [{ name: "Gina", title: "Architect" }],
     absent: ["Carl"],
     items: [
-      { id: 1, title: "Budget", presenters: ["Bob"], summary: "Reviewed Q2.\n- Shortfall of $2k", hasContent: true,
-        actionItems: [{ task: "Send figures", owner: "Bob" }, { task: "send figures", owner: "bob" }] },
-      { id: 2, title: "Missions", presenters: [], summary: "", hasContent: false, actionItems: [] },
+      item({ id: 1, title: "Budget", presenters: ["Bob"], summary: "Reviewed Q2.\n- Shortfall of $2k", hasContent: true,
+        transcript: "Bob: we are $2k short",
+        actionItems: [{ task: "Send figures", owner: "Bob" }, { task: "send figures", owner: "bob" }] }),
+      item({ id: 2, title: "Building", guestPresenters: ["Gina"], hasContent: true, notes: "Roof plans" }),
+      item({ id: 3, title: "Missions" }),
     ],
     ...over,
   };
 }
 
-test("buildReport lays out attendance, agenda and consolidated action items", () => {
-  const { markdown } = buildReport(input());
-  assert.match(markdown, /^# Board\n\*\*Date:\*\* 2026-04-01 · \*\*Location:\*\* Hall\n/);
-  assert.match(markdown, /\*\*Present:\*\* Alice, Bob/);
-  assert.match(markdown, /\*\*Guests:\*\* Gina \(Architect\)/);
-  assert.match(markdown, /\*\*Absent:\*\* Carl/);
-  assert.match(markdown, /### 1\. Budget\n\*\*Presented by:\*\* Bob\nReviewed Q2\.\n- Shortfall of \$2k/);
-  assert.match(markdown, /### 2\. Missions\nNo discussion recorded\./);
+const BODY = "## Summary\nThe board met.\n\n## Agenda\n### 1. Budget";
+
+test("buildReport puts guests in their own section at the top, then attendance, body and action items", () => {
+  const { markdown } = buildReport(input(), BODY);
+  assert.match(markdown, /^# Board\n\*\*Date:\*\* 2026-04-01 · \*\*Location:\*\* Hall\n\n## Guests\n- \*\*Gina\*\* — Architect · Presented: Building\n\n## Attendance\n/);
+  assert.match(markdown, /\*\*Present:\*\* Alice, Bob\n\*\*Absent:\*\* Carl/);
+  assert.ok(markdown.indexOf("## Guests") < markdown.indexOf("## Attendance"));
+  assert.ok(markdown.indexOf("## Attendance") < markdown.indexOf("## Summary"));
+  assert.ok(markdown.indexOf("## Summary") < markdown.indexOf("## Action Items"));
   // The case-insensitive duplicate is merged.
   assert.equal(markdown.match(/Send figures/gi)?.length, 1);
   assert.match(markdown, /- \[ \] Send figures — \*\*Bob\*\* \(Budget\)/);
 });
 
-test("buildReport says so when nobody is absent and there are no action items", () => {
-  const { markdown } = buildReport(input({ absent: [], guests: [], items: [] }));
+test("buildReport leaves out the guest section without guests and says when there are no action items", () => {
+  const { markdown } = buildReport(input({ absent: [], guests: [], items: [] }), BODY);
   assert.match(markdown, /\*\*Absent:\*\* None/);
   assert.doesNotMatch(markdown, /Guests/);
   assert.match(markdown, /## Action Items\nNone recorded\./);
 });
 
+test("presentedBy lists library presenters, then guests marked as guests", () => {
+  assert.equal(presentedBy({ presenters: ["Bob"], guestPresenters: ["Gina"] }), "Bob, Gina (Guest)");
+  assert.equal(presentedBy({ presenters: [], guestPresenters: [] }), "");
+});
+
+test("reportBodyInput hands Claude every item's full record", () => {
+  const body = reportBodyInput(input());
+  assert.deepEqual(body.guests, ["Gina (Architect)"]);
+  assert.equal(body.items[0].transcript, "Bob: we are $2k short");
+  assert.equal(body.items[0].actionItems.length, 2);
+  assert.equal(body.items[1].presentedBy, "Gina (Guest)");
+  assert.equal(body.items[1].notes, "Roof plans");
+});
+
 test("consolidateActionItems defaults a blank owner to Unassigned", () => {
   const lines = consolidateActionItems([
-    { id: 1, title: "X", presenters: [], summary: "", hasContent: true, actionItems: [{ task: "Do it", owner: "" }] },
+    item({ id: 1, title: "X", hasContent: true, actionItems: [{ task: "Do it", owner: "" }] }),
   ]);
   assert.deepEqual(lines, ["- [ ] Do it — **Unassigned** (X)"]);
 });
 
 test("reportChanges is empty for an unchanged meeting and names what changed", () => {
-  const saved = buildReport(input()).sources;
-  const titles = new Map([[1, "Budget"], [2, "Missions"], [3, "New"]]);
-  assert.deepEqual(reportChanges(saved, buildReport(input()).sources, titles), []);
+  const saved = reportSources(input());
+  const titles = new Map([[1, "Budget"], [2, "Building"], [3, "Missions"], [4, "New"]]);
+  assert.deepEqual(reportChanges(saved, reportSources(input()), titles), []);
 
   const edited = input();
-  edited.items[1] = { ...edited.items[1], summary: "Now discussed.", hasContent: true };
-  edited.items.push({ id: 3, title: "New", presenters: [], summary: "", hasContent: false, actionItems: [] });
+  edited.items[2] = { ...edited.items[2], summary: "Now discussed.", hasContent: true };
+  edited.items.push(item({ id: 4, title: "New" }));
   edited.absent = [];
-  assert.deepEqual(reportChanges(saved, buildReport(edited).sources, titles), [
+  assert.deepEqual(reportChanges(saved, reportSources(edited), titles), [
     "Attendance or guests changed",
     "Summary changed: Missions",
     "Added: New",
   ]);
 });
 
+test("reportChanges notices a guest presenter being added", () => {
+  const saved = reportSources(input());
+  const edited = input();
+  edited.items[0] = { ...edited.items[0], guestPresenters: ["Gina"] };
+  assert.deepEqual(reportChanges(saved, reportSources(edited), new Map([[1, "Budget"]])), ["Summary changed: Budget"]);
+});
+
 test("reportChanges reports removals and a pure reorder", () => {
-  const saved = buildReport(input()).sources;
-  const titles = new Map([[1, "Budget"], [2, "Missions"]]);
-  const removed = input(); removed.items = [removed.items[0]];
-  assert.deepEqual(reportChanges(saved, buildReport(removed).sources, titles), ["1 item removed"]);
-  const reordered = input(); reordered.items = [reordered.items[1], reordered.items[0]];
-  assert.deepEqual(reportChanges(saved, buildReport(reordered).sources, titles), ["Agenda order changed"]);
+  const saved = reportSources(input());
+  const titles = new Map([[1, "Budget"], [2, "Building"], [3, "Missions"]]);
+  const removed = input(); removed.items = [removed.items[0], removed.items[1]];
+  assert.deepEqual(reportChanges(saved, reportSources(removed), titles), ["1 item removed"]);
+  const reordered = input(); reordered.items = [reordered.items[1], reordered.items[0], reordered.items[2]];
+  assert.deepEqual(reportChanges(saved, reportSources(reordered), titles), ["Agenda order changed"]);
 });
 
 test("reportChanges treats a report with no saved fingerprint as current", () => {
-  assert.deepEqual(reportChanges({}, buildReport(input()).sources, new Map()), []);
+  assert.deepEqual(reportChanges({}, reportSources(input()), new Map()), []);
 });
 
 test("reportHtml renders headings, bold, checkboxes and escapes HTML", () => {

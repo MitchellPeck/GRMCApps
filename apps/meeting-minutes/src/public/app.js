@@ -398,7 +398,7 @@ function renderDetail(){
     +'<div class="chips" id="attendee-chips"></div>'
     +'<div class="hint" id="absent-line" style="margin-top:8px"></div>'
     +'<div class="sublbl">Guests</div>'
-    +'<div class="hint" style="margin-bottom:6px">Visitors for this meeting only. Guests count as present and can be named as speakers.</div>'
+    +'<div class="hint" style="margin-bottom:6px">Visitors for this meeting only. Guests count as present and can be named as speakers or chosen as presenters on an agenda item.</div>'
     +'<div class="chips" id="guest-chips"></div>'
     +'<div id="guest-msg"></div>'
     +'<div class="guest-add"><input type="text" id="g-name" placeholder="Guest name">'
@@ -542,7 +542,12 @@ function renderGuests(){
 function guestsChanged(){
   renderGuests();
   refreshReportSoon();
-  state.items.forEach(function(it){ renderSpeakerMap(it); });
+  // A removed guest no longer presents anything (the server drops it too).
+  var gids=(state.guests||[]).map(function(g){ return g.id; });
+  state.items.forEach(function(it){
+    it.guest_presenter_ids=(it.guest_presenter_ids||[]).filter(function(id){ return gids.indexOf(id)>=0; });
+    renderPresenterChips(it); renderSpeakerMap(it);
+  });
   renderMeetingSpeakerPanel();
 }
 function addGuest(){
@@ -701,7 +706,8 @@ function syncItems(fresh){
     it.transcribe_status=f.transcribe_status; it.transcribe_error=f.transcribe_error;
     it.transcript_segments=f.transcript_segments; it.speaker_map=f.speaker_map;
     it.speaker_stats=f.speaker_stats; it.recordings=f.recordings||[];
-    it.presenter_ids=f.presenter_ids; it.transcript_source=f.transcript_source;
+    it.presenter_ids=f.presenter_ids; it.guest_presenter_ids=f.guest_presenter_ids||[];
+    it.transcript_source=f.transcript_source;
     // Never clobber text the user is actively editing.
     var tx=document.getElementById('tx-'+it.id);
     if(!tx || document.activeElement!==tx) it.transcript=f.transcript;
@@ -725,7 +731,7 @@ function itemHtml(it, idx){
     +'</div>'
     +'<div class="ibody collapsed" id="ibody-'+it.id+'">'
       +'<div class="sublbl">Presented by</div>'
-      +'<div class="chips" id="pres-'+it.id+'"></div>'
+      +'<div class="pres-groups" id="pres-'+it.id+'"></div>'
       +'<div class="sublbl">Transcript (AI, with speaker labels)</div>'
       +'<div class="rec-row" id="recrow-'+it.id+'">'
         +'<button class="btn-sm" data-rec="'+it.id+'">● Record</button>'
@@ -1092,17 +1098,40 @@ function renderRecordings(it){
 function renderPresenterChips(it){
   var el=document.getElementById('pres-'+it.id); if(!el) return;
   var attendees=state.attendeeIds.map(function(id){ return state.peopleById[id]; }).filter(Boolean);
-  if(!attendees.length){ el.innerHTML='<span class="chip empty-hint">Select attendees above first.</span>'; return; }
-  el.innerHTML=attendees.map(function(p){
-    var on=it.presenter_ids.indexOf(p.id)>=0;
-    return '<span class="chip pres'+(on?' on':'')+'" data-pp="'+p.id+'">'+esc(p.name)+'</span>';
-  }).join('');
+  var guests=state.guests||[];
+  if(!it.guest_presenter_ids) it.guest_presenter_ids=[];
+  if(!attendees.length && !guests.length){ el.innerHTML='<span class="chip empty-hint">Select attendees or add guests above first.</span>'; return; }
+  // Guests first, in their own group, so a visiting speaker is easy to find.
+  var html='';
+  if(guests.length){
+    html+='<div class="pres-group"><div class="pres-group-lbl">Guests</div><div class="chips">'
+      +guests.map(function(g){
+        var on=it.guest_presenter_ids.indexOf(g.id)>=0;
+        return '<span class="chip pres guest-pres'+(on?' on':'')+'" data-pg="'+g.id+'">'+esc(g.name)
+          +(g.title?' <span class="guest-title">'+esc(g.title)+'</span>':'')+'</span>';
+      }).join('')+'</div></div>';
+  }
+  html+='<div class="pres-group">'+(guests.length?'<div class="pres-group-lbl">Attendees</div>':'')+'<div class="chips">'
+    +(attendees.length ? attendees.map(function(p){
+      var on=it.presenter_ids.indexOf(p.id)>=0;
+      return '<span class="chip pres'+(on?' on':'')+'" data-pp="'+p.id+'">'+esc(p.name)+'</span>';
+    }).join('') : '<span class="chip empty-hint">No attendees selected.</span>')+'</div></div>';
+  el.innerHTML=html;
   el.querySelectorAll('.chip[data-pp]').forEach(function(c){
     c.addEventListener('click', function(){
       var pid=Number(c.getAttribute('data-pp'));
       var i=it.presenter_ids.indexOf(pid);
       if(i>=0) it.presenter_ids.splice(i,1); else it.presenter_ids.push(pid);
       saveItemField(it, { presenterIds: it.presenter_ids }).then(refreshReportSoon);
+      renderPresenterChips(it);
+    });
+  });
+  el.querySelectorAll('.chip[data-pg]').forEach(function(c){
+    c.addEventListener('click', function(){
+      var gid=Number(c.getAttribute('data-pg'));
+      var i=it.guest_presenter_ids.indexOf(gid);
+      if(i>=0) it.guest_presenter_ids.splice(i,1); else it.guest_presenter_ids.push(gid);
+      saveItemField(it, { guestPresenterIds: it.guest_presenter_ids }).then(refreshReportSoon);
       renderPresenterChips(it);
     });
   });

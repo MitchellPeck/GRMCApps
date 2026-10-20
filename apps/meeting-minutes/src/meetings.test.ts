@@ -429,7 +429,7 @@ test("guests, absentees and the report's out-of-date check", { skip: !url }, asy
   assert.deepEqual(input.absent, ["Bob"]);
   assert.deepEqual(input.guests, [{ name: "Gina", title: "Architect" }]);
 
-  const built = buildReport(input);
+  const built = buildReport(input, "## Summary\nReviewed the budget.");
   await saveReport(pool, mid, built.markdown, built.sources);
   meeting = (await get(pool, mid))!;
   assert.equal(meeting.report_status, "idle");
@@ -441,5 +441,28 @@ test("guests, absentees and the report's out-of-date check", { skip: !url }, asy
   assert.deepEqual((await reportState(pool, meeting)).changes, [
     "Attendance or guests changed", "Summary changed: Budget",
   ]);
+  await pool.end();
+});
+
+test("guests can present agenda items, only at their own meeting", { skip: !url }, async () => {
+  const pool = new Pool({ connectionString: url });
+  await reset(pool);
+  const { addGuest, removeGuest } = await import("./meetings");
+  const m1 = await createMeeting(pool, { title: "One", meetingDate: "", location: "", description: "", email: "", name: "" });
+  const m2 = await createMeeting(pool, { title: "Two", meetingDate: "", location: "", description: "", email: "", name: "" });
+  assert.ok(m1.ok && m2.ok);
+  const g = await addGuest(pool, (m1 as any).id, "Gina", "Architect");
+  const other = await addGuest(pool, (m2 as any).id, "Omar", "");
+  assert.ok(g.ok && other.ok);
+  const it = await addAgendaItem(pool, (m1 as any).id, "Building", "");
+  assert.ok(it.ok);
+  const iid = (it as any).id;
+
+  await updateAgendaItem(pool, iid, { guestPresenterIds: [(g as any).id, (other as any).id] });
+  assert.deepEqual((await getAgendaItem(pool, iid))!.guest_presenter_ids, [(g as any).id], "another meeting's guest is ignored");
+  assert.deepEqual((await listAgendaItems(pool, (m1 as any).id))[0].guest_presenter_ids, [(g as any).id]);
+
+  await removeGuest(pool, (g as any).id);
+  assert.deepEqual((await getAgendaItem(pool, iid))!.guest_presenter_ids, [], "removing the guest removes the presenter");
   await pool.end();
 });

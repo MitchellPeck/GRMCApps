@@ -1,11 +1,11 @@
 import { Pool } from "pg";
 import { pool } from "./db";
-import { summarizeItem } from "./claude";
+import { generateReportBody, summarizeItem } from "./claude";
 import { listPeople, peopleNamedIn } from "./people";
 import { createQueue } from "./queue";
-import { buildReport, BuiltReport, reportChanges, ReportInput } from "./report";
+import { buildReport, reportBodyInput, reportChanges, ReportInput, reportSources, ReportSources } from "./report";
 import {
-  AgendaItem, MeetingRow, getAgendaItem, getAttendeeIds, getMeeting, listAgendaItems, listGuests,
+  AgendaItem, MeetingRow, getAgendaItem, getAttendeeIds, getMeeting, itemPresenterNames, listAgendaItems, listGuests,
   listPendingReports, listUnfinishedSummaries, saveReport, setAttendees, setReportStatus,
   setSummarizeStatus, updateAgendaItem,
 } from "./meetings";
@@ -93,11 +93,12 @@ async function summarizeNow(itemId: number): Promise<void> {
   await setSummarizeStatus(pool, itemId, "processing");
   const people = await listPeople(pool, true);
   const names = new Map(people.map((p) => [p.id, p.name]));
+  const guestNames = new Map((await listGuests(pool, item.meeting_id)).map((g) => [g.id, g.name]));
   const result = await summarizeItem(pool, {
     meetingTitle: meeting.title,
     itemTitle: item.title,
     itemDescription: item.description,
-    presenters: item.presenter_ids.map((pid) => names.get(pid) ?? "").filter(Boolean),
+    presenters: itemPresenterNames(item, names, guestNames),
     notes: item.notes,
     transcript: item.transcript,
   });
@@ -165,6 +166,8 @@ export async function reportInput(dbPool: Pool, meeting: MeetingRow, items: Agen
   const people = await listPeople(dbPool, true);
   const names = new Map(people.map((p) => [p.id, p.name]));
   const attendeeIds = new Set(await getAttendeeIds(dbPool, meeting.id));
+  const guests = await listGuests(dbPool, meeting.id);
+  const guestNames = new Map(guests.map((g) => [g.id, g.name]));
   return {
     title: meeting.title,
     meetingDate: meeting.meeting_date,
@@ -172,25 +175,60 @@ export async function reportInput(dbPool: Pool, meeting: MeetingRow, items: Agen
     present: people.filter((p) => attendeeIds.has(p.id)).map((p) => p.name),
     // Everyone active in the library who was not marked present.
     absent: people.filter((p) => p.active && !attendeeIds.has(p.id)).map((p) => p.name),
-    guests: (await listGuests(dbPool, meeting.id)).map((g) => ({ name: g.name, title: g.title })),
+    guests: guests.map((g) => ({ name: g.name, title: g.title })),
     items: items.map((it) => ({
       id: it.id,
       title: it.title,
+      description: it.description,
       presenters: it.presenter_ids.map((pid) => names.get(pid) ?? "").filter(Boolean),
+      guestPresenters: it.guest_presenter_ids.map((gid) => guestNames.get(gid) ?? "").filter(Boolean),
       summary: it.summary,
+      notes: it.notes,
+      transcript: it.transcript,
       actionItems: it.action_items,
       hasContent: itemHasContent(it),
     })),
   };
 }
 
-async function currentReport(dbPool: Pool, meeting: MeetingRow): Promise<{ built: BuiltReport; items: AgendaItem[] }> {
+async function currentSources(dbPool: Pool, meeting: MeetingRow): Promise<{ sources: ReportSources; items: AgendaItem[] }> {
   const items = await listAgendaItems(dbPool, meeting.id);
-  return { built: buildReport(await reportInput(dbPool, meeting, items)), items };
+  return { sources: reportSources(await reportInput(dbPool, meeting, items)), items };
 }
 
-// Move a requested report forward: wait, ask for summaries, give up, or write
-// it. Called whenever something it might be waiting on finishes.
+const writing = new Set<number>();
+
+// Claude writes the report on the AI queue, after any summaries ahead of it.
+function enqueueReport(meetingId: number): void {
+  if (writing.has(meetingId)) return;
+  writing.add(meetingId);
+  aiQueue.enqueue({
+    label: `report for meeting ${meetingId}`,
+    run: async () => {
+      try {
+        const meeting = await getMeeting(pool, meetingId);
+        if (!meeting || meeting.report_status !== "pending") return;
+        const items = await listAgendaItems(pool, meetingId);
+        // Something it depends on changed while it waited; that will call
+        // advanceReport again when it finishes.
+        if (reportReadiness(meeting, items).kind !== "ready") return;
+        const input = await reportInput(pool, meeting, items);
+        const body = await generateReportBody(pool, reportBodyInput(input));
+        const built = buildReport(input, body);
+        await saveReport(pool, meetingId, built.markdown, built.sources);
+        log(`report written for meeting ${meetingId}`);
+      } finally {
+        writing.delete(meetingId);
+      }
+    },
+    fail: async (message) => {
+      await setReportStatus(pool, meetingId, "error", `The report could not be written: ${message}`);
+    },
+  });
+}
+
+// Move a requested report forward: wait, ask for summaries, give up, or queue
+// it to be written. Called whenever something it might be waiting on finishes.
 export async function advanceReport(meetingId: number): Promise<void> {
   const meeting = await getMeeting(pool, meetingId);
   if (!meeting || meeting.report_status !== "pending") return;
@@ -206,9 +244,7 @@ export async function advanceReport(meetingId: number): Promise<void> {
     for (const id of ready.itemIds) await requestSummary(id);
     return;
   }
-  const { built } = await currentReport(pool, meeting);
-  await saveReport(pool, meetingId, built.markdown, built.sources);
-  log(`report written for meeting ${meetingId}`);
+  enqueueReport(meetingId);
 }
 
 // Start a report. Items whose summary failed earlier get one more try.
@@ -230,8 +266,8 @@ export interface ReportState {
 export async function reportState(dbPool: Pool, meeting: MeetingRow): Promise<ReportState> {
   let changes: string[] = [];
   if (meeting.report) {
-    const { built, items } = await currentReport(dbPool, meeting);
-    changes = reportChanges(meeting.report_sources, built.sources, new Map(items.map((it) => [it.id, it.title])));
+    const { sources, items } = await currentSources(dbPool, meeting);
+    changes = reportChanges(meeting.report_sources, sources, new Map(items.map((it) => [it.id, it.title])));
     // Reports from before fingerprints were kept cannot be compared item by
     // item, but an item that never got a summary is still worth flagging.
     if (!Object.keys(meeting.report_sources).length) {

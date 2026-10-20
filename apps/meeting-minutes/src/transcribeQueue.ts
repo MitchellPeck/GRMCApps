@@ -9,7 +9,7 @@ import {
   TranscribeStatus, getAgendaItem, getAttendeeIds, getMeeting, listUnfinishedTranscriptions,
   setTranscribeStatus, updateAgendaItem, MeetingRecordingStatus, setMeetingRecordingStatus,
   listUnfinishedMeetingProcessing, listTopicMarkers, setMeetingSpeakerMap, listAgendaItems, addAgendaItem,
-  presentPeople,
+  presentPeople, listGuests, itemPresenterNames,
 } from "./meetings";
 import { getRecording, latestRecording, getMeetingRecording, latestMeetingRecording } from "./recordings";
 import { segmentByMarkers, chronologicalSpeakerOrder, TopicMarker } from "./segmentation";
@@ -196,7 +196,8 @@ async function realReconcile(job: TranscribeJob, segments: DiarizedSegment[]): P
   const byId = new Map(people.map((p) => [p.id, p]));
   const attendees = await presentLabels(item.meeting_id);
   if (!attendees.length) return {};
-  const presenters = item.presenter_ids.map((id) => byId.get(id)?.name ?? "").filter(Boolean);
+  const guests = new Map((await listGuests(pool, item.meeting_id)).map((g) => [g.id, g.name]));
+  const presenters = itemPresenterNames(item, new Map([...byId].map(([id, p]) => [id, p.name])), guests);
   return reconcileSpeakers(pool, {
     meetingTitle: meeting?.title ?? "",
     itemTitle: item.title,
@@ -209,6 +210,7 @@ async function realReconcile(job: TranscribeJob, segments: DiarizedSegment[]): P
 
 // The presenter-if-attendee name for an item: "" when the item has no
 // presenter, or none of its presenters are marked present at the meeting.
+// A guest presenter counts, after any library presenter who is present.
 // Shared by the per-item presenter fill (below) and the whole-meeting one
 // (`realMeetingDeps.presenterFor`). `dbPool` defaults to the real singleton
 // but is overridable — tests inject a pool pointed at TEST_DATABASE_URL
@@ -216,12 +218,18 @@ async function realReconcile(job: TranscribeJob, segments: DiarizedSegment[]): P
 // `postgres` host.
 export async function presenterNameForItem(itemId: number, dbPool: Pool = pool): Promise<string> {
   const item = await getAgendaItem(dbPool, itemId);
-  if (!item || !item.presenter_ids.length) return "";
+  if (!item) return "";
   const attendeeIds = new Set(await getAttendeeIds(dbPool, item.meeting_id));
   const presentPresenter = item.presenter_ids.find((id) => attendeeIds.has(id));
-  if (presentPresenter === undefined) return "";
-  const people = await listPeople(dbPool, true);
-  return people.find((p) => p.id === presentPresenter)?.name ?? "";
+  if (presentPresenter !== undefined) {
+    const people = await listPeople(dbPool, true);
+    const name = people.find((p) => p.id === presentPresenter)?.name;
+    if (name) return name;
+  }
+  // Guests are present by definition.
+  if (!item.guest_presenter_ids.length) return "";
+  const guests = await listGuests(dbPool, item.meeting_id);
+  return guests.find((g) => g.id === item.guest_presenter_ids[0])?.name ?? "";
 }
 
 // Give the busiest voice to this item's presenter, but only when that
@@ -336,9 +344,9 @@ async function realMeetingReconcile(job: MeetingJob, segments: DiarizedSegment[]
   const attendees = await presentLabels(job.meetingId);
   if (!attendees.length) return {};
   const items = await listAgendaItems(pool, job.meetingId);
-  const presenters = [...new Set(
-    items.flatMap((it) => it.presenter_ids).map((id) => byId.get(id)?.name ?? "").filter(Boolean)
-  )];
+  const names = new Map([...byId].map(([id, p]) => [id, p.name]));
+  const guests = new Map((await listGuests(pool, job.meetingId)).map((g) => [g.id, g.name]));
+  const presenters = [...new Set(items.flatMap((it) => itemPresenterNames(it, names, guests)))];
   return reconcileSpeakers(pool, {
     meetingTitle: meeting.title,
     itemTitle: "Full meeting",

@@ -7,6 +7,8 @@ const MODEL = "claude-sonnet-4-6";
 // Generous for a summary of a long topic, short enough that a wedged request
 // cannot hold a serial queue for the rest of the day.
 const CLAUDE_TIMEOUT_MS = 4 * 60 * 1000;
+// The report writes up a whole meeting in one reply, which takes longer.
+const REPORT_TIMEOUT_MS = 10 * 60 * 1000;
 
 // A single Anthropic content block (text, image, or document). `content` may be
 // a plain string (shorthand for one text block) or an array of blocks.
@@ -23,7 +25,8 @@ async function callClaude(
   pool: Pool,
   systemPrompt: string,
   content: string | ContentBlock[],
-  maxTokens = 1536
+  maxTokens = 1536,
+  timeoutMs = CLAUDE_TIMEOUT_MS
 ): Promise<string> {
   const key = await getSetting(pool, "anthropic_api_key");
   if (!key) throw new Error("No Anthropic API key. Add one in Settings.");
@@ -45,11 +48,11 @@ async function callClaude(
         system: systemPrompt,
         messages: [{ role: "user", content }],
       }),
-      signal: AbortSignal.timeout(CLAUDE_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (e) {
     if ((e as Error).name === "TimeoutError") {
-      throw new Error(`Claude did not respond within ${CLAUDE_TIMEOUT_MS / 1000}s.`);
+      throw new Error(`Claude did not respond within ${timeoutMs / 1000}s.`);
     }
     throw new Error(`Could not reach Claude: ${(e as Error).message}`);
   }
@@ -237,6 +240,102 @@ export async function summarizeItem(pool: Pool, input: SummarizeInput): Promise<
   // A long topic (a whole-meeting recording can put an hour under one item)
   // yields a long summary and a dozen-plus action items; 1024 tokens cut it off.
   return parseSummary(await callClaude(pool, SUMMARIZE_SYSTEM, parts.join("\n"), 4096));
+}
+
+export interface ReportBodyItem {
+  title: string;
+  description: string;
+  presentedBy: string; // the exact "Presented by" text, "" when nobody is named
+  summary: string;
+  actionItems: ActionItem[];
+  notes: string;
+  transcript: string;
+}
+
+export interface ReportBodyInput {
+  title: string;
+  meetingDate: string;
+  location: string;
+  present: string[];
+  guests: string[]; // "Name (Title)"
+  items: ReportBodyItem[];
+}
+
+const REPORT_SYSTEM = `You are a church meeting secretary writing the official
+minutes of a meeting from its full record: for each agenda item, the
+transcript, typed notes, an earlier per-item summary, and extracted action
+items.
+
+Write minutes that are comprehensive and well organized, so that someone who
+was not there understands what was reported, what was discussed, what was
+decided, and what happens next. Prefer the transcript and notes for detail;
+the per-item summaries are a starting point, not a limit. Keep every concrete
+fact: names, figures, amounts, dates, deadlines, counts, places, votes and
+motions (who moved, who seconded, the outcome). Group related points together
+rather than retelling the conversation in order, and leave out small talk,
+false starts and repetition.
+
+Write ONLY these sections, in this order, in Markdown:
+
+## Summary
+One or two short paragraphs giving the overall picture of the meeting and its
+main outcomes.
+
+## Key Decisions
+A bullet for each decision, approval, or vote, naming the agenda item it
+belongs to in parentheses. Write "None recorded." if there were none.
+
+## Agenda
+For each agenda item, in the order given, numbered as given:
+### <n>. <title>
+**Presented by:** <the presenter text given, exactly> (omit the line when none is given)
+Then the item's minutes, using whichever of these labelled groups have content,
+each label on its own line followed by bullets:
+**Report:** what the presenter reported
+**Discussion:** the main points raised, and by whom where it matters
+**Decisions:** what was decided or approved
+**Follow-up:** what is to happen next, by whom and by when
+An item with no record gets the single line "No discussion recorded."
+
+## Open Questions
+Bullets for anything left unresolved or deferred to a later meeting. Omit this
+section entirely when there are none.
+
+Formatting rules: only "##" and "###" headings, plain paragraphs, "- " bullets
+(never nested or indented), and **bold**. No tables, no numbered lists, no
+italics, no links, no horizontal rules. Do not write a title, the date,
+attendance, or a list of action items; those are added separately.
+
+Base everything strictly on the material provided. Never invent people,
+facts, figures, or decisions. Refer to people by the names used in the
+material.`;
+
+// Write the body of the meeting minutes: summary, decisions, the agenda
+// written up item by item, and open questions. Every transcript goes in whole;
+// the model's context comfortably holds a long meeting.
+export async function generateReportBody(pool: Pool, input: ReportBodyInput): Promise<string> {
+  const lines: string[] = [`Meeting: ${input.title}`];
+  if (input.meetingDate) lines.push(`Date: ${input.meetingDate}`);
+  if (input.location) lines.push(`Location: ${input.location}`);
+  lines.push(`Present: ${input.present.length ? input.present.join(", ") : "(none recorded)"}`);
+  if (input.guests.length) lines.push(`Guests: ${input.guests.join(", ")}`);
+  lines.push("", "Agenda items:");
+  input.items.forEach((it, i) => {
+    lines.push("", `=== Item ${i + 1}: ${it.title} ===`);
+    if (it.description) lines.push(`Agenda details: ${it.description}`);
+    lines.push(`Presented by: ${it.presentedBy || "(none given)"}`);
+    if (!it.summary && !it.notes && !it.transcript) { lines.push("(no record)"); return; }
+    if (it.summary) lines.push(`Earlier summary:\n${it.summary}`);
+    if (it.actionItems.length) {
+      lines.push("Action items already extracted:");
+      it.actionItems.forEach((a) => lines.push(`- ${a.task} (owner: ${a.owner})`));
+    }
+    if (it.notes) lines.push(`Typed notes:\n${it.notes}`);
+    if (it.transcript) lines.push(`Transcript (speakers labeled by name where known):\n${it.transcript}`);
+  });
+  const body = (await callClaude(pool, REPORT_SYSTEM, lines.join("\n"), 16000, REPORT_TIMEOUT_MS)).trim();
+  if (!body) throw new Error("Claude returned an empty report. Try again.");
+  return body;
 }
 
 export interface ReconcileInput {

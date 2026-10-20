@@ -150,6 +150,13 @@ CREATE TABLE IF NOT EXISTS meeting_guests (
 );
 CREATE INDEX IF NOT EXISTS meeting_guests_meeting_idx ON meeting_guests (meeting_id, id);
 
+-- Guests presenting a given agenda item, alongside library presenters.
+CREATE TABLE IF NOT EXISTS agenda_item_guest_presenters (
+  item_id     bigint NOT NULL REFERENCES agenda_items(id) ON DELETE CASCADE,
+  guest_id    bigint NOT NULL REFERENCES meeting_guests(id) ON DELETE CASCADE,
+  PRIMARY KEY (item_id, guest_id)
+);
+
 -- Google Drive access per signed-in user, for "Open in Google Docs". The
 -- drive.file scope only reaches files this app created.
 CREATE TABLE IF NOT EXISTS google_tokens (

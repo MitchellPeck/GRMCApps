@@ -176,3 +176,7 @@ body.has-rec-banner{padding-top:44px}
 .report li.todo{list-style:none;margin-left:-18px}
 .report-current{margin-bottom:6px}
 .alert ul{margin:6px 0 6px 18px}
+.pres-groups{display:flex;flex-direction:column;gap:8px;margin-top:4px}
+.pres-group .chips{margin-top:0}
+.pres-group-lbl{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-bottom:4px}
+.chip.pres .guest-title{opacity:.75;font-size:11.5px}
