@@ -1,5 +1,6 @@
 import { Pool } from "pg";
-import { Resolution, resolveSchedule, scheduleCoverage } from "./schedule";
+import { Resolution, resolveSchedule, ScheduleEntry, scheduleCoverage } from "./schedule";
+import { choosePlaying } from "./choose";
 import { listEntries } from "./schedule-repo";
 import { getPlaylist, listItems, PlaylistRow } from "./playlists";
 import { AppSettings, getSamsung, loadSettings } from "./settings";
@@ -25,6 +26,8 @@ function dateKey(value: Date | string | null | undefined): string | null {
 
 export interface NowPlaying {
   resolution: Resolution;
+  /** The schedule entry on screen (or, when nothing is playable, named). */
+  entry: ScheduleEntry | null;
   /**
    * The playlist on screen. When `nothingPlayable`, the winning entry's
    * playlist instead, so the admin screen can say which one is empty.
@@ -135,34 +138,29 @@ export async function resolveNow(
   const resolution = resolveSchedule(entries, at, settings.timezone);
   const coverage = scheduleCoverage(entries, at, settings.timezone);
 
-  let playlist: PlaylistRow | null = null;
-  let frames: Frame[] = [];
-  let source: PlanSource = "none";
-  let nothingPlayable = false;
-
-  // The winner first; if its playlist was archived or has nothing to show,
-  // the next entry covering this moment gets the screen.
-  let firstLive: PlaylistRow | null = null;
+  // Every covering entry, best first, with what it would show. The first
+  // that can actually show something plays.
+  const covering = [];
   for (const entry of resolution.candidates) {
     const candidate = await getPlaylist(pool, entry.playlistId);
-    if (!candidate || candidate.archived) continue;
-    firstLive = firstLive ?? candidate;
     const startedAt = entry.id === resolution.entry?.id ? resolution.startedAt : null;
-    const built = await framesForPlaylist(pool, candidate, startedAt, settings, at);
-    if (built.length) {
-      playlist = candidate;
-      frames = built;
-      source = "schedule";
-      break;
-    }
+    const frames =
+      candidate && !candidate.archived
+        ? await framesForPlaylist(pool, candidate, startedAt, settings, at)
+        : [];
+    covering.push({ entry, playlist: candidate, frames, frameCount: frames.length });
   }
-  if (source === "none" && resolution.candidates.length) {
-    // Scheduled, but nothing to show. The TV still comes on -- power follows
-    // the schedule -- and the screen is black until somebody fixes the
-    // playlist; the admin screen says so loudly.
-    playlist = firstLive;
-    nothingPlayable = true;
-  }
+  const choice = choosePlaying(covering);
+
+  const shown = choice.named === null ? null : covering[choice.named];
+  // The entry actually on screen -- not necessarily the winner, whose
+  // playlist may be empty -- or, when nothing is playable, the one whose
+  // playlist the admin screen names.
+  const entry: ScheduleEntry | null = shown?.entry ?? null;
+  const playlist: PlaylistRow | null = shown?.playlist ?? null;
+  let frames: Frame[] = choice.playing === null ? [] : covering[choice.playing].frames;
+  let source: PlanSource = choice.playing === null ? "none" : "schedule";
+  let nothingPlayable = choice.nothingPlayable;
 
   const playNow = opts.live ? await getPlayNow(pool) : NO_PLAY_NOW;
   const takeover = opts.live ? await getTakeover(pool) : NO_TAKEOVER;
@@ -182,7 +180,7 @@ export async function resolveNow(
     changesAt: coverage.changesAt,
   };
 
-  return { resolution, playlist, source, settings, power, playNow, takeover, nothingPlayable, frames };
+  return { resolution, entry, playlist, source, settings, power, playNow, takeover, nothingPlayable, frames };
 }
 
 export async function buildPlan(
@@ -190,7 +188,10 @@ export async function buildPlan(
   opts: { at: Date; rotation: number }
 ): Promise<Plan> {
   const now = await resolveNow(pool, opts.at, { live: true });
-  const { resolution, playlist, source, settings, power, playNow, takeover } = now;
+  const { resolution, entry, playlist, source, settings, power, playNow, takeover } = now;
+  // Its own start and end are known only when it is the winner; a fallback
+  // entry borrowed the screen and the plan does not need them to cut.
+  const isWinner = entry !== null && entry.id === resolution.entry?.id;
   const samsung = await getSamsung(pool);
 
   // playout.py, which feeds the narthex screen through the Blackmagic card,
@@ -224,15 +225,15 @@ export async function buildPlan(
       playNow: playNow.active ? { mediaId: playNow.mediaId, startedAt: playNow.startedAt ?? "" } : null,
       powerOn: power.on,
       source,
-      entryId: resolution.entry?.id ?? 0,
+      entryId: entry?.id ?? 0,
       playlistId: playlist?.id ?? 0,
-      startedAt: resolution.startedAt ? resolution.startedAt.toISOString() : "",
+      startedAt: isWinner && resolution.startedAt ? resolution.startedAt.toISOString() : "",
     }),
     playlistId: showingPlaylist ? Number(showingPlaylist.id) : null,
     playlistName: source === "play_now" ? playNow.title : showingPlaylist?.name ?? "",
-    entryId: resolution.entry?.id ?? null,
-    entryLabel: resolution.entry?.label ?? "",
-    endsAt: resolution.endsAt ? resolution.endsAt.toISOString() : null,
+    entryId: entry?.id ?? null,
+    entryLabel: entry?.label ?? "",
+    endsAt: isWinner && resolution.endsAt ? resolution.endsAt.toISOString() : null,
     display: {
       background: settings.background,
       transition,

@@ -77,24 +77,30 @@ export async function scheduleRoutes(app: FastifyInstance): Promise<void> {
     const parsed = raw ? new Date(raw) : new Date();
     const at = isNaN(parsed.getTime()) ? new Date() : parsed;
 
-    const { resolution, playlist, source, settings, power } = await resolveNow(pool, at);
+    // Play now and the takeover have no end, so only the real "now" shows
+    // them; a preview of a future time shows what the schedule will do.
+    const { resolution, entry, playlist, source, settings, power, playNow, nothingPlayable } =
+      await resolveNow(pool, at, { live: !raw });
+    const isWinner = entry !== null && entry.id === resolution.entry?.id;
     const items = playlist ? await listItems(pool, playlist.id) : [];
     return {
       ok: true,
       at: at.toISOString(),
       timezone: settings.timezone,
       source,
-      // Whether the narthex is inside its opening hours at all. A dark screen
-      // is a different answer from "nothing is scheduled", and the card says so.
+      // Whether the TV is on at all, and when the schedule next flips that.
       power: {
         on: power.on,
         changesAt: power.changesAt ? power.changesAt.toISOString() : null,
       },
-      entry: resolution.entry
-        ? { id: resolution.entry.id, mode: resolution.entry.mode, label: resolution.entry.label }
+      playNow: playNow.active
+        ? { mediaId: playNow.mediaId, title: playNow.title, startedAt: playNow.startedAt, startedBy: playNow.startedBy }
         : null,
-      startedAt: resolution.startedAt ? resolution.startedAt.toISOString() : null,
-      endsAt: resolution.endsAt ? resolution.endsAt.toISOString() : null,
+      nothingPlayable,
+      entry: entry ? { id: entry.id, mode: entry.mode, label: entry.label } : null,
+      // Known only for the winning entry; a fallback entry just borrowed the screen.
+      startedAt: isWinner && resolution.startedAt ? resolution.startedAt.toISOString() : null,
+      endsAt: isWinner && resolution.endsAt ? resolution.endsAt.toISOString() : null,
       changesAt: resolution.changesAt ? resolution.changesAt.toISOString() : null,
       playlist: playlist ? { id: Number(playlist.id), name: playlist.name } : null,
       readyCount: items.filter((i) => i.enabled && i.status === "ready").length,

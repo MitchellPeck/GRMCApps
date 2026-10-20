@@ -15,6 +15,7 @@ import { screenRoutes } from "./routes/screens";
 import { settingsRoutes } from "./routes/settings";
 import { playerRoutes } from "./routes/player";
 import { powerRoutes, takeoverRoutes } from "./routes/power";
+import { playNowRoutes } from "./routes/play-now";
 import { realDeps as powerActionDeps } from "./power-actions";
 import { pressKey } from "./samsung-pairing";
 import { noticeRoutes } from "./routes/notices";
@@ -39,6 +40,7 @@ app.register(settingsRoutes);
 app.register(playerRoutes);
 app.register(powerRoutes);
 app.register(takeoverRoutes);
+app.register(playNowRoutes);
 app.register(noticeRoutes);
 
 // The TV runs unattended for months and reloads itself once a day. If it
