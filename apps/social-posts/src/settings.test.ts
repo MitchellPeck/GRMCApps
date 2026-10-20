@@ -23,3 +23,16 @@ test("settings round-trip and view never leaks raw key", async () => {
   await pool.query("DELETE FROM settings");
   await pool.end();
 });
+
+test("the house voice has a default and can be replaced", async () => {
+  const p = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
+  try {
+    await p.query("DELETE FROM settings WHERE key = 'house_voice'");
+    assert.match((await getSettingsView(p)).houseVoice, /^GRMC voice rules/, "the original rules until someone edits them");
+    await setSetting(p, "house_voice", "Be brief.");
+    assert.equal((await getSettingsView(p)).houseVoice, "Be brief.");
+  } finally {
+    await p.query("DELETE FROM settings WHERE key = 'house_voice'");
+    await p.end();
+  }
+});

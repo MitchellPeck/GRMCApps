@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>GRMC Social Posts</title>
 <link rel="stylesheet" href="/assets/grmc.css">
-<link rel="stylesheet" href="/app.css">
+<link rel="stylesheet" href="/pipeline.css">
 </head>
 <body>
 
@@ -15,234 +15,35 @@
     <div><h1>Social Posts</h1><p>Grace Resurrection Methodist Church</p></div>
   </div>
   <div class="hright">
-    <div class="dot dot-err" id="auth-dot"></div>
-    <span class="hlabel" id="auth-label">No API key</span>
-    <button class="btn-hdr" onclick="switchTab('settings')">Settings</button>
   </div>
 </header>
 
-<div class="layout">
-  <div class="tabs">
-    <button class="tab active" data-tab="wed">Wednesday run</button>
-    <button class="tab" data-tab="fri">Friday run</button>
-    <button class="tab" data-tab="pod">Podcast</button>
-    <button class="tab" data-tab="series">Series</button>
-    <button class="tab" data-tab="drafts">Drafts</button>
-    <button class="tab" data-tab="settings">Settings</button>
-    <a class="tab tab-link" href="/pipeline">Content pipeline</a>
+<div class="pl-layout">
+  <nav class="tabs" id="pl-tabs">
+    <a class="tab" href="#dashboard" data-view="dashboard">Dashboard</a>
+    <a class="tab" href="#calendar" data-view="calendar">Calendar</a>
+    <a class="tab" href="#board" data-view="board">Board</a>
+    <a class="tab" href="#events" data-view="events">Events</a>
+    <a class="tab" href="#recurring" data-view="recurring">Recurring</a>
+    <a class="tab" href="#mine" data-view="mine">My work</a>
+    <a class="tab" href="#settings" data-view="settings">Settings</a>
+  </nav>
+
+  <div class="pl-toolbar">
+    <div class="pl-filters" id="pl-filters" aria-label="Filters"></div>
+    <button class="btn btn-primary" type="button" data-act="new-post">New post</button>
   </div>
 
-  <!-- WEDNESDAY -->
-  <div id="p-wed" class="panel active">
-    <div class="card">
-      <div class="ct">Upcoming Sunday</div>
-      <div class="row2">
-        <div class="field"><label>Sunday date</label><input type="date" id="w-sunday"><div class="hint">Used to pull the correct Grace Notes issue.</div></div>
-        <div class="field" style="display:flex;align-items:flex-end;padding-bottom:1px">
-          <button class="btn btn-secondary" style="width:100%" id="btn-fetch-gn" onclick="fetchGraceNotesPreview()">Preview Grace Notes</button>
-        </div>
-      </div>
-      <div id="gn-preview" style="display:none;margin-top:10px">
-        <div id="gn-badge" class="alert alert-ok" style="margin-bottom:8px"></div>
-        <div class="field"><label>Grace Notes content (auto-filled, edit if needed)</label><textarea id="w-content" style="min-height:90px"></textarea></div>
-        <div class="field"><label>Archive URL</label><input type="text" id="w-url"></div>
-      </div>
-      <div id="gn-manual" style="margin-top:10px">
-        <div class="hint" style="margin-bottom:8px">Or paste manually:</div>
-        <div class="field"><label>Archive URL (manual)</label><input type="text" id="w-url-manual" placeholder="https://mailchimp.com/..."></div>
-      </div>
-    </div>
-    <div class="card">
-      <div class="ct">Sunday service preview</div>
-      <div class="field"><label>Sermon / service info</label><textarea id="w-service" placeholder="e.g. Rev. Williams on Acts 2, communion Sunday, guest musician"></textarea><div class="hint">Used for the Saturday invite and preview post.</div></div>
-    </div>
-    <div class="btn-row">
-      <button class="btn btn-primary" id="btn-wed" data-default="Draft Wed + Sat posts" onclick="runWed()">Draft Wed + Sat posts</button>
-      <button class="btn btn-secondary" onclick="clearWed()">Clear</button>
-    </div>
-    <div id="results-wed" class="results"></div>
-  </div>
-
-  <!-- FRIDAY -->
-  <div id="p-fri" class="panel">
-    <div class="card">
-      <div class="ct">Blog post</div>
-      <div class="row2">
-        <div class="field"><label>Date</label><input type="date" id="f-date"></div>
-        <div class="field" style="display:flex;align-items:flex-end;padding-bottom:1px">
-          <button class="btn btn-secondary" style="width:100%" id="btn-fetch-blog" onclick="fetchBlogPreview()">Fetch blog post</button>
-        </div>
-      </div>
-      <div id="blog-preview" style="display:none;margin-top:10px">
-        <div id="blog-badge" class="alert alert-ok" style="margin-bottom:8px"></div>
-        <div class="field"><label>Blog content (auto-filled, edit if needed)</label><textarea id="f-content" style="min-height:90px"></textarea></div>
-        <div class="field"><label>Archive URL</label><input type="text" id="f-url"></div>
-      </div>
-      <div id="blog-manual" style="margin-top:10px">
-        <div class="hint" style="margin-bottom:8px">Or paste manually:</div>
-        <div class="field"><label>Subject / title</label><input type="text" id="f-subject" placeholder="e.g. Rev. Williams' Weekly Blog - June 5, 2026"></div>
-        <div class="field"><label>Archive URL (manual)</label><input type="text" id="f-url-manual" placeholder="https://mailchimp.com/..."></div>
-        <div class="field"><label>Blog content (manual)</label><textarea id="f-content-manual" style="min-height:90px" placeholder="Paste blog text here"></textarea></div>
-      </div>
-    </div>
-    <div class="btn-row">
-      <button class="btn btn-primary" id="btn-fri" data-default="Draft Friday post" onclick="runFriday()">Draft Friday post</button>
-      <button class="btn btn-secondary" onclick="clearFriday()">Clear</button>
-    </div>
-    <div id="results-fri" class="results"></div>
-  </div>
-
-  <!-- PODCAST -->
-  <div id="p-pod" class="panel">
-    <div class="card">
-      <div class="ct">Episode</div>
-      <div class="row2">
-        <div class="field"><label>Episode</label>
-          <select id="pod-episode" onchange="selectEpisode()"><option value="">&mdash; load episodes to choose one &mdash;</option></select>
-          <div class="hint">Newest first. Episodes that have not dropped yet are included and marked.</div>
-        </div>
-        <div class="field" style="display:flex;align-items:flex-end;padding-bottom:1px">
-          <button class="btn btn-secondary" style="width:100%" id="btn-load-eps" onclick="loadEpisodes()">Load episodes</button>
-        </div>
-      </div>
-      <div id="pod-badge" class="alert alert-ok" style="display:none;margin-top:10px"></div>
-      <div class="field" style="margin-top:10px"><label>Episode title</label><input type="text" id="pod-title" placeholder="e.g. Too small or too big?"></div>
-      <div class="field"><label>Episode description (auto-filled, edit if needed)</label><textarea id="pod-content" style="min-height:110px" placeholder="Or paste the show notes here"></textarea></div>
-      <div class="row2">
-        <div class="field"><label>Listen URL</label><input type="text" id="pod-url" placeholder="https://www.buzzsprout.com/..."></div>
-        <div class="field"><label>Publish date</label><input type="date" id="pod-date"><div class="hint">Posts are scheduled from this date.</div></div>
-      </div>
-    </div>
-    <div class="card">
-      <div class="ct">Angles</div>
-      <div class="hint" style="margin-bottom:8px">Pick what you want drafted for this episode.</div>
-      <div id="pod-angles"><div class="hint" style="padding:4px 0">Loading angles...</div></div>
-    </div>
-    <div class="btn-row">
-      <button class="btn btn-primary" id="btn-pod" data-default="Draft podcast posts" onclick="runPodcast()">Draft podcast posts</button>
-      <button class="btn btn-secondary" onclick="clearPodcast()">Clear</button>
-    </div>
-    <div id="results-pod" class="results"></div>
-  </div>
-
-  <!-- SERIES -->
-  <div id="p-series" class="panel">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
-      <div style="font-size:13px;color:var(--muted)" id="series-count"></div>
-      <button class="btn btn-primary" onclick="toggleNewSeriesForm()">+ New series</button>
-    </div>
-
-    <!-- New series form -->
-    <div class="card" id="new-series-card" style="display:none">
-      <div class="ct">New series</div>
-      <div class="row2">
-        <div class="field"><label>Series name</label><input type="text" id="ns-name" placeholder="e.g. Advent 2026"></div>
-        <div class="row2" style="gap:8px">
-          <div class="field"><label>Cadence</label>
-            <select id="ns-cadence">
-              <option value="weekly">Weekly</option>
-              <option value="biweekly">Biweekly</option>
-              <option value="monthly">Monthly</option>
-            </select>
-          </div>
-          <div class="field"><label>Start date</label><input type="date" id="ns-start"></div>
-        </div>
-      </div>
-      <div class="field"><label>Description</label><textarea id="ns-desc" style="min-height:60px" placeholder="What is this series about?"></textarea></div>
-      <div class="field"><label>Context for Claude</label><textarea id="ns-context" style="min-height:72px" placeholder="Background info Claude should know when drafting posts — key facts, tone, goals"></textarea></div>
-      <div class="row2">
-        <div class="field"><label>Number of posts</label><input type="number" id="ns-count" value="6" min="1" max="52"></div>
-      </div>
-      <div class="btn-row">
-        <button class="btn btn-primary" id="btn-gen-plan" onclick="generatePlan()">Generate post plan</button>
-        <div class="hint" style="margin:0">Claude will draft the post titles and angles. You can edit before saving.</div>
-      </div>
-      <div id="ns-plan-area" style="margin-top:16px;display:none">
-        <div class="ct">Post plan <span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:11px;color:var(--muted)">(edit before saving)</span></div>
-        <div id="ns-plan-rows"></div>
-        <div class="btn-row" style="margin-top:12px">
-          <button class="btn btn-primary" id="btn-save-series" onclick="saveSeries()">Save series</button>
-          <button class="btn btn-secondary" onclick="addPlanRow()">+ Add post</button>
-          <button class="btn btn-secondary" onclick="cancelNewSeries()">Cancel</button>
-        </div>
-      </div>
-    </div>
-
-    <div id="series-list"><div class="hint" style="padding:8px 0">Loading series...</div></div>
-  </div>
-
-  <!-- DRAFTS -->
-  <div id="p-drafts" class="panel">
-    <div class="card">
-      <div class="ct">Recent drafts</div>
-      <div id="drafts-list"><div class="hint" style="padding:8px 0">Loading...</div></div>
-    </div>
-  </div>
-
-  <!-- SETTINGS -->
-  <div id="p-settings" class="panel">
-    <div class="card">
-      <div class="ct">Claude API</div>
-      <div class="field"><label>Anthropic API key</label><input type="text" id="s-ak" placeholder="sk-ant-..." autocomplete="off"><div class="hint" id="s-ak-hint">Loading...</div></div>
-    </div>
-    <div class="card">
-      <div class="ct">Mailchimp</div>
-      <div class="row2">
-        <div class="field"><label>Mailchimp API key</label><input type="text" id="s-mk" placeholder="xxxxxxxx-us21" autocomplete="off"></div>
-        <div class="field"><label>Server prefix</label><input type="text" id="s-ms" placeholder="e.g. us21"><div class="hint">From your Mailchimp API URL</div></div>
-      </div>
-    </div>
-    <div class="card">
-      <div class="ct">Podcast (Buzzsprout)</div>
-      <div class="field"><label>Buzzsprout API token</label><input type="text" id="s-bz-token" placeholder="From Profile &rarr; API in Buzzsprout" autocomplete="off"><div class="hint" id="s-bz-hint">Loading...</div></div>
-      <div class="field"><label>Podcast</label>
-        <div style="display:flex;gap:8px;align-items:flex-start">
-          <input type="text" id="s-bz-podcast" placeholder="Podcast ID" style="flex:1">
-          <button class="btn btn-secondary" id="btn-load-podcasts" onclick="loadPodcasts()" style="white-space:nowrap;padding:8px 12px;font-size:12px">Load podcasts</button>
-        </div>
-        <select id="bz-podcasts" style="margin-top:6px" onchange="pickPodcast(this)"><option value="">&mdash; select a podcast &mdash;</option></select>
-        <div class="hint">Save the token first, then load the podcasts on the account.</div>
-      </div>
-    </div>
-    <div class="card">
-      <div class="ct">Metricool</div>
-      <div class="field"><label>Metricool API token</label><input type="text" id="s-mc-token" placeholder="Your Metricool API token" autocomplete="off"></div>
-      <div class="row2">
-        <div class="field"><label>User ID</label><input type="text" id="s-mc-user" placeholder="Metricool user ID"></div>
-        <div class="field"><label>Blog ID</label>
-          <div style="display:flex;gap:8px;align-items:flex-start">
-            <input type="text" id="s-mc-blog" placeholder="Blog / brand ID" style="flex:1">
-            <button class="btn btn-secondary" id="btn-load-brands" onclick="loadBrands()" style="white-space:nowrap;padding:8px 12px;font-size:12px">Load brands</button>
-          </div>
-          <select id="mc-brands" style="margin-top:6px" onchange="document.getElementById('s-mc-blog').value=this.value"><option value="">— select a brand —</option></select>
-        </div>
-      </div>
-      <div class="row2">
-        <div class="field"><label>Default post time</label><input type="time" id="s-mc-time"></div>
-        <div class="field"><label>Timezone</label><input type="text" id="s-mc-tz" placeholder="America/New_York"></div>
-      </div>
-    </div>
-    <div class="card">
-      <div class="ct">Image hosting (R2)</div>
-      <div class="row2">
-        <div class="field"><label>Account ID</label><input type="text" id="s-r2-account" placeholder="Cloudflare account ID" autocomplete="off"></div>
-        <div class="field"><label>Access Key ID</label><input type="text" id="s-r2-key" placeholder="R2 access key ID" autocomplete="off"></div>
-      </div>
-      <div class="row2">
-        <div class="field"><label>Secret Access Key</label><input type="text" id="s-r2-secret" placeholder="R2 secret access key" autocomplete="off"></div>
-        <div class="field"><label>Bucket name</label><input type="text" id="s-r2-bucket" placeholder="e.g. grmc-media"></div>
-      </div>
-      <div class="field"><label>Public base URL</label><input type="text" id="s-r2-baseurl" placeholder="https://media.grmc.app"><div class="hint">Public URL prefix for uploaded images (no trailing slash needed)</div></div>
-    </div>
-    <div class="btn-row">
-      <button class="btn btn-primary" id="btn-settings" onclick="saveSettings()">Save settings</button>
-    </div>
-    <div id="results-settings" class="results"></div>
-  </div>
+  <main id="pl-main" tabindex="-1"><div class="empty">Loading…</div></main>
 </div>
 
+<div class="pl-scrim" id="pl-scrim" hidden></div>
+<aside class="pl-drawer" id="pl-drawer" aria-hidden="true" aria-label="Post editor"></aside>
+<div class="pl-toast" id="pl-toast" role="status" aria-live="polite"></div>
+
+<datalist id="pl-people"></datalist>
 <script src="/assets/grmc-nav.js"></script>
 <script src="/metricool-modal.js"></script>
-<script src="/app.js"></script>
+<script src="/pipeline.js"></script>
 </body>
 </html>

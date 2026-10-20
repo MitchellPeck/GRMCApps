@@ -300,3 +300,7 @@ header a.btn-hdr{text-decoration:none}
 .pl-pick:hover{border-color:var(--gold)}
 .pl-pick img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:4px;background:var(--paper)}
 .pl-pick span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* ---- Settings ---- */
+.pl-settings{max-width:760px}
+.pl-voice{min-height:120px}

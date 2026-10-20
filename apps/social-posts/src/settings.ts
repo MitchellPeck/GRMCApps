@@ -1,4 +1,5 @@
 import { Pool } from "pg";
+import { DEFAULT_VOICE } from "./pipeline/drafting-seed";
 
 export async function getSetting(pool: Pool, key: string): Promise<string> {
   const r = await pool.query("SELECT value FROM settings WHERE key = $1", [key]);
@@ -27,6 +28,7 @@ export interface SettingsView {
   hasBuzzsprout: boolean;
   buzzsproutPodcastId: string;
   buzzsproutPodcastName: string;
+  houseVoice: string;
 }
 
 // Mirrors Code.gs getSettings(): never returns full keys, only a hint + flags.
@@ -55,5 +57,6 @@ export async function getSettingsView(pool: Pool): Promise<SettingsView> {
     hasBuzzsprout: !!(bzToken && bzPodcast),
     buzzsproutPodcastId: bzPodcast,
     buzzsproutPodcastName: await getSetting(pool, "buzzsprout_podcast_name"),
+    houseVoice: (await getSetting(pool, "house_voice")) || DEFAULT_VOICE,
   };
 }

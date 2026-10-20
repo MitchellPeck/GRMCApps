@@ -178,7 +178,7 @@ function render() {
   });
   var main = $('pl-main');
   var views = { dashboard: renderDashboard, calendar: renderCalendar, board: renderBoard, events: renderEvents, event: renderEvent,
-    gap: renderGapList, recurring: renderRecurring, mine: renderMine };
+    gap: renderGapList, recurring: renderRecurring, mine: renderMine, settings: renderSettings };
   (views[r.view] || renderDashboard)(main, r.arg).catch(function(e){
     main.innerHTML = '<div class="alert alert-err">Couldn’t load this view: '+esc(e.message)+'</div>';
   });
@@ -1325,6 +1325,75 @@ function renderMine(main) {
   });
 }
 
+// ── Settings ─────────────────────────────────────────────────────────────────
+// Keys never come back from the server: a blank key box means "keep the saved one".
+function renderSettings(main) {
+  return api('GET', '/api/settings').then(function(s){
+    var keyHint = function(has, what){ return '<div class="hint">' + (has ? esc(what) + ' is set. Leave blank to keep it.' : 'Not set yet.') + '</div>'; };
+    main.innerHTML = '<form class="pl-settings" data-form="settings">'
+      + '<section class="card"><h3 class="ct">Drafting</h3>'
+      +   '<div class="field"><label for="st-voice">House voice</label><textarea id="st-voice" name="houseVoice" class="pl-voice">'+esc(s.houseVoice)+'</textarea>'
+      +   '<div class="hint">Every draft follows these rules, whatever the event.</div></div>'
+      +   '<div class="field"><label for="st-ak">Anthropic API key</label><input id="st-ak" type="text" name="anthropicKey" autocomplete="off" placeholder="sk-ant-…">'
+      +   '<div class="hint">'+(s.hasAnthropicKey ? 'Current: '+esc(s.anthropicKeyHint)+'. Leave blank to keep it.' : 'Not set yet. Draft with Claude needs it.')+'</div></div></section>'
+      + '<section class="card"><h3 class="ct">Mailchimp</h3><div class="row2">'
+      +   '<div class="field"><label for="st-mk">API key</label><input id="st-mk" type="text" name="mailchimpKey" autocomplete="off" placeholder="xxxxxxxx-us21">'+keyHint(s.hasMailchimp, 'A key')+'</div>'
+      +   '<div class="field"><label for="st-ms">Server prefix</label><input id="st-ms" type="text" name="mailchimpServer" value="'+esc(s.mailchimpServer)+'" placeholder="us21"></div></div></section>'
+      + '<section class="card"><h3 class="ct">Podcast (Buzzsprout)</h3>'
+      +   '<div class="field"><label for="st-bz">API token</label><input id="st-bz" type="text" name="buzzsproutToken" autocomplete="off" placeholder="From Profile → API in Buzzsprout">'
+      +   '<div class="hint">'+(s.hasBuzzsprout ? 'Connected' + (s.buzzsproutPodcastName ? ' to '+esc(s.buzzsproutPodcastName) : '') + '.' : 'Not connected.')+'</div></div>'
+      +   '<div class="field"><label for="st-bzp">Podcast</label><div class="pl-copyrow"><input id="st-bzp" type="text" name="buzzsproutPodcastId" value="'+esc(s.buzzsproutPodcastId)+'" placeholder="Podcast ID">'
+      +   '<input type="hidden" name="buzzsproutPodcastName" value="'+esc(s.buzzsproutPodcastName)+'">'
+      +   '<button class="btn-sm" type="button" data-act="load-podcasts">Load podcasts</button></div><select id="st-bz-list" hidden></select>'
+      +   '<div class="hint">Save the token first, then load the podcasts on the account.</div></div></section>'
+      + '<section class="card"><h3 class="ct">Metricool</h3>'
+      +   '<div class="field"><label for="st-mc">API token</label><input id="st-mc" type="text" name="metricoolToken" autocomplete="off">'+keyHint(s.hasMetricool, 'A token')+'</div>'
+      +   '<div class="row2"><div class="field"><label for="st-mcu">User ID</label><input id="st-mcu" type="text" name="metricoolUserId" value="'+esc(s.metricoolUserId)+'"></div>'
+      +   '<div class="field"><label for="st-mcb">Brand</label><div class="pl-copyrow"><input id="st-mcb" type="text" name="metricoolBlogId" value="'+esc(s.metricoolBlogId)+'" placeholder="Blog / brand ID">'
+      +   '<button class="btn-sm" type="button" data-act="load-brands">Load brands</button></div><select id="st-mc-list" hidden></select></div></div>'
+      +   '<div class="row2"><div class="field"><label for="st-time">Default post time</label><input id="st-time" type="time" name="defaultPostTime" value="'+esc(s.defaultPostTime)+'"></div>'
+      +   '<div class="field"><label for="st-tz">Timezone</label><input id="st-tz" type="text" name="defaultTimezone" value="'+esc(s.defaultTimezone)+'" placeholder="America/New_York"></div></div></section>'
+      + '<section class="card"><h3 class="ct">Image hosting (R2)</h3>'
+      +   '<div class="hint pl-under">'+(s.hasR2 ? 'Configured. Fill a box only to change it.' : 'Needed to send uploaded or approved images to Metricool.')+'</div>'
+      +   '<div class="row2"><div class="field"><label for="st-r2a">Account ID</label><input id="st-r2a" type="text" name="r2AccountId" autocomplete="off"></div>'
+      +   '<div class="field"><label for="st-r2k">Access key ID</label><input id="st-r2k" type="text" name="r2AccessKeyId" autocomplete="off"></div></div>'
+      +   '<div class="row2"><div class="field"><label for="st-r2s">Secret access key</label><input id="st-r2s" type="text" name="r2SecretAccessKey" autocomplete="off"></div>'
+      +   '<div class="field"><label for="st-r2b">Bucket</label><input id="st-r2b" type="text" name="r2Bucket" placeholder="grmc-media"></div></div>'
+      +   '<div class="field"><label for="st-r2u">Public base URL</label><input id="st-r2u" type="text" name="r2PublicBaseUrl" placeholder="https://media.grmc.app"></div></section>'
+      + '<div class="pl-form-msg" id="st-msg"></div>'
+      + '<div class="btn-row"><button class="btn btn-primary" type="submit">Save settings</button></div></form>';
+  });
+}
+
+function saveSettings(form) {
+  var body = {}, btn = form.querySelector('[type=submit]');
+  new FormData(form).forEach(function(v, k){ body[k] = String(v).trim(); });
+  btn.disabled = true;
+  api('POST', '/api/settings', body).then(function(){
+    toast('Settings saved.', 'ok');
+    // Approved images and defaults may have changed; refetch next time they're used.
+    approvedCache = null; window._mcDefaults = null;
+    return render();
+  }).catch(function(e){ btn.disabled = false; $('st-msg').innerHTML = '<div class="alert alert-err">'+esc(e.message)+'</div>'; });
+}
+
+function loadPicker(path, listKey, selectId, inputName, toOption) {
+  var sel = $(selectId);
+  api('GET', path).then(function(d){
+    var rows = d[listKey] || [];
+    if (!rows.length) { toast('Nothing came back. Check the saved token.', 'warn'); return; }
+    sel.innerHTML = rows.map(function(r){ var o = toOption(r); return '<option value="'+esc(o.value)+'">'+esc(o.label)+'</option>'; }).join('');
+    sel.hidden = false;
+    sel.onchange = function(){
+      var form = sel.closest('form');
+      form.querySelector('[name='+inputName+']').value = sel.value;
+      var name = form.querySelector('[name=buzzsproutPodcastName]');
+      if (inputName === 'buzzsproutPodcastId' && name) name.value = sel.options[sel.selectedIndex].textContent;
+    };
+    sel.onchange();
+  }).catch(function(e){ toast(e.message, 'err'); });
+}
+
 // ── One delegated handler for every button and form ──────────────────────────
 document.addEventListener('click', function(e){
   var el = e.target.closest('[data-act]');
@@ -1397,6 +1466,12 @@ document.addEventListener('click', function(e){
       $('df-name').focus();
       break;
     case 'delete-media': deleteMedia(el.closest('[data-media]')); break;
+    case 'load-podcasts':
+      loadPicker('/api/podcast/podcasts', 'podcasts', 'st-bz-list', 'buzzsproutPodcastId', function(p){ return { value: p.id, label: p.title }; });
+      break;
+    case 'load-brands':
+      loadPicker('/api/metricool/brands', 'brands', 'st-mc-list', 'metricoolBlogId', function(b){ return { value: b.id, label: b.label }; });
+      break;
     case 'cap-mode': setCaptionMode(el.getAttribute('data-mode')); break;
     case 'cap-tab':
       drawer.capTab = el.getAttribute('data-tab'); refreshCaptionUi();
@@ -1465,6 +1540,7 @@ document.addEventListener('submit', function(e){
   if (kind === 'content') return saveContent(form);
   if (kind === 'media') return addMedia(form);
   if (kind === 'recurrence') return saveRecurrence(form);
+  if (kind === 'settings') return saveSettings(form);
   if (kind === 'duplicate') return submitDuplicate(form);
   if (kind === 'event') {
     var fd = new FormData(form), id = form.getAttribute('data-id');

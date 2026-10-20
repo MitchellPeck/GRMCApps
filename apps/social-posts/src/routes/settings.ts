@@ -19,6 +19,7 @@ interface SaveBody {
   buzzsproutToken?: string;
   buzzsproutPodcastId?: string;
   buzzsproutPodcastName?: string;
+  houseVoice?: string;
 }
 
 export async function settingsRoutes(app: FastifyInstance): Promise<void> {
@@ -65,6 +66,8 @@ export async function settingsRoutes(app: FastifyInstance): Promise<void> {
         await setSetting(pool, "buzzsprout_podcast_id", s.buzzsproutPodcastId.trim());
       if (s.buzzsproutPodcastName && s.buzzsproutPodcastName.trim())
         await setSetting(pool, "buzzsprout_podcast_name", s.buzzsproutPodcastName.trim());
+      if (s.houseVoice && s.houseVoice.trim())
+        await setSetting(pool, "house_voice", s.houseVoice.trim());
       return { ok: true };
     } catch (e) {
       return { ok: false, error: (e as Error).message };
