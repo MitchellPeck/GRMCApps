@@ -179,7 +179,8 @@ function render() {
   var main = $('pl-main');
   var views = { dashboard: renderDashboard, calendar: renderCalendar, board: renderBoard, events: renderEvents, event: renderEvent,
     gap: renderGapList, recurring: renderRecurring, mine: renderMine, settings: renderSettings };
-  (views[r.view] || renderDashboard)(main, r.arg).catch(function(e){
+  // Returned so callers can act once the view has finished drawing.
+  return (views[r.view] || renderDashboard)(main, r.arg).catch(function(e){
     main.innerHTML = '<div class="alert alert-err">Couldn’t load this view: '+esc(e.message)+'</div>';
   });
 }
@@ -545,6 +546,9 @@ function renderEvent(main, id) {
       + (e.notes ? '<p class="pl-notes">'+esc(e.notes)+'</p>' : '')+'</div>'
       + '<div class="pl-evactions"><button class="btn-sm" type="button" data-act="edit-event" data-id="'+esc(e.id)+'">Edit</button>'
       + '<button class="btn-sm" type="button" data-act="duplicate-event" data-id="'+esc(e.id)+'">Duplicate</button>'
+      + (e.drafting && e.drafting.source && e.drafting.source.kind === 'buzzsprout'
+          ? '<button class="btn-sm btn-sm-gold" type="button" data-act="plan-episode" data-id="'+esc(e.id)+'">Plan posts from an episode</button>' : '')
+      + (e.kind === 'series' ? '<button class="btn-sm btn-sm-gold" type="button" data-act="plan-series" data-id="'+esc(e.id)+'">Plan posts with Claude</button>' : '')
       + '<button class="btn-sm" type="button" data-act="archive-event" data-id="'+esc(e.id)+'" data-archived="'+(e.archived ? '1' : '')+'">'+(e.archived ? 'Restore' : 'Archive')+'</button>'
       + '<button class="btn-sm btn-sm-gold" type="button" data-act="new-post" data-event="'+esc(e.id)+'">New post for this event</button></div></section>'
       + '<div id="pl-event-form"></div>'
@@ -577,6 +581,70 @@ function renderEvent(main, id) {
     var dform = main.querySelector('form[data-form=drafting]');
     if (dform) showDraftingFields(dform);
   });
+}
+
+// ── Planning several posts at once ───────────────────────────────────────────
+function episodePlanForm(e) {
+  var angles = (e.drafting && e.drafting.angles) || [];
+  return '<form class="card pl-form" data-form="plan-episode" data-id="'+esc(e.id)+'">'
+    + '<h3 class="ct">Plan posts from an episode</h3>'
+    + '<div class="field"><label for="pe-ep">Episode</label><select id="pe-ep" name="episodeId"><option value="">Loading episodes…</option></select></div>'
+    + '<fieldset class="field"><legend class="lbl">One post for each angle you tick</legend>'
+    + (angles.length ? angles.map(function(a){
+        return '<label class="check"><input type="checkbox" name="angles" value="'+esc(a.key)+'"'+(a.key === 'announcement' ? ' checked' : '')+'> '
+          + esc(a.label)+' <span class="muted">('+(a.offsetDays ? (a.offsetDays > 0 ? '+' : '')+a.offsetDays+' days' : 'episode day')+')</span></label>';
+      }).join('') : '<p class="hint">This event has no angles. Add them in its Drafting section.</p>')
+    + '</fieldset><div class="pl-form-msg"></div>'
+    + '<div class="btn-row"><button class="btn btn-primary" type="submit">Create posts</button>'
+    + '<button class="btn btn-secondary" type="button" data-act="cancel-event-form">Cancel</button></div></form>';
+}
+
+function planRowHtml(p) {
+  return '<div class="pl-plan-row">'
+    + '<input type="date" data-plan="date" value="'+esc(p.date || '')+'" aria-label="Date">'
+    + '<input type="text" data-plan="phase" value="'+esc(p.phase || '')+'" placeholder="Phase (optional)" aria-label="Phase">'
+    + '<input type="text" data-plan="title" value="'+esc(p.title || '')+'" placeholder="Title" aria-label="Title">'
+    + '<button class="pl-x" type="button" data-act="remove-plan-row" aria-label="Remove">×</button>'
+    + '<input type="text" data-plan="sub" value="'+esc(p.sub || '')+'" placeholder="Angle for this post" aria-label="Angle"></div>';
+}
+
+function seriesPlanForm(e) {
+  return '<form class="card pl-form" data-form="plan-series-propose" data-id="'+esc(e.id)+'">'
+    + '<h3 class="ct">Plan posts with Claude</h3>'
+    + '<p class="hint pl-under">Claude proposes titles and angles from this series’ notes. You edit the list before anything is saved.</p>'
+    + '<div class="row3"><div class="field"><label for="ps-count">Number of posts</label><input id="ps-count" type="number" name="count" min="1" max="52" value="6"></div>'
+    + '<div class="field"><label for="ps-cad">Cadence</label><select id="ps-cad" name="cadence"><option value="weekly">Weekly</option><option value="biweekly">Every other week</option><option value="monthly">Monthly</option></select></div>'
+    + '<div class="field"><label for="ps-start">First post</label><input id="ps-start" type="date" name="startDate" value="'+esc(S.meta.today)+'"></div></div>'
+    + '<div class="pl-form-msg"></div><div class="btn-row"><button class="btn btn-primary" type="submit">Propose a plan</button>'
+    + '<button class="btn btn-secondary" type="button" data-act="cancel-event-form">Cancel</button></div></form>';
+}
+
+function showPlanRows(eventId, posts) {
+  $('pl-event-form').innerHTML = '<form class="card pl-form" data-form="plan-series" data-id="'+esc(eventId)+'">'
+    + '<h3 class="ct">Check the plan</h3><div id="ps-rows">'+posts.map(planRowHtml).join('')+'</div>'
+    + '<button class="btn-sm" type="button" data-act="add-plan-row">Add a post</button>'
+    + '<div class="pl-form-msg"></div><div class="btn-row"><button class="btn btn-primary" type="submit">Save these posts</button>'
+    + '<button class="btn btn-secondary" type="button" data-act="cancel-event-form">Cancel</button></div></form>';
+}
+
+function offerDraftAll(items) {
+  $('pl-event-form').innerHTML = '<div class="card"><h3 class="ct">'+items.length+' post'+(items.length === 1 ? '' : 's')+' created</h3>'
+    + '<p class="hint pl-under">Draft them all now, or open each one and draft it there.</p>'
+    + '<div class="btn-row"><button class="btn btn-gold" type="button" data-act="draft-all" data-ids="'+esc(items.map(function(i){ return i.id; }).join(','))+'">Draft all with Claude</button>'
+    + '<button class="btn btn-secondary" type="button" data-act="cancel-event-form">Done</button></div><div id="pl-draft-all-msg"></div></div>';
+}
+
+function draftAllFor(ids, btn) {
+  btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Drafting '+ids.length+'…';
+  api('POST', '/api/pipeline/draft-all', { ids: ids }).then(function(d){
+    var failed = d.results.filter(function(r){ return !r.ok; });
+    btn.textContent = 'Drafted';
+    $('pl-draft-all-msg').innerHTML = failed.length
+      ? '<div class="alert alert-warn">'+(ids.length - failed.length)+' drafted. '+failed.length+' didn’t: '
+        + esc(failed.map(function(r){ return r.error; }).join(' ')) + ' Open those posts to try again.</div>'
+      : '<div class="alert alert-ok">All '+ids.length+' drafted.</div>';
+    toast(failed.length ? (ids.length - failed.length) + ' drafted, ' + failed.length + ' need another try.' : 'All ' + ids.length + ' drafted.', failed.length ? 'warn' : 'ok');
+  }).catch(function(e){ btn.disabled = false; btn.textContent = 'Draft all with Claude'; toast(e.message, 'err'); });
 }
 
 // ── Drafting profile (on an event) ───────────────────────────────────────────
@@ -1630,6 +1698,21 @@ document.addEventListener('click', function(e){
       $('df-name').focus();
       break;
     case 'delete-media': deleteMedia(el.closest('[data-media]')); break;
+    case 'plan-episode':
+      var pe = eventById(el.getAttribute('data-id'));
+      $('pl-event-form').innerHTML = episodePlanForm(pe);
+      api('GET', '/api/pipeline/sources/episodes').then(function(d){
+        $('pe-ep').innerHTML = d.episodes.length
+          ? d.episodes.map(function(ep){ return '<option value="'+esc(ep.id)+'">'+esc(ep.label)+(ep.isPublished ? '' : ' (not out yet)')+'</option>'; }).join('')
+          : '<option value="">No episodes found</option>';
+      }).catch(function(err){ $('pe-ep').innerHTML = '<option value="">'+esc(err.message)+'</option>'; });
+      break;
+    case 'plan-series':
+      $('pl-event-form').innerHTML = seriesPlanForm(eventById(el.getAttribute('data-id'))); break;
+    case 'add-plan-row':
+      $('ps-rows').insertAdjacentHTML('beforeend', planRowHtml({})); break;
+    case 'remove-plan-row': el.closest('.pl-plan-row').remove(); break;
+    case 'draft-all': draftAllFor(el.getAttribute('data-ids').split(','), el); break;
     case 'src-change': showSourceChoices(el.getAttribute('data-kind')); break;
     case 'src-pick':
       drawer.sourceRef = drawer.sourceChoices[Number(el.getAttribute('data-i'))].ref; loadSourcePanel(); break;
@@ -1684,7 +1767,7 @@ document.addEventListener('click', function(e){
       $('pl-event-form').innerHTML = eventForm(); $('ef-name').focus(); break;
     case 'edit-event':
       $('pl-event-form').innerHTML = eventForm(eventById(el.getAttribute('data-id'))); $('ef-name').focus(); break;
-    case 'cancel-event-form': $('pl-event-form').innerHTML = ''; break;
+    case 'cancel-event-form': $('pl-event-form').innerHTML = ''; render(); break;
     case 'archive-event':
       var archived = !el.getAttribute('data-archived');
       api('PATCH', '/api/pipeline/events/' + encodeURIComponent(el.getAttribute('data-id')), { archived: archived }).then(function(){
@@ -1735,6 +1818,33 @@ document.addEventListener('submit', function(e){
   if (kind === 'media') return addMedia(form);
   if (kind === 'recurrence') return saveRecurrence(form);
   if (kind === 'settings') return saveSettings(form);
+  if (kind === 'plan-episode') {
+    var pfd = new FormData(form);
+    api('POST', '/api/pipeline/events/' + encodeURIComponent(form.getAttribute('data-id')) + '/plan-episode',
+      { episodeId: pfd.get('episodeId'), angles: pfd.getAll('angles') })
+      .then(function(d){ return refreshEvents().then(function(){ return render(); }).then(function(){ offerDraftAll(d.items); }); })
+      .catch(function(err){ form.querySelector('.pl-form-msg').innerHTML = '<div class="alert alert-err">'+esc(err.message)+'</div>'; });
+    return;
+  }
+  if (kind === 'plan-series-propose') {
+    var sfd = new FormData(form), sbtn = form.querySelector('[type=submit]');
+    sbtn.disabled = true; sbtn.innerHTML = '<span class="spin"></span> Planning…';
+    api('POST', '/api/pipeline/events/' + encodeURIComponent(form.getAttribute('data-id')) + '/plan-series/propose',
+      { count: Number(sfd.get('count')), cadence: sfd.get('cadence'), startDate: sfd.get('startDate') })
+      .then(function(d){ showPlanRows(form.getAttribute('data-id'), d.posts); })
+      .catch(function(err){ sbtn.disabled = false; sbtn.textContent = 'Propose a plan'; form.querySelector('.pl-form-msg').innerHTML = '<div class="alert alert-err">'+esc(err.message)+'</div>'; });
+    return;
+  }
+  if (kind === 'plan-series') {
+    var posts = Array.prototype.map.call(form.querySelectorAll('.pl-plan-row'), function(row){
+      var g = function(k){ return row.querySelector('[data-plan='+k+']').value.trim(); };
+      return { date: g('date'), phase: g('phase'), title: g('title'), sub: g('sub') };
+    });
+    api('POST', '/api/pipeline/events/' + encodeURIComponent(form.getAttribute('data-id')) + '/plan-series', { posts: posts })
+      .then(function(d){ return refreshEvents().then(function(){ return render(); }).then(function(){ offerDraftAll(d.items); }); })
+      .catch(function(err){ form.querySelector('.pl-form-msg').innerHTML = '<div class="alert alert-err">'+esc(err.message)+'</div>'; });
+    return;
+  }
   if (kind === 'drafting') {
     var dmsg = form.querySelector('.pl-form-msg');
     api('PATCH', '/api/pipeline/events/' + encodeURIComponent(form.getAttribute('data-id')), { drafting: readDraftingForm(form) })

@@ -327,3 +327,9 @@ header a.btn-hdr{text-decoration:none}
 .pl-history-list li{display:grid;grid-template-columns:1fr auto;gap:2px 8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--rule)}
 .pl-history-text{grid-column:1;font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .pl-history-list .btn-sm{grid-row:1 / span 2;grid-column:2}
+
+/* ---- Planning ---- */
+.pl-plan-row{display:grid;grid-template-columns:150px 1fr 2fr auto;gap:6px;align-items:center;margin-bottom:6px}
+.pl-plan-row [data-plan=sub]{grid-column:1 / -1;font-size:12px;color:var(--ink-soft)}
+.pl-plan-row input[type=date]{border:1px solid var(--rule);border-radius:var(--r);padding:7px 8px;font-family:var(--font-ui);font-size:12.5px;background:var(--field-bg)}
+@media (max-width:700px){ .pl-plan-row{grid-template-columns:1fr 1fr} .pl-plan-row [data-plan=title]{grid-column:1 / -1} }
