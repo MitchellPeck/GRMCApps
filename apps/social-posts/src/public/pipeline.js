@@ -176,6 +176,10 @@ function render() {
     t.classList.toggle('active', on);
     if (on) t.setAttribute('aria-current', 'page'); else t.removeAttribute('aria-current');
   });
+  // The filters only narrow the dashboard, calendar and board; anywhere else
+  // they'd sit there doing nothing. Settings has no use for New post either.
+  $('pl-filters').hidden = !({ dashboard: 1, calendar: 1, board: 1 })[r.view];
+  document.querySelector('.pl-toolbar').hidden = r.view === 'settings';
   var main = $('pl-main');
   var views = { dashboard: renderDashboard, calendar: renderCalendar, board: renderBoard, events: renderEvents, event: renderEvent,
     gap: renderGapList, recurring: renderRecurring, mine: renderMine, settings: renderSettings };

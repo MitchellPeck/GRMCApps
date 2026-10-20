@@ -333,3 +333,6 @@ header a.btn-hdr{text-decoration:none}
 .pl-plan-row [data-plan=sub]{grid-column:1 / -1;font-size:12px;color:var(--ink-soft)}
 .pl-plan-row input[type=date]{border:1px solid var(--rule);border-radius:var(--r);padding:7px 8px;font-family:var(--font-ui);font-size:12.5px;background:var(--field-bg)}
 @media (max-width:700px){ .pl-plan-row{grid-template-columns:1fr 1fr} .pl-plan-row [data-plan=title]{grid-column:1 / -1} }
+
+/* New post stays on the right when the filters are hidden. */
+.pl-toolbar > .btn{margin-left:auto}
