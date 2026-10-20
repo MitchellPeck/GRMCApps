@@ -94,13 +94,17 @@ function platformChips(list){
   }).join('');
 }
 function recMark(i){ return i.recurrenceId ? '<span class="pl-rec" title="Repeats" aria-label="Repeats">↻</span> ' : ''; }
-function statusBadge(s, kind){ return '<span class="pl-status pl-s-'+esc(s)+(kind === 'media' ? ' pl-media-s' : '')+'">'+esc(label(s))+'</span>'; }
+// Media statuses as people say them: "captured" is shown as Collected, and
+// "edited" as Final file (the finished file is attached).
+var MEDIA_LABELS = { needed: 'Needed', scheduled: 'Scheduled', captured: 'Collected', edited: 'Final file' };
+function mediaLabel(s){ return MEDIA_LABELS[s] || label(s); }
+function statusBadge(s, kind){ return '<span class="pl-status pl-s-'+esc(s)+(kind === 'media' ? ' pl-media-s' : '')+'">'+esc(kind === 'media' ? mediaLabel(s) : label(s))+'</span>'; }
 function mediaProgress(item){
   if (item.noMediaNeeded) return '<span class="pl-prog pl-prog-none">No media needed</span>';
   if (!item.mediaTotal) return '<span class="pl-prog pl-prog-gap">No media planned</span>';
   var pct = Math.round(100 * item.mediaDone / item.mediaTotal);
-  return '<span class="pl-prog" title="'+item.mediaDone+' of '+item.mediaTotal+' captured">'
-    + '<span class="pl-bar"><span style="width:'+pct+'%"></span></span>'+item.mediaDone+' of '+item.mediaTotal+' captured</span>';
+  return '<span class="pl-prog" title="'+item.mediaDone+' of '+item.mediaTotal+' collected">'
+    + '<span class="pl-bar"><span style="width:'+pct+'%"></span></span>'+item.mediaDone+' of '+item.mediaTotal+' collected</span>';
 }
 
 // ── Filters (shared by every screen) ─────────────────────────────────────────
@@ -306,7 +310,8 @@ function renderCalendar(main) {
     ? Promise.all([api('GET', '/api/pipeline/content' + contentFilterQuery({ from: r.start, to: r.end })),
                    api('GET', '/api/pipeline/content' + contentFilterQuery({ undated: 1 }))])
     : Promise.all([api('GET', '/api/pipeline/media' + mediaFilterQuery({ from: r.start, to: r.end })),
-                   api('GET', '/api/pipeline/media' + mediaFilterQuery({ unscheduled: 1 }))]);
+                   // Only media still to collect needs a day; collected work stays off the tray.
+                   api('GET', '/api/pipeline/media' + mediaFilterQuery({ unscheduled: 1, status: 'needed' }))]);
   return load.then(function(res){
     var rows = publish ? res[0].items : res[0].media;
     var tray = publish ? res[1].items : res[1].media;
@@ -543,7 +548,7 @@ function renderEvent(main, id) {
       + '<button class="btn-sm" type="button" data-act="archive-event" data-id="'+esc(e.id)+'" data-archived="'+(e.archived ? '1' : '')+'">'+(e.archived ? 'Restore' : 'Archive')+'</button>'
       + '<button class="btn-sm btn-sm-gold" type="button" data-act="new-post" data-event="'+esc(e.id)+'">New post for this event</button></div></section>'
       + '<div id="pl-event-form"></div>'
-      + '<div class="pl-stats"><span><strong>'+live.length+'</strong> posts</span><span><strong>'+done+' of '+d.media.length+'</strong> media captured</span></div>';
+      + '<div class="pl-stats"><span><strong>'+live.length+'</strong> posts</span><span><strong>'+done+' of '+d.media.length+'</strong> media collected</span></div>';
 
     html += '<section class="card"><h3 class="ct">Posts</h3>'
       + (d.items.length ? '<ol class="pl-timeline">'+d.items.map(function(i){
@@ -572,7 +577,11 @@ function renderEvent(main, id) {
 }
 
 // ── Editor drawer ────────────────────────────────────────────────────────────
-var drawer = { id: null, item: null, media: [], source: null, recurrence: null, opener: null };
+// One editor, the same wherever it's opened and whether or not the post has
+// been saved yet. Before the first save, media lives only here (drawer.media)
+// and is created along with the post.
+var drawer = { id: null, item: null, media: [], source: null, recurrence: null, opener: null, capTab: '' };
+var tmpSeq = 0;
 
 function openDrawer(html) {
   var d = $('pl-drawer');
@@ -594,22 +603,23 @@ function closeDrawer() {
 }
 
 function newPost(defaults) {
-  drawer.id = null; drawer.item = null; drawer.media = []; drawer.source = null; drawer.recurrence = null;
+  drawer.id = null; drawer.item = null; drawer.media = []; drawer.source = null; drawer.recurrence = null; drawer.capTab = '';
   var f = S.filters;
   var item = {
     title: '', eventId: defaults.eventId || f.eventId || '', platforms: f.platform ? [f.platform] : ['instagram','facebook'],
-    publishDate: defaults.date || '', publishTime: '', status: 'idea', ownerEmail: f.owner || '', brief: '', caption: '', noMediaNeeded: false,
+    publishDate: defaults.date || '', publishTime: '', status: 'idea', ownerEmail: f.owner || '', brief: '', caption: '',
+    noMediaNeeded: false, captionMode: 'same', captions: {},
   };
-  openDrawer(editorHtml(item, true));
+  openDrawer(editorHtml(item));
 }
 
 function openPost(id) {
-  drawer.id = id;
+  drawer.id = id; drawer.capTab = '';
   openDrawer('<div class="pl-drawer-body"><p class="empty">Loading…</p></div>');
   api('GET', '/api/pipeline/content/' + encodeURIComponent(id)).then(function(d){
     if (drawer.id !== id) return;
     drawer.item = d.item; drawer.media = d.media; drawer.source = d.source; drawer.recurrence = d.recurrence;
-    $('pl-drawer').innerHTML = editorHtml(d.item, false);
+    $('pl-drawer').innerHTML = editorHtml(d.item);
   }).catch(function(e){
     $('pl-drawer').innerHTML = '<div class="pl-drawer-body"><div class="alert alert-err">'+esc(e.message)+'</div><button class="btn btn-secondary" data-act="close">Close</button></div>';
   });
@@ -624,14 +634,31 @@ function sourceHtml(src) {
   return '<p class="pl-source">Drafted by the '+esc(runs[src.run] || src.run)+' ('+esc(src.key)+') on '+esc(String(src.draftedAt).slice(0, 10))+'. <a href="/#drafts">See it in Drafts</a></p>';
 }
 
-function editorHtml(i, isNew) {
-  var m = S.meta;
-  var blockers = isNew ? [] : readyBlockers(i, drawer.media);
+function platformMeta(key){ return S.meta.platforms.filter(function(p){ return p.key === key; })[0]; }
+
+// Length as the platform counts it: X charges 23 for any link.
+function countChars(key, text) {
+  var p = platformMeta(key), s = text || '';
+  if (!p || !p.urlLength) return Array.from(s).length;
+  var urls = s.match(/https?:\/\/\S+/g) || [];
+  return Array.from(s.replace(/https?:\/\/\S+/g, '')).length + urls.length * p.urlLength;
+}
+function counterHtml(key, text) {
+  var p = platformMeta(key), n = countChars(key, text);
+  return '<span class="pl-count-chip'+(n > p.limit ? ' over' : '')+'" data-count="'+esc(key)+'">'+esc(p.label)+' '+n+' / '+p.limit+'</span>';
+}
+
+function editorHtml(i) {
+  var m = S.meta, isNew = !drawer.id;
+  var blockers = readyBlockers(i, drawer.media);
   var gatedWarning = !isNew && m.gatedStatuses.indexOf(i.status) !== -1 && blockers.length
     ? '<div class="alert alert-warn">Marked '+label(i.status)+' but still waiting on: '+esc(blockers.join('; '))+'</div>' : '';
+  var separate = i.captionMode === 'separate';
+  var selected = m.platforms.filter(function(p){ return i.platforms.indexOf(p.key) !== -1; });
+  if (!drawer.capTab || i.platforms.indexOf(drawer.capTab) === -1) drawer.capTab = selected.length ? selected[0].key : '';
   return '<form class="pl-drawer-body" data-form="content">'
     + '<div class="pl-drawer-head"><h2>'+(isNew ? 'New post' : 'Edit post')+'</h2><button class="pl-x" type="button" data-act="close" aria-label="Close">×</button></div>'
-    + sourceHtml(drawer.source) + (isNew ? '' : recurrenceBanner()) + gatedWarning
+    + sourceHtml(drawer.source) + recurrenceBanner() + gatedWarning
     + '<div class="field"><label for="pf-title">Title</label><input id="pf-title" type="text" name="title" required value="'+esc(i.title)+'" placeholder="Kids Camp: first day recap"></div>'
     + '<div class="row2"><div class="field"><label for="pf-date">Publish date</label><input id="pf-date" type="date" name="publishDate" required value="'+esc(i.publishDate || '')+'"></div>'
     + '<div class="field"><label for="pf-time">Time (optional)</label><input id="pf-time" type="time" name="publishTime" value="'+esc(i.publishTime || '')+'"></div></div>'
@@ -639,27 +666,49 @@ function editorHtml(i, isNew) {
     + '<div class="field"><label for="pf-status">Status</label><select id="pf-status" name="status">'
     + m.contentStatuses.map(function(s){ return '<option value="'+s+'"'+(s === i.status ? ' selected' : '')+'>'+label(s)+'</option>'; }).join('')+'</select></div></div>'
     + '<fieldset class="field pl-plats"><legend class="lbl">Platforms</legend>'
-    + m.platforms.map(function(p){ return '<label class="check"><input type="checkbox" name="platforms" value="'+esc(p.key)+'"'+(i.platforms.indexOf(p.key) !== -1 ? ' checked' : '')+'> '+esc(p.label)+'</label>'; }).join('')
+    + m.platforms.map(function(p){
+        var blocked = p.needsImage && i.noMediaNeeded;
+        return '<label class="check'+(blocked ? ' is-blocked' : '')+'"><input type="checkbox" name="platforms" data-act="platform" value="'+esc(p.key)+'"'
+          + (i.platforms.indexOf(p.key) !== -1 && !blocked ? ' checked' : '')+(blocked ? ' disabled' : '')+'> '+esc(p.label)+'</label>';
+      }).join('')
+    + '<p class="hint" data-plat-hint'+(i.noMediaNeeded ? '' : ' hidden')+'>Instagram needs an image, so it’s off for text-only posts.</p>'
     + '</fieldset>'
     + '<div class="field"><label for="pf-owner">Owner</label><input id="pf-owner" type="email" name="ownerEmail" list="pl-people" value="'+esc(i.ownerEmail)+'" placeholder="Who gets it published"></div>'
     + '<div class="field"><label for="pf-brief">Brief</label><textarea id="pf-brief" name="brief" placeholder="Purpose, angle and call to action in a sentence or two">'+esc(i.brief)+'</textarea></div>'
-    + '<div class="field"><div class="pl-label-row"><label for="pf-caption">Caption</label>'
-    + (isNew ? '' : '<button class="btn-sm" type="button" data-act="draft-caption" id="pf-draft">'+(i.caption ? 'Redraft with Claude' : 'Draft with Claude')+'</button>')+'</div>'
-    + '<textarea id="pf-caption" name="caption" class="pl-caption" placeholder="Written by hand, drafted with Claude, or filled in by the weekly runs">'+esc(i.caption)+'</textarea></div>'
-    + '<label class="check pl-nomedia"><input type="checkbox" name="noMediaNeeded"'+(i.noMediaNeeded ? ' checked' : '')+'> No media needed (a text-only post)</label>'
+
+    + '<div class="field pl-caption-block"><div class="pl-label-row"><span class="lbl">Caption</span>'
+    + '<div class="pl-seg pl-seg-sm" role="group" aria-label="Caption per platform">'
+    +   '<button type="button" data-act="cap-mode" data-mode="same" aria-pressed="'+!separate+'">Same everywhere</button>'
+    +   '<button type="button" data-act="cap-mode" data-mode="separate" aria-pressed="'+separate+'">Different for each</button></div>'
+    + '<button class="btn-sm" type="button" data-act="draft-caption">'+(i.caption || Object.keys(i.captions || {}).length ? 'Redraft with Claude' : 'Draft with Claude')+'</button></div>'
+    + '<input type="hidden" name="captionMode" value="'+(separate ? 'separate' : 'same')+'">'
+    + '<div class="pl-cap-same"'+(separate ? ' hidden' : '')+'>'
+    +   '<textarea id="pf-caption" name="caption" class="pl-caption" aria-label="Caption" placeholder="Written by hand, drafted with Claude, or filled in by the weekly runs">'+esc(i.caption)+'</textarea>'
+    +   '<div class="pl-counts">'+selected.map(function(p){ return counterHtml(p.key, i.caption); }).join('')+'</div></div>'
+    + '<div class="pl-cap-separate"'+(separate ? '' : ' hidden')+'>'
+    +   '<div class="pl-captabs" role="tablist">'+selected.map(function(p){
+          return '<button type="button" role="tab" data-act="cap-tab" data-tab="'+esc(p.key)+'" aria-selected="'+(p.key === drawer.capTab)+'">'+esc(p.label)+'</button>';
+        }).join('')+'</div>'
+    +   m.platforms.map(function(p){
+          var text = (i.captions || {})[p.key] || '';
+          return '<div class="pl-cappane" role="tabpanel" data-pane="'+esc(p.key)+'"'+(p.key === drawer.capTab ? '' : ' hidden')+'>'
+            + '<textarea name="caption-'+esc(p.key)+'" class="pl-caption" aria-label="'+esc(p.label)+' caption" placeholder="'+esc(p.label)+' caption">'+esc(text)+'</textarea>'
+            + '<div class="pl-counts">'+counterHtml(p.key, text)+'</div></div>';
+        }).join('')
+    + '</div></div>'
+
+    + '<label class="check pl-nomedia"><input type="checkbox" name="noMediaNeeded" data-act="no-media"'+(i.noMediaNeeded ? ' checked' : '')+'> No media needed (a text-only post)</label>'
     + (drawer.recurrence ? '<fieldset class="field pl-scope"><legend class="lbl">Apply changes to</legend>'
         + '<label class="check"><input type="radio" name="scope" value="this" checked> This post only</label>'
         + '<label class="check"><input type="radio" name="scope" value="future"> This and later posts in the series</label></fieldset>' : '')
     + '<div class="pl-form-msg" id="pf-msg"></div>'
     + '<div class="btn-row"><button class="btn btn-primary" type="submit">'+(isNew ? 'Create post' : 'Save changes')+'</button>'
-    + (isNew ? '<button class="btn btn-secondary" type="button" data-act="make-recurring">Make it repeat</button>'
-             : '<button class="btn btn-gold" type="button" data-act="send-metricool">Send to Metricool</button>')
+    + '<button class="btn btn-gold" type="button" data-act="send-metricool">Send to Metricool</button>'
+    + (drawer.recurrence ? '' : '<button class="btn btn-secondary" type="button" data-act="make-recurring">Make it repeat</button>')
     + '<button class="btn btn-secondary" type="button" data-act="close">'+(isNew ? 'Cancel' : 'Close')+'</button>'
-    + (isNew ? '' : drawer.recurrence
-        ? '<button class="btn btn-danger pl-right" type="button" data-act="delete-post">Skip this date</button>'
-        : '<button class="btn btn-danger pl-right" type="button" data-act="delete-post">Delete post</button>')+'</div>'
-    + '</form>'
-    + (isNew ? '<p class="hint pl-drawer-pad">Create the post first, then list the media it needs.</p>' : checklistHtml(i));
+    + (isNew ? '' : '<button class="btn btn-danger pl-right" type="button" data-act="delete-post">'+(drawer.recurrence ? 'Skip this date' : 'Delete post')+'</button>')
+    + '</div></form>'
+    + mediaSectionHtml(i);
 }
 
 function recurrenceBanner() {
@@ -669,41 +718,153 @@ function recurrenceBanner() {
     + ' <button class="pl-link" type="button" data-act="edit-recurrence" data-id="'+esc(r.id)+'">Edit the series</button></p>';
 }
 
+function isCollected(m){ return m.status === 'captured' || m.status === 'edited'; }
+
 function readyBlockers(item, media) {
   if (item.noMediaNeeded) return [];
   if (!media.length) return ['no media is listed yet'];
-  return media.filter(function(m){ return m.status !== 'captured' && m.status !== 'edited'; })
-    .map(function(m){ return m.description + ' (' + m.status + ')'; });
+  return media.filter(function(m){ return !isCollected(m); })
+    .map(function(m){ return m.description + ' (' + mediaLabel(m.status).toLowerCase() + ')'; });
 }
 
-function checklistHtml(item) {
+// ── Media: one row design for every post ──
+function mediaSectionHtml(item) {
   var media = drawer.media, m = S.meta;
-  var done = media.filter(function(x){ return x.status === 'captured' || x.status === 'edited'; }).length;
+  var done = media.filter(isCollected).length;
   var types = function(sel){ return m.mediaTypes.map(function(t){ return '<option value="'+t+'"'+(t === sel ? ' selected' : '')+'>'+label(t)+'</option>'; }).join(''); };
-  var html = '<section class="pl-checklist" aria-label="Media checklist"><div class="pl-drawer-head"><h3>Media</h3>'
-    + '<span class="pl-prog">'+(media.length ? done+' of '+media.length+' captured' : item.noMediaNeeded ? 'Not needed' : 'None listed')+'</span></div>';
+  var html = '<section class="pl-checklist" aria-label="Media"><div class="pl-drawer-head"><h3>Media</h3>'
+    + '<span class="pl-prog">'+(media.length ? done+' of '+media.length+' collected' : item.noMediaNeeded ? 'Not needed' : 'None listed yet')+'</span></div>';
   html += media.map(function(x){
     var late = x.gatherDate && item.publishDate && x.gatherDate > item.publishDate;
-    return '<div class="pl-mrow" data-media="'+esc(x.id)+'">'
-      + '<div class="pl-mline"><select data-mfield="status" aria-label="Status">'+m.mediaStatuses.map(function(s){ return '<option value="'+s+'"'+(s === x.status ? ' selected' : '')+'>'+label(s)+'</option>'; }).join('')+'</select>'
-      + '<input type="text" data-mfield="description" value="'+esc(x.description)+'" aria-label="What to capture">'
+    var file = x.approvalId
+      ? '<div class="pl-file"><img src="/api/pipeline/approved/'+encodeURIComponent(x.approvalId)+'/image" alt="" loading="lazy">'
+        + '<span><strong>'+esc(x.approvalTitle || 'Approved file')+'</strong><br><span class="muted">From Approvals</span></span>'
+        + '<button class="btn-sm" type="button" data-act="clear-approval">Remove</button></div>'
+      : '<div class="pl-mline pl-mline-sm"><button class="btn-sm" type="button" data-act="pick-approval">Choose from Approvals</button>'
+        + '<input type="url" data-mfield="fileLink" value="'+esc(x.fileLink)+'" placeholder="or paste a link (optional)" aria-label="Link to the file"></div>';
+    return '<div class="pl-mrow'+(isCollected(x) ? ' is-done' : '')+'" data-media="'+esc(x.id)+'">'
+      + '<div class="pl-mline"><label class="pl-collect" title="Collected"><input type="checkbox" data-mcollect'+(isCollected(x) ? ' checked' : '')+'><span>Collected</span></label>'
+      + '<input type="text" data-mfield="description" value="'+esc(x.description)+'" aria-label="What to collect">'
       + '<button class="pl-x" type="button" data-act="delete-media" aria-label="Remove '+esc(x.description)+'">×</button></div>'
       + '<div class="pl-mline pl-mline-sm"><select data-mfield="type" aria-label="Type">'+types(x.type)+'</select>'
       + '<input type="date" data-mfield="gatherDate" value="'+esc(x.gatherDate || '')+'" aria-label="Gather date">'
-      + '<input type="email" data-mfield="assigneeEmail" list="pl-people" value="'+esc(x.assigneeEmail)+'" placeholder="Who captures it" aria-label="Assignee"></div>'
+      + '<input type="email" data-mfield="assigneeEmail" list="pl-people" value="'+esc(x.assigneeEmail)+'" placeholder="Who collects it" aria-label="Who collects it"></div>'
       + '<div class="pl-mline pl-mline-sm"><input type="text" data-mfield="gatherLocation" value="'+esc(x.gatherLocation)+'" placeholder="Where" aria-label="Location">'
-      + '<input type="url" data-mfield="fileLink" value="'+esc(x.fileLink)+'" placeholder="Link to the finished file" aria-label="File link"></div>'
-      + '<input type="text" class="pl-mnotes" data-mfield="notes" value="'+esc(x.notes)+'" placeholder="Shot details, people, permissions" aria-label="Notes">'
-      + (late ? '<p class="pl-gaptext">Gathered after the post publishes ('+esc(shortDate(item.publishDate))+').</p>' : '')
+      + '<input type="text" data-mfield="notes" value="'+esc(x.notes)+'" placeholder="Shot details, people, permissions" aria-label="Notes"></div>'
+      + file
+      + '<div class="pl-picker" hidden></div>'
+      + '<p class="pl-mstatus">'+statusBadge(x.status, 'media')+(late ? ' <span class="pl-gaptext">Collected after the post publishes ('+esc(shortDate(item.publishDate))+').</span>' : '')+'</p>'
       + '</div>';
   }).join('');
-  html += '<form class="pl-madd" data-form="media"><input type="text" name="description" placeholder="Add something to capture, e.g. volunteer interview at check-in" aria-label="New media" required>'
+  html += '<form class="pl-madd" data-form="media"><input type="text" name="description" placeholder="Add something to collect, e.g. volunteer interview at check-in" aria-label="New media" required>'
     + '<select name="type" aria-label="Type">'+types('photo')+'</select>'
     + '<input type="date" name="gatherDate" aria-label="Gather date">'
     + '<button class="btn-sm btn-sm-gold" type="submit">Add</button></form></section>';
   return html;
 }
 
+function redrawMedia() {
+  var list = document.querySelector('.pl-checklist');
+  if (list) list.outerHTML = mediaSectionHtml(drawer.item || readForm(document.querySelector('form[data-form=content]')));
+}
+
+function reloadDrawer() {
+  if (!drawer.id) { redrawMedia(); return Promise.resolve(); }
+  return api('GET', '/api/pipeline/content/' + encodeURIComponent(drawer.id)).then(function(d){
+    drawer.item = d.item; drawer.media = d.media;
+    // Keep unsaved edits in the post form; only the media section is redrawn.
+    redrawMedia();
+  });
+}
+
+// Before the post exists its media is edited in place here, following the
+// same rules the server applies afterwards.
+function localMediaStatus(x) {
+  if (isCollected(x)) return (x.approvalId || x.fileLink) ? 'edited' : 'captured';
+  return x.gatherDate ? 'scheduled' : 'needed';
+}
+
+function mediaChange(id, body) {
+  if (!drawer.id) {
+    var x = drawer.media.filter(function(m){ return m.id === id; })[0];
+    if (!x) return;
+    Object.keys(body).forEach(function(k){ x[k] = body[k]; });
+    x.status = body.status || localMediaStatus(x);
+    redrawMedia();
+    return;
+  }
+  api('PATCH', '/api/pipeline/media/' + encodeURIComponent(id), body).then(function(res){
+    warnAll(res.warnings);
+    return reloadDrawer().then(render);
+  }).catch(function(e){ toast(e.message, 'err'); reloadDrawer(); });
+}
+
+function saveMediaField(row, input) {
+  var field = input.getAttribute('data-mfield'), body = {};
+  body[field] = field === 'gatherDate' ? (input.value || null) : input.value;
+  if (field === 'description' && !input.value.trim()) { toast('Describe what needs collecting.', 'err'); return reloadDrawer(); }
+  mediaChange(row.getAttribute('data-media'), body);
+}
+
+function toggleCollected(row, checked) {
+  var id = row.getAttribute('data-media');
+  var x = drawer.media.filter(function(m){ return m.id === id; })[0];
+  if (!x) return;
+  var status = checked ? ((x.approvalId || x.fileLink) ? 'edited' : 'captured') : (x.gatherDate ? 'scheduled' : 'needed');
+  mediaChange(id, { status: status });
+}
+
+function addMedia(form) {
+  var fd = new FormData(form);
+  var body = { description: (fd.get('description') || '').trim(), type: fd.get('type'), gatherDate: fd.get('gatherDate') || null };
+  if (!body.description) return;
+  if (!drawer.id) {
+    var x = { id: 'tmp-' + (++tmpSeq), description: body.description, type: body.type, gatherDate: body.gatherDate,
+      gatherLocation: '', assigneeEmail: '', fileLink: '', notes: '', approvalId: null, approvalTitle: '', status: 'needed' };
+    x.status = localMediaStatus(x);
+    drawer.media.push(x);
+    redrawMedia();
+    var input = document.querySelector('.pl-madd input[name=description]');
+    if (input) input.focus();
+    return;
+  }
+  api('POST', '/api/pipeline/content/' + encodeURIComponent(drawer.id) + '/media', body).then(function(res){
+    warnAll(res.warnings);
+    return reloadDrawer().then(function(){
+      var input = document.querySelector('.pl-madd input[name=description]');
+      if (input) input.focus();
+      render();
+    });
+  }).catch(function(e){ toast(e.message, 'err'); });
+}
+
+function deleteMedia(row) {
+  var id = row.getAttribute('data-media');
+  if (!drawer.id) { drawer.media = drawer.media.filter(function(m){ return m.id !== id; }); redrawMedia(); return; }
+  api('DELETE', '/api/pipeline/media/' + encodeURIComponent(id)).then(function(){
+    return reloadDrawer().then(render);
+  }).catch(function(err){ toast(err.message, 'err'); });
+}
+
+// ── Picking a finished file from Approvals ──
+var approvedCache = null;
+function openApprovalPicker(row) {
+  var picker = row.querySelector('.pl-picker');
+  picker.hidden = false;
+  picker.innerHTML = '<p class="hint">Loading approved files…</p>';
+  (approvedCache ? Promise.resolve(approvedCache) : api('GET', '/api/metricool/approved-images').then(function(d){ approvedCache = d.images || []; return approvedCache; }))
+    .then(function(images){
+      if (!images.length) { picker.innerHTML = '<p class="hint">Nothing has been approved yet. Files appear here once they’re signed off in Approvals.</p>'; return; }
+      picker.innerHTML = '<div class="pl-picker-head"><span class="lbl">Approved files</span><button class="pl-x" type="button" data-act="close-picker" aria-label="Close">×</button></div>'
+        + '<div class="pl-picker-grid">' + images.map(function(img){
+          return '<button type="button" class="pl-pick" data-act="choose-approval" data-approval="'+esc(img.id)+'" data-title="'+esc(img.title)+'">'
+            + '<img src="/api/pipeline/approved/'+encodeURIComponent(img.id)+'/image" alt="" loading="lazy"><span>'+esc(img.title)+'</span></button>';
+        }).join('') + '</div>';
+    })
+    .catch(function(e){ picker.innerHTML = '<p class="pl-gaptext">Couldn’t reach Approvals: '+esc(e.message)+'</p>'; });
+}
+
+// ── Reading and saving the post ──
 function readForm(form) {
   var fd = new FormData(form), out = {};
   out.title = (fd.get('title') || '').trim();
@@ -716,6 +877,9 @@ function readForm(form) {
   out.brief = fd.get('brief') || '';
   out.caption = fd.get('caption') || '';
   out.noMediaNeeded = fd.get('noMediaNeeded') === 'on';
+  out.captionMode = fd.get('captionMode') === 'separate' ? 'separate' : 'same';
+  out.captions = {};
+  S.meta.platforms.forEach(function(p){ var v = (fd.get('caption-' + p.key) || '').trim(); if (v) out.captions[p.key] = v; });
   return out;
 }
 function formScope(form) {
@@ -723,90 +887,143 @@ function formScope(form) {
   return r ? r.value : 'this';
 }
 
-function saveContent(form) {
+function sameValue(a, b) {
+  if (Array.isArray(a)) return a.join(',') === (b || []).join(',');
+  if (a && typeof a === 'object') return JSON.stringify(a) === JSON.stringify(b || {});
+  return a === (b == null ? '' : b);
+}
+
+// Resolves with the saved post (creating it first if it's new), or rejects
+// with a message already shown in the editor.
+function savePost(form, opts) {
+  opts = opts || {};
   var body = readForm(form), msg = $('pf-msg'), btn = form.querySelector('[type=submit]');
   msg.innerHTML = '';
-  if (!body.title) { msg.innerHTML = '<div class="alert alert-err">Give the post a title.</div>'; return; }
-  if (!body.publishDate) { msg.innerHTML = '<div class="alert alert-err">Pick a publish date.</div>'; return; }
+  var bad = !body.title ? 'Give the post a title.' : !body.publishDate ? 'Pick a publish date.' : '';
+  if (bad) { msg.innerHTML = '<div class="alert alert-err">'+bad+'</div>'; return Promise.reject(new Error(bad)); }
   btn.disabled = true;
   var req;
   if (drawer.id) {
     // Send only what changed, so a status change is judged on its own.
     var cur = drawer.item, patch = {};
-    Object.keys(body).forEach(function(k){
-      var a = body[k], b = cur[k] == null ? '' : cur[k];
-      if (Array.isArray(a) ? a.join(',') !== (b || []).join(',') : a !== b) patch[k] = a;
-    });
-    if (!Object.keys(patch).length) { btn.disabled = false; closeDrawer(); return; }
+    Object.keys(body).forEach(function(k){ if (!sameValue(body[k], cur[k])) patch[k] = body[k]; });
+    if (!Object.keys(patch).length) { btn.disabled = false; return Promise.resolve({ item: cur, unchanged: true }); }
     patch.scope = formScope(form);
     req = api('PATCH', '/api/pipeline/content/' + encodeURIComponent(drawer.id), patch);
   } else {
-    req = api('POST', '/api/pipeline/content', body);
+    req = api('POST', '/api/pipeline/content', body).then(function(res){
+      // The media listed before the post existed goes in with it.
+      var pending = drawer.media.slice();
+      drawer.id = res.item.id;
+      return pending.reduce(function(chain, x){
+        return chain.then(function(){
+          return api('POST', '/api/pipeline/content/' + encodeURIComponent(res.item.id) + '/media', {
+            description: x.description, type: x.type, gatherDate: x.gatherDate, gatherLocation: x.gatherLocation,
+            assigneeEmail: x.assigneeEmail, fileLink: x.fileLink, notes: x.notes,
+            approvalId: x.approvalId, approvalTitle: x.approvalTitle, status: x.status,
+          });
+        });
+      }, Promise.resolve()).then(function(){ return res; });
+    });
   }
-  req.then(function(res){
+  return req.then(function(res){
     btn.disabled = false;
     warnAll(res.warnings);
-    if (!drawer.id) {
-      toast('Post created. Now list the media it needs.', 'ok');
-      openPost(res.item.id);
-    } else {
-      toast(body && formScope(form) === 'future' ? 'Saved, and applied to later posts in the series.' : 'Saved.', 'ok');
-      closeDrawer();
-    }
+    if (!opts.quiet) toast(formScope(form) === 'future' ? 'Saved, and applied to later posts in the series.' : 'Saved.', 'ok');
     render();
-  }).catch(function(e){
+    return res;
+  }, function(e){
     btn.disabled = false;
     msg.innerHTML = '<div class="alert alert-err">'+esc(e.message)+'</div>';
+    throw e;
   });
 }
 
-function reloadDrawer() {
-  if (!drawer.id) return Promise.resolve();
-  return api('GET', '/api/pipeline/content/' + encodeURIComponent(drawer.id)).then(function(d){
-    drawer.item = d.item; drawer.media = d.media;
-    // Keep unsaved edits in the post form; only the checklist is redrawn.
-    var list = document.querySelector('.pl-checklist');
-    if (list) list.outerHTML = checklistHtml(d.item);
-  });
+function saveContent(form) {
+  var wasNew = !drawer.id;
+  savePost(form).then(function(res){
+    if (wasNew) openPost(res.item.id); else closeDrawer();
+  }).catch(function(){ /* shown in the editor */ });
 }
 
-function saveMediaField(row, input) {
-  var id = row.getAttribute('data-media'), field = input.getAttribute('data-mfield'), body = {};
-  body[field] = input.value;
-  if (field === 'description' && !input.value.trim()) { toast('Describe what needs capturing.', 'err'); return reloadDrawer(); }
-  api('PATCH', '/api/pipeline/media/' + encodeURIComponent(id), body).then(function(res){
-    warnAll(res.warnings);
-    return reloadDrawer().then(render);
-  }).catch(function(e){ toast(e.message, 'err'); reloadDrawer(); });
-}
-
-function addMedia(form) {
-  var fd = new FormData(form);
-  var body = { description: (fd.get('description') || '').trim(), type: fd.get('type'), gatherDate: fd.get('gatherDate') || null };
-  if (!body.description) return;
-  api('POST', '/api/pipeline/content/' + encodeURIComponent(drawer.id) + '/media', body).then(function(res){
-    warnAll(res.warnings);
-    return reloadDrawer().then(function(){
-      var input = document.querySelector('.pl-madd input[name=description]');
-      if (input) input.focus();
-      render();
+// ── Caption controls ──
+function setCaptionMode(mode) {
+  var form = document.querySelector('form[data-form=content]');
+  var cur = readForm(form);
+  form.querySelector('[name=captionMode]').value = mode;
+  // Carry the text across so switching never loses work.
+  if (mode === 'separate') {
+    cur.platforms.forEach(function(k){
+      var box = form.querySelector('[name="caption-' + k + '"]');
+      if (box && !box.value.trim()) box.value = cur.caption;
     });
-  }).catch(function(e){ toast(e.message, 'err'); });
+  } else if (!cur.caption.trim()) {
+    var first = cur.platforms.map(function(k){ return cur.captions[k]; }).filter(Boolean)[0];
+    if (first) form.querySelector('[name=caption]').value = first;
+  }
+  refreshCaptionUi();
 }
 
-// ── Claude and Metricool from the drawer ─────────────────────────────────────
+function refreshCaptionUi() {
+  var form = document.querySelector('form[data-form=content]');
+  if (!form) return;
+  var cur = readForm(form), separate = cur.captionMode === 'separate';
+  form.querySelectorAll('[data-act=cap-mode]').forEach(function(b){ b.setAttribute('aria-pressed', String(b.getAttribute('data-mode') === cur.captionMode)); });
+  form.querySelector('.pl-cap-same').hidden = separate;
+  form.querySelector('.pl-cap-separate').hidden = !separate;
+  if (cur.platforms.indexOf(drawer.capTab) === -1) drawer.capTab = cur.platforms[0] || '';
+  form.querySelector('.pl-captabs').innerHTML = S.meta.platforms.filter(function(p){ return cur.platforms.indexOf(p.key) !== -1; }).map(function(p){
+    return '<button type="button" role="tab" data-act="cap-tab" data-tab="'+esc(p.key)+'" aria-selected="'+(p.key === drawer.capTab)+'">'+esc(p.label)+'</button>';
+  }).join('') || '<p class="hint">Pick a platform above.</p>';
+  form.querySelectorAll('[data-pane]').forEach(function(pane){ pane.hidden = pane.getAttribute('data-pane') !== drawer.capTab; });
+  form.querySelector('.pl-cap-same .pl-counts').innerHTML = cur.platforms.map(function(k){ return counterHtml(k, cur.caption); }).join('');
+  form.querySelectorAll('[data-pane]').forEach(function(pane){
+    var k = pane.getAttribute('data-pane');
+    pane.querySelector('.pl-counts').innerHTML = counterHtml(k, cur.captions[k] || '');
+  });
+}
+
+// Instagram won't take a post without an image: a text-only post can't go
+// there. Shared by the post editor and the recurring-post form.
+function applyImageRuleTo(form, changed) {
+  var noMedia = form.querySelector('[name=noMediaNeeded]').checked;
+  S.meta.platforms.forEach(function(p){
+    if (!p.needsImage) return;
+    var box = form.querySelector('[name=platforms][value="' + p.key + '"]');
+    if (noMedia && box.checked && changed === 'no-media') toast(p.label + ' needs an image, so it’s been unticked.', 'warn');
+    if (noMedia) box.checked = false;
+    box.disabled = noMedia;
+    box.closest('label').classList.toggle('is-blocked', noMedia);
+  });
+  var hint = form.querySelector('[data-plat-hint]');
+  if (hint) hint.hidden = !noMedia;
+}
+function applyImageRule(changed) {
+  applyImageRuleTo(document.querySelector('form[data-form=content]'), changed);
+  refreshCaptionUi();
+}
+
 function draftCaption(btn) {
+  var form = document.querySelector('form[data-form=content]');
+  var cur = readForm(form);
   btn.disabled = true;
-  var label = btn.textContent;
+  var was = btn.textContent;
   btn.innerHTML = '<span class="spin pl-spin-dark"></span> Drafting…';
-  api('POST', '/api/pipeline/content/' + encodeURIComponent(drawer.id) + '/draft-caption').then(function(res){
+  api('POST', '/api/pipeline/draft-caption', cur).then(function(res){
     btn.disabled = false; btn.textContent = 'Redraft with Claude';
-    var box = $('pf-caption');
-    box.value = res.caption;
-    box.focus();
-    toast('Draft ready. Edit it if you like, then save.', 'ok');
+    if (res.captions) {
+      Object.keys(res.captions).forEach(function(k){
+        var box = form.querySelector('[name="caption-' + k + '"]');
+        if (box) box.value = res.captions[k];
+      });
+    } else {
+      form.querySelector('[name=caption]').value = res.caption;
+    }
+    refreshCaptionUi();
+    if (res.warnings && res.warnings.length) toast(res.warnings.join(' '), 'warn');
+    else toast(res.captions ? 'Drafted for each platform. Review them, then save.' : 'Draft ready. Edit it if you like, then save.', 'ok');
   }).catch(function(e){
-    btn.disabled = false; btn.textContent = label;
+    btn.disabled = false; btn.textContent = was;
     $('pf-msg').innerHTML = '<div class="alert alert-err">'+esc(e.message)+'</div>';
   });
 }
@@ -816,17 +1033,45 @@ var METRICOOL_NETWORK = { instagram: 'instagram', facebook: 'facebook', x: 'twit
 
 function sendToMetricool() {
   var form = document.querySelector('form[data-form=content]');
-  var cur = readForm(form), it = drawer.item;
-  if (!cur.caption.trim()) { $('pf-msg').innerHTML = '<div class="alert alert-err">Write or draft a caption first.</div>'; return; }
+  var cur = readForm(form);
+  var texts = null;
+  if (cur.captionMode === 'separate') {
+    texts = {};
+    var missing = cur.platforms.filter(function(k){ return !cur.captions[k]; });
+    if (missing.length) {
+      $('pf-msg').innerHTML = '<div class="alert alert-err">Write a caption for '+esc(missing.map(function(k){ return platformMeta(k).label; }).join(' and '))+' first.</div>';
+      return;
+    }
+    cur.platforms.forEach(function(k){ texts[METRICOOL_NETWORK[k]] = cur.captions[k]; });
+  } else if (!cur.caption.trim()) {
+    $('pf-msg').innerHTML = '<div class="alert alert-err">Write or draft a caption first.</div>'; return;
+  }
   var blockers = readyBlockers(cur, drawer.media);
   if (blockers.length && !confirm('Still waiting on: ' + blockers.join('; ') + '.\n\nSend to Metricool anyway?')) return;
-  openMetricool(cur.caption, {
-    date: cur.publishDate, time: cur.publishTime,
-    networks: cur.platforms.map(function(p){ return METRICOOL_NETWORK[p]; }).filter(Boolean),
-    sourceType: 'content', sourceRef: it.id, contentItemId: it.id,
-    // The server marks the post Scheduled; show that.
-    onSent: function(){ openPost(it.id); render(); },
+  // Sending needs a saved post to mark as Scheduled afterwards.
+  savePost(form, { quiet: true }).then(function(res){
+    var id = res.item.id;
+    var approved = drawer.media.filter(function(m){ return m.approvalId; })[0];
+    openMetricool(cur.caption, {
+      date: cur.publishDate, time: cur.publishTime, texts: texts,
+      networks: cur.platforms.map(function(p){ return METRICOOL_NETWORK[p]; }).filter(Boolean),
+      approvedImageId: approved ? approved.approvalId : '',
+      sourceType: 'content', sourceRef: id, contentItemId: id,
+      // The server marks the post Scheduled; show that.
+      onSent: function(){ openPost(id); render(); },
+    });
+  }).catch(function(){ /* shown in the editor */ });
+}
+
+// "Make it repeat" from any one-off post: this post becomes the first in the series.
+function makeRecurring(form) {
+  var cur = readForm(form);
+  cur.mediaTemplate = drawer.media.map(function(x){
+    var offset = x.gatherDate && cur.publishDate
+      ? Math.round((parseIso(x.gatherDate) - parseIso(cur.publishDate)) / 86400000) : 0;
+    return { description: x.description, type: x.type, offsetDays: offset, assigneeEmail: x.assigneeEmail };
   });
+  openRecurrence(null, cur, drawer.id);
 }
 
 // ── Recurring posts ──────────────────────────────────────────────────────────
@@ -865,23 +1110,29 @@ function tplRowHtml(m) {
     + '<button class="pl-x" type="button" data-act="remove-tpl-row" aria-label="Remove">×</button></div>';
 }
 
-function openRecurrence(id, prefill) {
+function openRecurrence(id, prefill, fromContentId) {
   var load = id ? api('GET', '/api/pipeline/recurrences/' + encodeURIComponent(id)).then(function(d){ return d.recurrence; })
                 : Promise.resolve(null);
   openDrawer('<div class="pl-drawer-body"><p class="empty">Loading…</p></div>');
-  load.then(function(r){ $('pl-drawer').innerHTML = recurrenceFormHtml(r, prefill || {}); previewRule(); })
+  load.then(function(r){
+    $('pl-drawer').innerHTML = recurrenceFormHtml(r, prefill || {}, fromContentId);
+    applyImageRuleTo(document.querySelector('form[data-form=recurrence]'));
+    previewRule();
+  })
     .catch(function(e){ $('pl-drawer').innerHTML = '<div class="pl-drawer-body"><div class="alert alert-err">'+esc(e.message)+'</div></div>'; });
 }
 
-function recurrenceFormHtml(r, pre) {
+function recurrenceFormHtml(r, pre, fromContentId) {
   var start = pre.publishDate || S.meta.today, startDow = parseIso(start).getDay();
   var rule = r ? r.rule : { freq: 'weekly', interval: 1, weekdays: [startDow], monthDay: parseIso(start).getDate(),
     nth: Math.min(4, Math.ceil(parseIso(start).getDate() / 7)), weekday: startDow, startDate: start, endDate: null, count: null };
   var v = r || { title: pre.title || '', brief: pre.brief || '', eventId: pre.eventId || '', platforms: pre.platforms || ['instagram','facebook'],
-    publishTime: pre.publishTime || '', ownerEmail: pre.ownerEmail || '', noMediaNeeded: !!pre.noMediaNeeded, mediaTemplate: [], active: true };
+    publishTime: pre.publishTime || '', ownerEmail: pre.ownerEmail || '', noMediaNeeded: !!pre.noMediaNeeded,
+    mediaTemplate: pre.mediaTemplate || [], active: true };
   var ends = rule.endDate ? 'on' : rule.count ? 'after' : 'never';
   var opt = function(val, text, cur){ return '<option value="'+val+'"'+(String(val) === String(cur) ? ' selected' : '')+'>'+text+'</option>'; };
-  return '<form class="pl-drawer-body" data-form="recurrence" data-id="'+esc(r ? r.id : '')+'">'
+  return '<form class="pl-drawer-body" data-form="recurrence" data-id="'+esc(r ? r.id : '')+'" data-from="'+esc(fromContentId || '')+'">'
+    + (fromContentId ? '<p class="pl-source">This post becomes the first in the series, on its own date.</p>' : '')
     + '<div class="pl-drawer-head"><h2>'+(r ? 'Recurring post' : 'New recurring post')+'</h2><button class="pl-x" type="button" data-act="close" aria-label="Close">×</button></div>'
     + (r && r.draftKey ? '<p class="pl-source">The weekly run fills each of these with its draft.</p>' : '')
     + '<div class="field"><label for="rf-title">Title</label><input id="rf-title" type="text" name="title" required value="'+esc(v.title)+'" placeholder="Midweek devotional"></div>'
@@ -910,14 +1161,15 @@ function recurrenceFormHtml(r, pre) {
     + '<div class="row2"><div class="field"><label for="rf-event">Event or department</label><select id="rf-event" name="eventId">'+eventOptions(v.eventId, { blank: 'None' })+'</select></div>'
     + '<div class="field"><label for="rf-time">Time (optional)</label><input id="rf-time" type="time" name="publishTime" value="'+esc(v.publishTime || '')+'"></div></div>'
     + '<fieldset class="field pl-plats"><legend class="lbl">Platforms</legend>'
-    + S.meta.platforms.map(function(p){ return '<label class="check"><input type="checkbox" name="platforms" value="'+esc(p.key)+'"'+(v.platforms.indexOf(p.key) !== -1 ? ' checked' : '')+'> '+esc(p.label)+'</label>'; }).join('')
+    + S.meta.platforms.map(function(p){ return '<label class="check"><input type="checkbox" name="platforms" data-act="platform" value="'+esc(p.key)+'"'+(v.platforms.indexOf(p.key) !== -1 ? ' checked' : '')+'> '+esc(p.label)+'</label>'; }).join('')
+    + '<p class="hint" data-plat-hint hidden>Instagram needs an image, so it’s off for text-only posts.</p>'
     + '</fieldset>'
     + '<div class="field"><label for="rf-owner">Owner</label><input id="rf-owner" type="email" name="ownerEmail" list="pl-people" value="'+esc(v.ownerEmail)+'" placeholder="Who gets each one published"></div>'
     + '<div class="field"><label for="rf-brief">Brief</label><textarea id="rf-brief" name="brief" placeholder="What each post is for">'+esc(v.brief)+'</textarea></div>'
     + '<div class="field"><span class="lbl">Media each time</span><div id="rf-tpl">'+(v.mediaTemplate || []).map(tplRowHtml).join('')+'</div>'
     +   '<button class="btn-sm" type="button" data-act="add-tpl-row">Add something to capture</button>'
-    +   (r ? '<div class="hint">Changes reach upcoming posts nobody has started on. Media someone added or captured by hand stays.</div>' : '')+'</div>'
-    + '<label class="check pl-nomedia"><input type="checkbox" name="noMediaNeeded"'+(v.noMediaNeeded ? ' checked' : '')+'> No media needed (text-only posts)</label>'
+    +   (r ? '<div class="hint">Changes reach upcoming posts nobody has started on. Media someone added or already collected stays.</div>' : '')+'</div>'
+    + '<label class="check pl-nomedia"><input type="checkbox" name="noMediaNeeded" data-act="no-media"'+(v.noMediaNeeded ? ' checked' : '')+'> No media needed (text-only posts)</label>'
     + '<div class="pl-form-msg" id="rf-msg"></div>'
     + '<div class="btn-row"><button class="btn btn-primary" type="submit">'+(r ? 'Save series' : 'Create recurring post')+'</button>'
     + '<button class="btn btn-secondary" type="button" data-act="close">Cancel</button>'
@@ -970,7 +1222,7 @@ function saveRecurrence(form) {
     title: (fd.get('title') || '').trim(), brief: fd.get('brief') || '', eventId: fd.get('eventId') || null,
     platforms: fd.getAll('platforms'), publishTime: fd.get('publishTime') || null,
     ownerEmail: (fd.get('ownerEmail') || '').trim(), noMediaNeeded: fd.get('noMediaNeeded') === 'on',
-    rule: readRule(form),
+    rule: readRule(form), fromContentId: form.getAttribute('data-from') || undefined,
     mediaTemplate: Array.prototype.map.call(form.querySelectorAll('.pl-tpl-row'), function(row){
       var g = function(k){ return row.querySelector('[data-tpl='+k+']').value; };
       return { description: g('description').trim(), type: g('type'), offsetDays: -Number(g('before') || 0), assigneeEmail: g('assigneeEmail').trim() };
@@ -1008,7 +1260,7 @@ function duplicateForm(e) {
   var nextStart = e.startDate ? addDays(e.startDate, 364) : '';
   return '<form class="card pl-form" data-form="duplicate" data-id="'+esc(e.id)+'">'
     + '<h3 class="ct">Duplicate “'+esc(e.name)+'”</h3>'
-    + '<p class="hint pl-under">Copies the event with all its posts and media. Every date moves by the same amount; copies start again as ideas, and nothing is captured yet.</p>'
+    + '<p class="hint pl-under">Copies the event with all its posts and media. Every date moves by the same amount; copies start again as ideas, and nothing is collected yet.</p>'
     + '<div class="row2"><div class="field"><label for="df-name">New name</label><input id="df-name" type="text" name="name" required value="'+esc(name)+'"></div>'
     + (e.startDate
       ? '<div class="field"><label for="df-start">New start date</label><input id="df-start" type="date" name="startDate" required value="'+esc(nextStart)+'"><div class="hint">Was '+esc(shortDate(e.startDate))+'.</div></div>'
@@ -1053,10 +1305,10 @@ function renderMine(main) {
     var html = '<p class="hint">Yours, whatever the filters above say. Signed in as '+esc(personName(me))+'.</p>'
       + '<div class="pl-two"><section class="card"><h3 class="ct">Posts you own</h3>'
       + (posts.length ? '<ul class="pl-agenda">'+posts.map(agendaPost).join('')+'</ul>' : '<p class="empty">Nothing waiting on you.</p>')
-      + '</section><section class="card"><h3 class="ct">Media you’re capturing</h3>'
-      + (mine.length ? '<ul class="pl-agenda">'+mine.map(agendaMedia).join('')+'</ul>' : '<p class="empty">No captures assigned to you.</p>')
+      + '</section><section class="card"><h3 class="ct">Media you’re collecting</h3>'
+      + (mine.length ? '<ul class="pl-agenda">'+mine.map(agendaMedia).join('')+'</ul>' : '<p class="empty">Nothing assigned to you to collect.</p>')
       + '</section></div>';
-    html += '<section class="card"><h3 class="ct">Nobody is capturing these</h3>'
+    html += '<section class="card"><h3 class="ct">Nobody is collecting these</h3>'
       + (free.length ? '<ul class="pl-agenda">'+free.map(function(m){
           return agendaMedia(m).replace('</li>', '<button class="btn-sm btn-sm-gold pl-take" type="button" data-act="take-media" data-id="'+esc(m.id)+'">I’ll take it</button></li>');
         }).join('')+'</ul>'
@@ -1114,7 +1366,7 @@ document.addEventListener('click', function(e){
       break;
     case 'draft-caption': draftCaption(el); break;
     case 'send-metricool': sendToMetricool(); break;
-    case 'make-recurring': openRecurrence(null, readForm(el.closest('form'))); break;
+    case 'make-recurring': makeRecurring(el.closest('form')); break;
     case 'new-recurrence': openRecurrence(null, {}); break;
     case 'edit-recurrence': openRecurrence(el.getAttribute('data-id')); break;
     case 'toggle-recurrence': toggleRecurrence(el.getAttribute('data-id'), !el.getAttribute('data-active')); break;
@@ -1144,11 +1396,22 @@ document.addEventListener('click', function(e){
       $('pl-event-form').innerHTML = duplicateForm(eventById(el.getAttribute('data-id')));
       $('df-name').focus();
       break;
-    case 'delete-media':
-      var row = el.closest('[data-media]');
-      api('DELETE', '/api/pipeline/media/' + encodeURIComponent(row.getAttribute('data-media'))).then(function(){
-        return reloadDrawer().then(render);
-      }).catch(function(err){ toast(err.message, 'err'); });
+    case 'delete-media': deleteMedia(el.closest('[data-media]')); break;
+    case 'cap-mode': setCaptionMode(el.getAttribute('data-mode')); break;
+    case 'cap-tab':
+      drawer.capTab = el.getAttribute('data-tab'); refreshCaptionUi();
+      var pane = document.querySelector('[data-pane="' + drawer.capTab + '"] textarea');
+      if (pane) pane.focus();
+      break;
+    case 'pick-approval': openApprovalPicker(el.closest('[data-media]')); break;
+    case 'close-picker': el.closest('.pl-picker').hidden = true; break;
+    case 'choose-approval':
+      // A signed-off file is the finished file, so the item is done.
+      mediaChange(el.closest('[data-media]').getAttribute('data-media'),
+        { approvalId: Number(el.getAttribute('data-approval')), approvalTitle: el.getAttribute('data-title'), status: 'edited' });
+      break;
+    case 'clear-approval':
+      mediaChange(el.closest('[data-media]').getAttribute('data-media'), { approvalId: null, approvalTitle: '' });
       break;
     case 'new-event':
       $('pl-event-form').innerHTML = eventForm(); $('ef-name').focus(); break;
@@ -1178,6 +1441,12 @@ document.addEventListener('change', function(e){
   if (act === 'toggle-cancelled') { storeSet('pipeline.boardCancelled', el.checked); return render(); }
   if (act === 'toggle-archived') { storeSet('pipeline.eventsArchived', el.checked); return render(); }
   if (el.hasAttribute('data-mfield')) return saveMediaField(el.closest('[data-media]'), el);
+  if (el.hasAttribute('data-mcollect')) return toggleCollected(el.closest('[data-media]'), el.checked);
+  if (act === 'no-media' || act === 'platform') {
+    var f = el.closest('form');
+    if (f.getAttribute('data-form') === 'content') return act === 'no-media' ? applyImageRule('no-media') : refreshCaptionUi();
+    return applyImageRuleTo(f, act);
+  }
   if (el.closest('form[data-form=recurrence]')) {
     if (act === 'rec-freq') showFreqFields(el.value);
     if (act === 'rec-ends') showEndFields(el.value);
@@ -1185,6 +1454,7 @@ document.addEventListener('change', function(e){
   }
 });
 document.addEventListener('input', function(e){
+  if (e.target.classList && e.target.classList.contains('pl-caption')) refreshCaptionUi();
   if (e.target.closest && e.target.closest('form[data-form=recurrence]') && e.target.closest('[data-rule]')) previewRule();
 });
 

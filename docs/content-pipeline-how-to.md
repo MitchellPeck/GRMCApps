@@ -55,12 +55,35 @@ The Wednesday Grace Notes, Saturday invite and Friday blog are already set up
 this way, so their slots sit on the calendar weeks ahead. When the run drafts
 a post, it fills that slot.
 
-## More from the post editor
+## The post editor
 
-- **Draft with Claude** writes a caption from the post's title, brief and its
-  event's notes. Review it, then save.
-- **Send to Metricool** opens the usual send box with the date, time and
-  platforms filled in. Once it's sent, the post moves to Scheduled.
+It's the same editor wherever you open a post, and a new post works just like
+a saved one. You can list its media before you've even saved it.
+
+**Captions.** Choose **Same everywhere** for one caption on every platform, or
+**Different for each** for an Instagram, Facebook and X tab, each with its own
+text. Each counter shows the length the way that platform counts it (X counts
+any link as 23 characters) and turns red when you're over.
+
+**Draft with Claude** writes from the title, brief and the event's notes. With
+different captions, it writes one for each platform the way that platform
+reads: link in bio on Instagram, the full link on Facebook, and 280 characters
+at most on X. Review, then save.
+
+**Instagram needs an image.** Ticking "No media needed" turns Instagram off, and
+a text-only post can't be sent there.
+
+**Send to Metricool** opens the send box with the date, time and platforms
+filled in. With different captions, each platform's text is sent as its own
+post. If the post has a file from Approvals, it's already chosen as the image.
+Once it's sent, the post moves to Scheduled.
+
+## Media
+
+Each thing a post needs has a **Collected** box: tick it when you have it. No
+link is needed. To attach the finished file, click **Choose from Approvals**
+and pick anything that's been signed off, or paste a link to it instead. A
+media item with its file attached shows as **Final file**.
 
 ## My work
 
@@ -90,9 +113,10 @@ with nothing captured.
 | Published | Live |
 | Cancelled | Off the calendars, kept for history |
 
-Media goes **Needed → Scheduled → Captured → Edited**. Setting a gather date
-makes it Scheduled on its own. A post can't be marked **Ready** until all of
-its media is Captured or Edited; the editor tells you what is still missing.
+Media goes **Needed → Scheduled → Collected → Final file**. Setting a gather
+date makes it Scheduled on its own; attaching the file from Approvals (or a
+link) makes it Final. A post can't be marked **Ready** until all of its media
+is collected; the editor tells you what is still missing.
 
 ## Good to know
 
@@ -103,5 +127,4 @@ its media is Captured or Edited; the editor tells you what is still missing.
 - Drafts from the Wednesday, Friday and Podcast runs, and from series, appear
   in the pipeline as **Drafted** on their date. Re-running a draft updates the
   same post instead of adding a second one.
-- Files aren't uploaded here. Paste a link to the shared-drive folder in the
-  media item's file link.
+- Files aren't uploaded here: pick them from Approvals, or paste a link.

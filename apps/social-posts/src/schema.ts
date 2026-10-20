@@ -152,6 +152,14 @@ ALTER TABLE content_items ADD COLUMN IF NOT EXISTS detached boolean NOT NULL DEF
 CREATE UNIQUE INDEX IF NOT EXISTS content_items_occurrence_idx ON content_items (recurrence_id, occurrence_date);
 ALTER TABLE media_assets ADD COLUMN IF NOT EXISTS from_template boolean NOT NULL DEFAULT false;
 
+-- One caption for every platform, or a separate one each ({"instagram": "..."}).
+ALTER TABLE content_items ADD COLUMN IF NOT EXISTS caption_mode text NOT NULL DEFAULT 'same';
+ALTER TABLE content_items ADD COLUMN IF NOT EXISTS captions jsonb NOT NULL DEFAULT '{}';
+-- A finished file picked from the Approvals app (its id there, and its title
+-- at the time, so the row still reads sensibly if Approvals is unreachable).
+ALTER TABLE media_assets ADD COLUMN IF NOT EXISTS approval_id integer;
+ALTER TABLE media_assets ADD COLUMN IF NOT EXISTS approval_title text NOT NULL DEFAULT '';
+
 CREATE INDEX IF NOT EXISTS media_assets_gather_date_idx ON media_assets (gather_date);
 CREATE INDEX IF NOT EXISTS media_assets_item_idx ON media_assets (content_item_id);
 CREATE INDEX IF NOT EXISTS media_assets_status_idx ON media_assets (status);

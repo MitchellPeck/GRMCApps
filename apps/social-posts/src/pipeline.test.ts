@@ -10,7 +10,7 @@ import {
 } from "./pipeline/repo";
 import { BACKFILL_SETTING, backfillOnce, markSentToMetricool, recordRunDrafts } from "./pipeline/sync";
 import { RUN_EVENTS } from "./pipeline/config";
-import { createRecurrence, deleteRecurrence, materialize, seedRunRecurrences, updateRecurrence } from "./pipeline/recurring";
+import { applyImageRule, createRecurrence, deleteRecurrence, materialize, seedRunRecurrences, updateRecurrence } from "./pipeline/recurring";
 import { duplicateEvent } from "./pipeline/repo";
 import { Rule } from "./pipeline/recurrence";
 
@@ -79,7 +79,7 @@ test("the Series tab reads from, and writes through to, the content item", async
   assert.ok(peace.contentItemId);
 
   // A pipeline edit shows up on the Series tab...
-  await updateContent(pool, peace.contentItemId, { noMediaNeeded: true, status: "ready", caption: "Peace v2" });
+  await updateContent(pool, peace.contentItemId, { platforms: ["facebook"], noMediaNeeded: true, status: "ready", caption: "Peace v2" });
   const viaSeries = await getSeriesPosts(pool, "s-old");
   assert.ok(viaSeries.ok);
   assert.equal(viaSeries.posts[1].status, "drafted", "Ready shows as drafted to the Series tab");
@@ -331,4 +331,104 @@ test("duplicating an event shifts every date and starts the copies over", async 
   assert.deepEqual(copy.value.items.map((i) => [i.publishDate, i.status]), [["2027-07-05", "planned"]]);
   assert.deepEqual(copy.value.media.map((m) => [m.gatherDate, m.status]), [["2027-07-05", "scheduled"]]);
   assert.ok(!(await duplicateEvent(pool, camp.id, { name: "" }, "me@x.org")).ok);
+});
+
+test("Instagram needs an image: text-only posts can't go there", async () => {
+  const bad = await createContent(pool, { title: "Prayer list", publishDate: "2026-11-05", platforms: ["instagram", "facebook"], noMediaNeeded: true }, "me@x.org");
+  assert.ok(!bad.ok);
+  assert.match(bad.error, /Instagram can't take a text-only post/);
+  const ok = await createContent(pool, { title: "Prayer list", publishDate: "2026-11-05", platforms: ["facebook"], noMediaNeeded: true }, "me@x.org");
+  assert.ok(ok.ok);
+  const sneak = await updateContent(pool, ok.value.id, { platforms: ["facebook", "instagram"] });
+  assert.ok(!sneak.ok, "adding Instagram to a text-only post is refused too");
+  const rec = await createRecurrence(pool, { title: "Verse", noMediaNeeded: true, platforms: ["instagram"], rule: weekly([2]) }, "me@x.org", REF);
+  assert.ok(!rec.ok);
+});
+
+test("posts saved before the rule are fixed once: runs gain an image, others lose Instagram", async () => {
+  const run = await pool.query("SELECT id FROM recurrences WHERE draft_key = 'friday'");
+  await pool.query("UPDATE recurrences SET no_media_needed = true, media_template = '[]' WHERE id = $1", [run.rows[0].id]);
+  await pool.query("UPDATE content_items SET no_media_needed = true WHERE recurrence_id = $1", [run.rows[0].id]);
+  const old = await pool.query(
+    `INSERT INTO content_items (title, platforms, publish_date, no_media_needed) VALUES ('Old text post', '{instagram,facebook}', '2026-11-20', true) RETURNING id`);
+  const fixed = await applyImageRule(pool, REF);
+  assert.equal(fixed.runs, 1);
+  const slot = (await occ(run.rows[0].id))[0];
+  assert.equal(slot.no_media_needed, false);
+  assert.deepEqual((await listMedia(pool, { contentItemId: slot.id })).map((m) => m.description), ["Image for the post"]);
+  const other = await pool.query("SELECT platforms FROM content_items WHERE id = $1", [old.rows[0].id]);
+  assert.deepEqual(other.rows[0].platforms, ["facebook"]);
+});
+
+test("separate captions per platform round-trip and warn when X runs long", async () => {
+  const p = await createContent(pool, { title: "Advent", publishDate: "2026-11-29", platforms: ["instagram", "facebook", "x"] }, "me@x.org");
+  assert.ok(p.ok);
+  const long = "Join us ".repeat(40);
+  const r = await updateContent(pool, p.value.id, {
+    captionMode: "separate", captions: { instagram: "IG text", facebook: "FB text https://grmc.org/advent", x: long },
+  });
+  assert.ok(r.ok);
+  assert.equal(r.value.item.captionMode, "separate");
+  assert.equal(r.value.item.captions.facebook, "FB text https://grmc.org/advent");
+  assert.ok(r.value.warnings.some((w) => /^X caption is \d+ characters; the limit is 280/.test(w)));
+});
+
+test("media: collected without a file, and an approved file makes it final", async () => {
+  const p = await createContent(pool, { title: "Harvest", publishDate: "2026-11-22" }, "me@x.org");
+  assert.ok(p.ok);
+  const m = await createMedia(pool, p.value.id, { description: "Choir photo", gatherDate: "2026-11-21" });
+  assert.ok(m.ok);
+  const collected = await updateMedia(pool, m.value.media.id, { status: "captured" });
+  assert.ok(collected.ok);
+  assert.equal(collected.value.media.status, "captured", "no link needed");
+  const approved = await updateMedia(pool, m.value.media.id, { approvalId: 42, approvalTitle: "Harvest graphic v2" });
+  assert.ok(approved.ok);
+  assert.equal(approved.value.media.status, "edited");
+  assert.equal(approved.value.media.approvalId, 42);
+  const cleared = await updateMedia(pool, m.value.media.id, { approvalId: null, approvalTitle: "" });
+  assert.ok(cleared.ok);
+  assert.equal(cleared.value.media.status, "captured", "removing the file leaves it collected");
+});
+
+test("an existing post can start a series on its own date", async () => {
+  const p = await createContent(pool, { title: "Prayer Monday", publishDate: "2026-11-02", platforms: ["facebook"] }, "me@x.org");
+  assert.ok(p.ok);
+  const wrong = await createRecurrence(pool, { title: "Prayer Monday", rule: weekly([1], { startDate: "2026-11-09" }) }, "me@x.org", REF, "", p.value.id);
+  assert.ok(!wrong.ok);
+  const r = await createRecurrence(pool, { title: "Prayer Monday", platforms: ["facebook"], rule: weekly([1], { startDate: "2026-11-02" }) }, "me@x.org", REF, "", p.value.id);
+  assert.ok(r.ok);
+  const rows = await occ(r.value.id);
+  assert.equal(rows[0].id, p.value.id, "the post is occurrence one, not a twin");
+  assert.equal(rows.filter((x) => x.publish_date === "2026-11-02").length, 1);
+});
+
+test("Draft with Claude writes one caption per platform and keeps X under 280", async () => {
+  const { draftCaptions } = await import("./pipeline/caption");
+  await pool.query("INSERT INTO settings (key, value) VALUES ('anthropic_api_key','test-key') ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value");
+  const realFetch = globalThis.fetch;
+  const prompts: string[] = [];
+  const replies = [
+    { instagram: "IG post, link in bio", facebook: "FB post https://grmc.org/advent", x: "Too long ".repeat(40) },
+    { x: "Advent starts Sunday. Come light the first candle with us. https://grmc.org/advent" },
+  ];
+  globalThis.fetch = (async (_url: unknown, init: { body: string }) => {
+    prompts.push(JSON.parse(init.body).messages[0].content);
+    const text = JSON.stringify(replies.shift());
+    return { json: async () => ({ content: [{ text }] }) } as unknown as Response;
+  }) as typeof fetch;
+  try {
+    const r = await draftCaptions(pool, {
+      title: "Advent begins", brief: "Invite people to the first Sunday", eventId: null, publishDate: "2026-11-29",
+      platforms: ["instagram", "facebook", "x"], captionMode: "separate", caption: "", captions: {},
+    });
+    assert.ok(r.ok);
+    assert.deepEqual(Object.keys(r.value.captions!).sort(), ["facebook", "instagram", "x"]);
+    assert.match(r.value.captions!.x, /^Advent starts Sunday/, "the long X draft was shortened");
+    assert.equal(r.value.warnings.length, 0);
+    assert.match(prompts[0], /link in bio/, "Instagram guidance sent");
+    assert.match(prompts[0], /280 characters/, "X limit sent");
+  } finally {
+    globalThis.fetch = realFetch;
+    await pool.query("DELETE FROM settings WHERE key = 'anthropic_api_key'");
+  }
 });

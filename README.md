@@ -92,8 +92,10 @@ between apps. Both are served to each app at `/assets/` (see *Shared UI* below).
   (drag to reschedule), a status board, and a page per event. Every run's and
   series' drafts land in it as Drafted posts. Recurring posts (weekly, every N
   weeks, monthly by date or weekday) keep their next 8 weeks on the calendar;
-  posts can be drafted with Claude and sent to Metricool from the editor; each
-  person gets a My work view and a capture-calendar feed for their phone. Staff guide:
+  posts can be drafted with Claude and sent to Metricool from the editor, with
+  one caption for every platform or a separate one each (X kept to 280); media
+  can be ticked off as collected or linked to a signed-off file from Approvals;
+  each person gets a My work view and a capture-calendar feed for their phone. Staff guide:
   `docs/content-pipeline-how-to.md`; design and rollout notes:
   `docs/superpowers/specs/2026-10-20-content-pipeline-design.md`.
 - **Approvals** (`approvals.grmc.app`) — request and grant sign-off on graphics.

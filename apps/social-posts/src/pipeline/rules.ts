@@ -91,10 +91,15 @@ function asBody(body: unknown): Record<string, unknown> {
 
 // ── Content items ────────────────────────────────────────────────────────────
 
+export const CAPTION_MODES = ["same", "separate"] as const;
+
 export interface ContentInput {
   title?: string; eventId?: string | null; platforms?: string[];
   publishDate?: string | null; publishTime?: string | null; status?: ContentStatus;
   ownerEmail?: string; brief?: string; caption?: string; noMediaNeeded?: boolean;
+  /** "same": `caption` goes everywhere. "separate": `captions[platform]` each. */
+  captionMode?: typeof CAPTION_MODES[number];
+  captions?: Record<string, string>;
 }
 
 export function parseContentInput(raw: unknown, mode: "create" | "patch"): Result<ContentInput> {
@@ -126,9 +131,23 @@ export function parseContentInput(raw: unknown, mode: "create" | "patch"): Resul
       : isTime(t) ? { ok: true, value: t } : fail("Publish time must look like 09:30.");
   }
 
+  let captions: Result<Record<string, string>> | undefined;
+  if ("captions" in body) {
+    const c = body.captions;
+    const known = PLATFORMS.map((x) => x.key);
+    if (!c || typeof c !== "object" || Array.isArray(c)
+        || Object.entries(c).some(([k, v]) => !known.includes(k) || typeof v !== "string" || v.length > 20000)) {
+      captions = fail("Each platform's caption must be text.");
+    } else {
+      captions = { ok: true, value: Object.fromEntries(Object.entries(c as Record<string, string>).map(([k, v]) => [k, v.trim()])) };
+    }
+  }
+
   const err = collect(out, [
     ["title", optText(body, "title", "Title", 300)],
     ["eventId", eventId],
+    ["captionMode", optEnum(body, "captionMode", "Caption mode", CAPTION_MODES)],
+    ["captions", captions],
     ["platforms", platforms],
     ["publishDate", optDate(body, "publishDate", "Publish date")],
     ["publishTime", publishTime],
@@ -152,12 +171,22 @@ export function parseContentInput(raw: unknown, mode: "create" | "patch"): Resul
 export interface MediaInput {
   description?: string; type?: string; gatherDate?: string | null; gatherLocation?: string;
   assigneeEmail?: string; status?: MediaStatus; fileLink?: string; notes?: string;
+  /** A finished file chosen from the Approvals app; null clears it. */
+  approvalId?: number | null; approvalTitle?: string;
 }
 
 export function parseMediaInput(raw: unknown, mode: "create" | "patch"): Result<MediaInput> {
   const body = asBody(raw);
   const out: Record<string, unknown> = {};
+  let approvalId: Result<number | null> | undefined;
+  if ("approvalId" in body) {
+    const a = body.approvalId;
+    approvalId = a === null || a === "" ? { ok: true, value: null }
+      : Number.isInteger(Number(a)) && Number(a) > 0 ? { ok: true, value: Number(a) } : fail("That approved file isn't valid.");
+  }
   const err = collect(out, [
+    ["approvalId", approvalId],
+    ["approvalTitle", optText(body, "approvalTitle", "Approved file title", 300)],
     ["description", optText(body, "description", "Description", 500)],
     ["type", optEnum(body, "type", "Media type", MEDIA_TYPES)],
     ["gatherDate", optDate(body, "gatherDate", "Gather date")],
@@ -171,7 +200,7 @@ export function parseMediaInput(raw: unknown, mode: "create" | "patch"): Result<
   if (typeof out.fileLink === "string" && out.fileLink && !/^https?:\/\//i.test(out.fileLink)) {
     return fail("File link must start with http:// or https://.");
   }
-  if (("description" in out || mode === "create") && !out.description) return fail("Describe what needs capturing.");
+  if (("description" in out || mode === "create") && !out.description) return fail("Describe what needs collecting.");
   return { ok: true, value: out as MediaInput };
 }
 
@@ -181,7 +210,7 @@ export function parseMediaInput(raw: unknown, mode: "create" | "patch"): Result<
  * that Scheduled needs a date to mean anything.
  */
 export function resolveMediaStatus(
-  current: { status: MediaStatus; gatherDate: string | null },
+  current: { status: MediaStatus; gatherDate: string | null; fileLink?: string; approvalId?: number | null },
   patch: MediaInput,
 ): Result<MediaStatus> {
   const gatherDate = "gatherDate" in patch ? patch.gatherDate ?? null : current.gatherDate;
@@ -189,6 +218,13 @@ export function resolveMediaStatus(
     if (patch.status === "scheduled" && !gatherDate) return fail("Set a gather date to mark this media scheduled.");
     return { ok: true, value: patch.status };
   }
+  // Attaching the finished file (from Approvals, or a link) means it's done;
+  // taking it away again leaves it collected, not un-collected.
+  const hadFile = !!(current.fileLink || current.approvalId);
+  const hasFile = !!(("fileLink" in patch ? patch.fileLink : current.fileLink)
+    || ("approvalId" in patch ? patch.approvalId : current.approvalId));
+  if (hasFile && !hadFile) return { ok: true, value: "edited" };
+  if (!hasFile && hadFile && current.status === "edited") return { ok: true, value: "captured" };
   if (gatherDate && current.status === "needed") return { ok: true, value: "scheduled" };
   if (!gatherDate && current.status === "scheduled") return { ok: true, value: "needed" };
   return { ok: true, value: current.status };
@@ -306,7 +342,7 @@ export function computeGaps(
     gap("no-media", "Posts with no media planned", "content", noMedia),
     gap("unscheduled-media", `Media with no gather date for posts in the next ${t.unscheduledMediaDays} days`, "media", unscheduled),
     gap("late-media", "Media gathered after its post publishes", "media", late),
-    gap("overdue-media", "Media past its gather date and not captured", "media", overdue),
+    gap("overdue-media", "Media past its gather date and not collected", "media", overdue),
   ];
 }
 

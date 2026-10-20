@@ -152,3 +152,35 @@ credential: random, compared in constant time, and resettable from My work.
 `docker compose up -d social-posts` on the host (or let `auto-deploy.sh` do it
 once the change is on `main`). Until then the feed URL redirects to the hub
 login.
+
+## Iteration 3: per-platform captions, the image rule, one editor
+
+- **Captions per platform.** `content_items.caption_mode` is `same` (one
+  `caption` everywhere) or `separate` (`captions` jsonb, keyed by platform).
+  Platform limits live in `config.ts` (`PLATFORMS`: `limit`, `urlLength`,
+  `needsImage`, plus Claude `guidance`) and are counted the platform's way in
+  `platforms.ts`; X charges 23 per link. Over-limit captions save with a
+  warning and show a red counter, but aren't blocked.
+- **Draft with Claude** (`POST /api/pipeline/draft-caption`) drafts from the
+  editor's current state, saved or not. In separate mode it asks for one post
+  per selected platform with that platform's guidance; an over-long X draft
+  gets one "shorten to 250" retry before it's returned with a warning.
+- **Instagram needs an image.** `imageRuleError` refuses Instagram together
+  with "No media needed", on posts and recurrences, on the server as well as
+  in the editor. A one-time fix (`pipeline_image_rule_v1`) gives the weekly-run
+  recurrences an "Image for the post" to collect and clears their text-only
+  flag (the user chose to keep Instagram); any other text-only post loses
+  Instagram.
+- **Send to Metricool** with separate captions sends one Metricool post per
+  distinct text. The shared dialog takes `texts` per network, and
+  `approvedImageId` to preselect the post's Approvals file.
+- **Media.** A "Collected" box (`captured`, no link needed). `approval_id` /
+  `approval_title` hold a file chosen from Approvals; thumbnails are proxied
+  through `/api/pipeline/approved/:id/image` as the signed-in user. Attaching
+  a file or link makes media `edited` (shown as "Final file"); removing it
+  leaves it collected.
+- **One editor.** The drawer is built by one function whatever opens it. A new
+  post shows the full media section; its media is kept client-side and created
+  right after the post. Before, a new post showed "create the post first" in
+  place of the media list. **Make it repeat** on an existing one-off post
+  makes it the series' first occurrence (`fromContentId`).

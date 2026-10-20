@@ -12,6 +12,7 @@ import {
 } from "./rules";
 import { propagate } from "./recurring";
 import { describeRule } from "./recurrence";
+import { captionWarnings, imageRuleError } from "./platforms";
 
 // Hand `date` columns back as "YYYY-MM-DD" strings. pg's default turns them
 // into a JS Date at local midnight — exactly the one-day drift these calendar
@@ -35,6 +36,7 @@ export interface ContentRow {
   id: string; title: string; eventId: string | null; eventName: string; eventColor: string; eventKind: string;
   platforms: string[]; publishDate: string | null; publishTime: string | null; status: ContentStatus;
   ownerEmail: string; brief: string; caption: string; noMediaNeeded: boolean;
+  captionMode: "same" | "separate"; captions: Record<string, string>;
   seriesId: string | null; postIdx: number | null; draftId: number | null; draftKey: string;
   mediaTotal: number; mediaDone: number;
   recurrenceId: string | null; occurrenceDate: string | null; detached: boolean;
@@ -43,7 +45,7 @@ export interface ContentRow {
 export interface MediaRow {
   id: string; contentItemId: string; description: string; type: string;
   gatherDate: string | null; gatherLocation: string; assigneeEmail: string; status: MediaStatus;
-  fileLink: string; notes: string;
+  fileLink: string; notes: string; approvalId: number | null; approvalTitle: string;
   itemTitle: string; itemPublishDate: string | null; itemStatus: ContentStatus;
   eventId: string | null; eventName: string; eventColor: string;
 }
@@ -67,7 +69,7 @@ function contentOf(r: any): ContentRow {
     eventName: r.event_name || "", eventColor: r.event_color || "", eventKind: r.event_kind || "",
     platforms: r.platforms || [], publishDate: r.publish_date, publishTime: hhmm(r.publish_time),
     status: r.status, ownerEmail: r.owner_email, brief: r.brief, caption: r.caption,
-    noMediaNeeded: r.no_media_needed, seriesId: r.series_id,
+    noMediaNeeded: r.no_media_needed, captionMode: r.caption_mode || "same", captions: r.captions || {}, seriesId: r.series_id,
     postIdx: r.post_idx == null ? null : Number(r.post_idx),
     draftId: r.draft_id == null ? null : Number(r.draft_id), draftKey: r.draft_key,
     mediaTotal: Number(r.media_total || 0), mediaDone: Number(r.media_done || 0),
@@ -80,6 +82,7 @@ function mediaOf(r: any): MediaRow {
     id: r.id, contentItemId: r.content_item_id, description: r.description, type: r.type,
     gatherDate: r.gather_date, gatherLocation: r.gather_location, assigneeEmail: r.assignee_email,
     status: r.status, fileLink: r.file_link, notes: r.notes,
+    approvalId: r.approval_id ?? null, approvalTitle: r.approval_title || "",
     itemTitle: r.item_title || "", itemPublishDate: r.item_publish_date ?? null, itemStatus: r.item_status,
     eventId: r.event_id ?? null, eventName: r.event_name || "", eventColor: r.event_color || "",
   };
@@ -253,7 +256,7 @@ export async function getContent(db: Db, id: string): Promise<Result<ContentDeta
 const CONTENT_COLUMNS: Record<string, string> = {
   title: "title", eventId: "event_id", platforms: "platforms", publishDate: "publish_date",
   publishTime: "publish_time", status: "status", ownerEmail: "owner_email", brief: "brief",
-  caption: "caption", noMediaNeeded: "no_media_needed",
+  caption: "caption", noMediaNeeded: "no_media_needed", captionMode: "caption_mode", captions: "captions",
 };
 
 async function eventExists(db: Db, id: string | null | undefined): Promise<boolean> {
@@ -264,17 +267,19 @@ async function eventExists(db: Db, id: string | null | undefined): Promise<boole
 
 export async function createContent(db: Db, input: ContentInput, createdBy: string): Promise<Result<ContentRow>> {
   if (!(await eventExists(db, input.eventId))) return fail("That event no longer exists.");
+  const imageErr = imageRuleError(input.platforms ?? DEFAULT_PLATFORMS, !!input.noMediaNeeded);
+  if (imageErr) return fail(imageErr);
   const status = input.status || (input.caption ? "drafted" : input.brief ? "planned" : "idea");
   // A brand-new post has no media, so the Ready gate applies to its first status too.
   const gate = checkStatusChange(status, { noMediaNeeded: !!input.noMediaNeeded }, []);
   if (!gate.ok) return gate;
   const r = await db.query(
     `INSERT INTO content_items (title, event_id, platforms, publish_date, publish_time, status, owner_email,
-                                brief, caption, no_media_needed, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
+                                brief, caption, no_media_needed, caption_mode, captions, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
     [input.title, input.eventId ?? null, input.platforms ?? DEFAULT_PLATFORMS, input.publishDate ?? null,
      input.publishTime ?? null, status, input.ownerEmail || "", input.brief || "", input.caption || "",
-     !!input.noMediaNeeded, createdBy],
+     !!input.noMediaNeeded, input.captionMode || "same", input.captions || {}, createdBy],
   );
   return { ok: true, value: (await getContentRow(db, r.rows[0].id))! };
 }
@@ -294,6 +299,8 @@ export async function updateContent(
   const current = await getContentRow(db, id);
   if (!current) return fail("Post not found.");
   if ("eventId" in input && !(await eventExists(db, input.eventId))) return fail("That event no longer exists.");
+  const imageErr = imageRuleError(input.platforms ?? current.platforms, input.noMediaNeeded ?? current.noMediaNeeded);
+  if (imageErr) return fail(imageErr);
 
   const media = await listMedia(db, { contentItemId: id });
   if (input.status && input.status !== current.status) {
@@ -334,7 +341,8 @@ export async function updateContent(
 
   const warnings = media
     .filter((m) => lateMediaWarning(m.gatherDate, item.publishDate))
-    .map((m) => `${m.description}: ${lateMediaWarning(m.gatherDate, item.publishDate)}`);
+    .map((m) => `${m.description}: ${lateMediaWarning(m.gatherDate, item.publishDate)}`)
+    .concat(captionWarnings(item));
   return { ok: true, value: { item, warnings } };
 }
 
@@ -400,6 +408,7 @@ async function getMediaRow(db: Db, id: string): Promise<MediaRow | null> {
 const MEDIA_COLUMNS: Record<string, string> = {
   description: "description", type: "type", gatherDate: "gather_date", gatherLocation: "gather_location",
   assigneeEmail: "assignee_email", status: "status", fileLink: "file_link", notes: "notes",
+  approvalId: "approval_id", approvalTitle: "approval_title",
 };
 
 export async function createMedia(
@@ -407,14 +416,15 @@ export async function createMedia(
 ): Promise<Result<{ media: MediaRow; warnings: string[] }>> {
   const item = await getContentRow(db, contentItemId);
   if (!item) return fail("Post not found.");
-  const status = resolveMediaStatus({ status: "needed", gatherDate: null }, input);
+  const status = resolveMediaStatus({ status: "needed", gatherDate: null, fileLink: "", approvalId: null }, input);
   if (!status.ok) return status;
   const r = await db.query(
     `INSERT INTO media_assets (content_item_id, description, type, gather_date, gather_location,
-                               assignee_email, status, file_link, notes)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+                               assignee_email, status, file_link, notes, approval_id, approval_title)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
     [contentItemId, input.description, input.type || "photo", input.gatherDate ?? null,
-     input.gatherLocation || "", input.assigneeEmail || "", status.value, input.fileLink || "", input.notes || ""],
+     input.gatherLocation || "", input.assigneeEmail || "", status.value, input.fileLink || "", input.notes || "",
+     input.approvalId ?? null, input.approvalTitle || ""],
   );
   const media = (await getMediaRow(db, r.rows[0].id))!;
   const w = lateMediaWarning(media.gatherDate, media.itemPublishDate);
@@ -510,10 +520,10 @@ export async function duplicateEvent(
   for (const it of items.rows) {
     const r = await db.query(
       `INSERT INTO content_items (title, event_id, platforms, publish_date, publish_time, status, owner_email, brief,
-                                  caption, no_media_needed, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
+                                  caption, no_media_needed, caption_mode, captions, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
       [it.title, created.id, it.platforms, shift(it.publish_date, offset), it.publish_time, it.brief ? "planned" : "idea",
-       it.owner_email, it.brief, it.caption, it.no_media_needed, createdBy],
+       it.owner_email, it.brief, it.caption, it.no_media_needed, it.caption_mode, it.captions, createdBy],
     );
     const media = await db.query("SELECT * FROM media_assets WHERE content_item_id = $1 ORDER BY created_at", [it.id]);
     for (const m of media.rows) {

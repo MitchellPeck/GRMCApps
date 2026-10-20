@@ -3,7 +3,8 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { addDays } from "../dates";
 import { getSetting, setSetting } from "../settings";
 import { buildCaptureIcs } from "../pipeline/ical";
-import { draftCaption } from "../pipeline/caption";
+import { draftCaptions, parseDraftRequest } from "../pipeline/caption";
+import { getApprovedImageBytes } from "../approvals-client";
 import { describeRule, occurrences, parseRecurrenceInput, parseRule } from "../pipeline/recurrence";
 import {
   HORIZON_DAYS, createRecurrence, deleteRecurrence, getRecurrence, listRecurrences, materialize, updateRecurrence,
@@ -151,10 +152,26 @@ export async function pipelineRoutes(app: FastifyInstance): Promise<void> {
     return r.ok ? { ok: true, ...r.value } : r;
   }));
 
-  app.post("/api/pipeline/content/:id/draft-caption", async (req) => guard(async () => {
-    const r = await draftCaption(pool, (req.params as { id: string }).id);
-    return r.ok ? { ok: true, caption: r.value } : r;
+  // Drafts from the editor's current (possibly unsaved) state.
+  app.post("/api/pipeline/draft-caption", async (req) => guard(async () => {
+    const input = parseDraftRequest(req.body);
+    if (!input.ok) return input;
+    const r = await draftCaptions(pool, input.value);
+    return r.ok ? { ok: true, ...r.value } : r;
   }));
+
+  // Thumbnails of approved files for media items (the list itself is
+  // /api/metricool/approved-images). Fetched as the signed-in person, so
+  // Approvals applies its own access rules.
+  app.get("/api/pipeline/approved/:id/image", async (req, reply) => {
+    try {
+      const { bytes, contentType } = await getApprovedImageBytes(getIdentity(req), Number((req.params as { id: string }).id));
+      reply.header("content-type", contentType).header("cache-control", "private, max-age=300");
+      return reply.send(bytes);
+    } catch (e) {
+      return reply.code(404).send({ ok: false, error: (e as Error).message });
+    }
+  });
 
   app.post("/api/pipeline/events/:id/duplicate", async (req) => guard(async () => {
     const b = (req.body ?? {}) as { name?: string; startDate?: string; shiftDays?: number };
@@ -187,7 +204,8 @@ export async function pipelineRoutes(app: FastifyInstance): Promise<void> {
   app.post("/api/pipeline/recurrences", async (req) => guard(async () => {
     const input = parseRecurrenceInput(req.body, "create");
     if (!input.ok) return input;
-    const r = await createRecurrence(pool, input.value, getIdentity(req).email, await referenceDate(pool));
+    const from = (req.body as { fromContentId?: string } | null)?.fromContentId || undefined;
+    const r = await createRecurrence(pool, input.value, getIdentity(req).email, await referenceDate(pool), "", from);
     return r.ok ? { ok: true, recurrence: r.value } : r;
   }));
 

@@ -7,6 +7,7 @@ import { addDays } from "../dates";
 import { DEFAULT_PLATFORMS, RUN_EVENTS } from "./config";
 import { MediaTemplateItem, RecurrenceInput, Rule, describeRule, occurrences } from "./recurrence";
 import { Result } from "./rules";
+import { imageRuleError } from "./platforms";
 
 type Db = Pool | PoolClient;
 const fail = (error: string): { ok: false; error: string } => ({ ok: false, error });
@@ -77,10 +78,16 @@ async function eventExists(db: Db, id: string | null | undefined): Promise<boole
   return !!(await db.query("SELECT 1 FROM events WHERE id = $1", [id])).rowCount;
 }
 
+/**
+ * `fromContentId`: an existing post becomes the series' first occurrence
+ * (on its own publish date) instead of a fresh one being made beside it.
+ */
 export async function createRecurrence(
-  db: Db, input: RecurrenceInput, createdBy: string, today: string, draftKey = "",
+  db: Db, input: RecurrenceInput, createdBy: string, today: string, draftKey = "", fromContentId?: string,
 ): Promise<Result<RecurrenceRow>> {
   if (!(await eventExists(db, input.eventId))) return fail("That event no longer exists.");
+  const imageErr = imageRuleError(input.platforms ?? DEFAULT_PLATFORMS, !!input.noMediaNeeded);
+  if (imageErr) return fail(imageErr);
   const cols: Record<string, unknown> = {
     title: input.title, brief: input.brief || "", event_id: input.eventId ?? null,
     platforms: input.platforms ?? DEFAULT_PLATFORMS, publish_time: input.publishTime ?? null,
@@ -94,6 +101,17 @@ export async function createRecurrence(
     keys.map((k) => cols[k]),
   );
   const id = r.rows[0].id;
+  if (fromContentId) {
+    const linked = await db.query(
+      `UPDATE content_items SET recurrence_id = $1, occurrence_date = publish_date, updated_at = now()
+        WHERE id = $2 AND recurrence_id IS NULL AND publish_date = $3`,
+      [id, fromContentId, input.rule!.startDate],
+    );
+    if (!linked.rowCount) {
+      await db.query("DELETE FROM recurrences WHERE id = $1", [id]);
+      return fail("That post can only start a series on its own publish date.");
+    }
+  }
   await materialize(db, today, addDays(today, HORIZON_DAYS), id);
   return { ok: true, value: (await getRecurrence(db, id, today))! };
 }
@@ -109,6 +127,8 @@ export async function updateRecurrence(
   const current = await getRecurrence(db, id, today);
   if (!current) return fail("Recurring post not found.");
   if ("eventId" in input && !(await eventExists(db, input.eventId))) return fail("That event no longer exists.");
+  const imageErr = imageRuleError(input.platforms ?? current.platforms, input.noMediaNeeded ?? current.noMediaNeeded);
+  if (imageErr) return fail(imageErr);
 
   const cols: Record<string, unknown> = {};
   for (const [key, col] of TEMPLATE_FIELDS) if (key in input) cols[col] = input[key];
@@ -253,6 +273,34 @@ export async function materialize(db: Db, today: string, until: string, onlyId?:
 
 export const RUN_RECURRENCES_SETTING = "pipeline_run_recurrences_v1";
 
+// Each weekly post goes to Instagram, so each needs an image.
+const RUN_IMAGE: MediaTemplateItem = { description: "Image for the post", type: "graphic", offsetDays: 0, assigneeEmail: "" };
+
+export const IMAGE_RULE_SETTING = "pipeline_image_rule_v1";
+
+/**
+ * One-time fix for posts saved before Instagram's image rule. The weekly runs
+ * keep Instagram and gain an image to collect; any other text-only post loses
+ * Instagram, since that's the only way it can stay text-only.
+ */
+export async function applyImageRule(db: Db, today: string): Promise<{ runs: number; posts: number }> {
+  const runIds = Object.values(RUN_EVENTS).map((r) => r.id);
+  const recs = await db.query(
+    "SELECT id FROM recurrences WHERE no_media_needed AND 'instagram' = ANY(platforms) AND event_id = ANY($1)", [runIds]);
+  for (const r of recs.rows) {
+    await updateRecurrence(db, r.id, { noMediaNeeded: false, mediaTemplate: [RUN_IMAGE] }, today);
+  }
+  const runPosts = await db.query(
+    `UPDATE content_items SET no_media_needed = false, updated_at = now()
+      WHERE no_media_needed AND 'instagram' = ANY(platforms) AND event_id = ANY($1)`, [runIds]);
+  await db.query(
+    "UPDATE recurrences SET platforms = array_remove(platforms, 'instagram') WHERE no_media_needed AND 'instagram' = ANY(platforms)");
+  const others = await db.query(
+    `UPDATE content_items SET platforms = array_remove(platforms, 'instagram'), updated_at = now()
+      WHERE no_media_needed AND 'instagram' = ANY(platforms)`);
+  return { runs: recs.rowCount || 0, posts: (runPosts.rowCount || 0) + (others.rowCount || 0) };
+}
+
 /**
  * The weekly runs become recurrences, once, so their slots sit on the
  * calendar weeks ahead and each run fills its own slot when it drafts.
@@ -268,7 +316,8 @@ export async function seedRunRecurrences(db: Db, today: string): Promise<number>
     const exists = await db.query("SELECT 1 FROM recurrences WHERE draft_key = $1 AND event_id = $2", [s.key, RUN_EVENTS[s.run].id]);
     if (exists.rowCount) continue;
     await createRecurrence(db, {
-      title: s.title, eventId: RUN_EVENTS[s.run].id, platforms: DEFAULT_PLATFORMS, noMediaNeeded: true,
+      title: s.title, eventId: RUN_EVENTS[s.run].id, platforms: DEFAULT_PLATFORMS,
+      mediaTemplate: [RUN_IMAGE],
       rule: { freq: "weekly", interval: 1, weekdays: [s.weekday], monthDay: null, nth: null, weekday: null,
               startDate: today, endDate: null, count: null },
     }, "seed", today, s.key);

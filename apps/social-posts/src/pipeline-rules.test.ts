@@ -5,6 +5,7 @@ import {
   parseMediaInput, pipelineStatusToSeries, readyBlockers, resolveMediaStatus, seriesStatusToPipeline,
   GapItem, GapMedia,
 } from "./pipeline/rules";
+import { captionWarnings, countChars, imageRuleError } from "./pipeline/platforms";
 
 test("isIsoDate accepts real calendar dates only", () => {
   assert.equal(isIsoDate("2026-11-01"), true);
@@ -41,7 +42,7 @@ test("clearing dates and events uses null", () => {
 });
 
 test("media input validation", () => {
-  assert.deepEqual(parseMediaInput({}, "create"), { ok: false, error: "Describe what needs capturing." });
+  assert.deepEqual(parseMediaInput({}, "create"), { ok: false, error: "Describe what needs collecting." });
   const r = parseMediaInput({ type: "drone" }, "patch");
   assert.ok(!r.ok);
   assert.match(r.error, /Media type must be one of/);
@@ -143,4 +144,38 @@ test("the five gap alerts", () => {
   assert.deepEqual(ids["overdue-media"], ["overdue"]);
   assert.equal(gaps.length, 5);
   assert.equal(gaps[0].count, 1);
+});
+
+test("characters count the way each platform counts them", () => {
+  const text = "Advent starts Sunday https://grmc.org/a-very-long-path/that-goes-on-and-on";
+  assert.equal(countChars("x", text), "Advent starts Sunday ".length + 23, "X charges 23 for a link");
+  assert.equal(countChars("facebook", text), text.length);
+  assert.equal(countChars("x", "🙏 pray"), 6, "an emoji is one character");
+});
+
+test("caption warnings only for selected platforms that are over", () => {
+  const long = "a".repeat(300);
+  assert.deepEqual(captionWarnings({ platforms: ["facebook"], captionMode: "same", caption: long, captions: {} }), []);
+  assert.equal(captionWarnings({ platforms: ["facebook", "x"], captionMode: "same", caption: long, captions: {} }).length, 1);
+  assert.equal(captionWarnings({ platforms: ["x"], captionMode: "separate", caption: long, captions: { x: "short" } }).length, 0);
+});
+
+test("text-only posts can't include Instagram", () => {
+  assert.match(imageRuleError(["instagram", "facebook"], true), /Instagram can't take a text-only post/);
+  assert.equal(imageRuleError(["facebook", "x"], true), "");
+  assert.equal(imageRuleError(["instagram"], false), "");
+});
+
+test("captions per platform are validated", () => {
+  assert.ok(parseContentInput({ captionMode: "separate", captions: { x: "hi", instagram: "hello" } }, "patch").ok);
+  assert.ok(!parseContentInput({ captionMode: "each" }, "patch").ok);
+  assert.ok(!parseContentInput({ captions: { tiktok: "hi" } }, "patch").ok);
+});
+
+test("attaching a file finishes media; removing it leaves it collected", () => {
+  const scheduled = { status: "scheduled" as const, gatherDate: "2026-11-01", fileLink: "", approvalId: null };
+  assert.deepEqual(resolveMediaStatus(scheduled, { approvalId: 7 }), { ok: true, value: "edited" });
+  assert.deepEqual(resolveMediaStatus(scheduled, { fileLink: "https://drive/x" }), { ok: true, value: "edited" });
+  assert.deepEqual(resolveMediaStatus({ ...scheduled, status: "edited", approvalId: 7 }, { approvalId: null }), { ok: true, value: "captured" });
+  assert.deepEqual(resolveMediaStatus(scheduled, { status: "captured" }), { ok: true, value: "captured" }, "collected with no file at all");
 });

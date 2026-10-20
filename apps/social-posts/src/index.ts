@@ -15,7 +15,9 @@ import { backfillOnce } from "./pipeline/sync";
 import { referenceDate } from "./schedule";
 import { addDays } from "./dates";
 import { getSetting, setSetting } from "./settings";
-import { HORIZON_DAYS, RUN_RECURRENCES_SETTING, materialize, seedRunRecurrences } from "./pipeline/recurring";
+import {
+  HORIZON_DAYS, IMAGE_RULE_SETTING, RUN_RECURRENCES_SETTING, applyImageRule, materialize, seedRunRecurrences,
+} from "./pipeline/recurring";
 
 const app = Fastify({ logger: true, trustProxy: true });
 
@@ -45,6 +47,11 @@ async function start() {
     const seeded = await seedRunRecurrences(pool, await referenceDate(pool));
     await setSetting(pool, RUN_RECURRENCES_SETTING, new Date().toISOString());
     app.log.info({ seeded }, "weekly runs set up as recurring posts");
+  }
+  if (!(await getSetting(pool, IMAGE_RULE_SETTING))) {
+    const fixed = await applyImageRule(pool, await referenceDate(pool));
+    await setSetting(pool, IMAGE_RULE_SETTING, new Date().toISOString());
+    app.log.info(fixed, "instagram image rule applied to existing posts");
   }
   await keepRecurrencesAhead();
   // Daily, so the calendar always shows HORIZON_DAYS of recurring posts.

@@ -3,7 +3,9 @@
 // it with one <script> tag and call openMetricool(text, opts).
 //
 // opts: { date, time, networks: ['facebook','instagram','twitter'],
-//         sourceType, sourceRef, contentItemId, onSent(res) }
+//         texts: { facebook: '…', instagram: '…', twitter: '…' }  — a different
+//                text per network; each distinct text is sent as its own post,
+//         approvedImageId, sourceType, sourceRef, contentItemId, onSent(res) }
 
 function mcEsc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 function mcApi(path, opts) {
@@ -30,6 +32,10 @@ function loadMetricoolDefaults(){
 
 document.body.insertAdjacentHTML('beforeend', "<div id=\"mc-modal\" style=\"display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:100;align-items:center;justify-content:center\">\n  <div class=\"card\" style=\"max-width:520px;width:92%;max-height:90vh;overflow:auto\">\n    <div class=\"ct\">Send to Metricool</div>\n    <div class=\"field\"><label>Post text</label><textarea id=\"mc-text\" style=\"min-height:120px\"></textarea></div>\n    <div class=\"field\"><label>Networks</label>\n      <label class=\"check\"><input type=\"checkbox\" id=\"mc-fb\" checked onchange=\"updatePublishHint()\"> Facebook</label>\n      <label class=\"check\"><input type=\"checkbox\" id=\"mc-ig\" checked onchange=\"updatePublishHint()\"> Instagram</label>\n      <label class=\"check\"><input type=\"checkbox\" id=\"mc-x\" checked onchange=\"updatePublishHint()\"> X</label>\n      <div class=\"hint\" id=\"mc-publish-hint\"></div>\n    </div>\n    <div class=\"row2\">\n      <div class=\"field\"><label>Date</label><input type=\"date\" id=\"mc-date\"><div class=\"hint\" id=\"mc-date-hint\"></div></div>\n      <div class=\"field\"><label>Time</label><input type=\"time\" id=\"mc-time\"></div>\n    </div>\n    <div id=\"mc-image-area\">\n      <div class=\"field\"><label>Image</label>\n        <select id=\"mc-image-source\" onchange=\"switchImageSource()\">\n          <option value=\"none\">No image</option>\n          <option value=\"upload\">Upload an image</option>\n          <option value=\"approved\">Choose an approved image</option>\n          <option value=\"url\">Use an image URL</option>\n        </select>\n      </div>\n      <div class=\"field\" id=\"mc-src-upload\" style=\"display:none\">\n        <label>File</label><input type=\"file\" id=\"mc-file\" accept=\"image/*\">\n        <div class=\"hint\">JPG, PNG, GIF or WebP, up to 10 MB.</div>\n      </div>\n      <div class=\"field\" id=\"mc-src-approved\" style=\"display:none\">\n        <label>Approved image</label><select id=\"mc-approved\"></select>\n      </div>\n      <div class=\"field\" id=\"mc-src-url\" style=\"display:none\">\n        <label>Image URL (must be public)</label><input type=\"text\" id=\"mc-imgurl\" placeholder=\"https://...\">\n      </div>\n    </div>\n    <div id=\"mc-msg\"></div>\n    <div class=\"btn-row\">\n      <button class=\"btn btn-primary\" id=\"mc-send-btn\" data-default=\"Send to Metricool\" onclick=\"submitMetricool()\">Send to Metricool</button>\n      <button class=\"btn btn-secondary\" onclick=\"closeMetricool()\">Cancel</button>\n    </div>\n  </div>\n</div>\n");
 document.getElementById('mc-date').addEventListener('change', function(){ updateDateHint(); });
+// Per-network texts render here, in place of the single text box, when a
+// caller has a different caption for each network.
+document.getElementById('mc-text').closest('.field').insertAdjacentHTML('afterend', '<div id="mc-texts"></div>');
+var MC_NETWORK_LABELS = { facebook: 'Facebook', instagram: 'Instagram', twitter: 'X' };
 
 var _mcCtx = { sourceType:'', sourceRef:'', contentItemId:'' };
 
@@ -84,6 +90,12 @@ function openMetricool(text, opts){
   _mcCtx = { sourceType: opts.sourceType||'', sourceRef: opts.sourceRef||'', contentItemId: opts.contentItemId||'', onSent: opts.onSent||null };
   if (!window._mcDefaults) loadMetricoolDefaults();
   document.getElementById('mc-text').value = text || '';
+  _mcCtx.texts = opts.texts || null;
+  document.getElementById('mc-text').closest('.field').style.display = opts.texts ? 'none' : '';
+  document.getElementById('mc-texts').innerHTML = !opts.texts ? '' : Object.keys(opts.texts).map(function(n){
+    return '<div class="field"><label for="mc-text-'+n+'">'+mcEsc(MC_NETWORK_LABELS[n] || n)+' text</label>'
+      + '<textarea id="mc-text-'+n+'" style="min-height:90px">'+mcEsc(opts.texts[n])+'</textarea></div>';
+  }).join('');
   document.getElementById('mc-date').value = opts.date || new Date().toLocaleDateString('en-CA');
   document.getElementById('mc-time').value = opts.time || (window._mcDefaults && _mcDefaults.time) || '09:00';
   // Callers that know the post's platforms pre-tick just those networks.
@@ -92,7 +104,7 @@ function openMetricool(text, opts){
     document.getElementById('mc-ig').checked = opts.networks.indexOf('instagram') !== -1;
     document.getElementById('mc-x').checked = opts.networks.indexOf('twitter') !== -1;
   }
-  document.getElementById('mc-image-source').value = 'none';
+  document.getElementById('mc-image-source').value = opts.approvedImageId ? 'approved' : 'none';
   document.getElementById('mc-msg').innerHTML = '';
   switchImageSource();
   updateDateHint();
@@ -109,6 +121,7 @@ function openMetricool(text, opts){
       opt.textContent = img.title;
       sel.appendChild(opt);
     });
+    if (opts.approvedImageId) sel.value = String(opts.approvedImageId);
   }).catch(function(){ /* silently ignore if approvals not available */ });
 }
 
@@ -142,9 +155,21 @@ function submitMetricool(){
   if (!networks.length) { document.getElementById('mc-msg').innerHTML='<div class="alert alert-err">Pick at least one network.</div>'; return; }
   var dateTime = document.getElementById('mc-date').value + 'T' + (document.getElementById('mc-time').value||'09:00') + ':00';
   var tz = (window._mcDefaults && _mcDefaults.tz) || 'America/New_York';
+  // One send per distinct text: with a single caption that's one post to every
+  // network; with separate captions, each network gets its own.
+  var groups = [], byText = {};
+  networks.forEach(function(n){
+    var box = _mcCtx.texts && document.getElementById('mc-text-' + n);
+    var text = box ? box.value : document.getElementById('mc-text').value;
+    if (!text.trim()) return;
+    if (!byText[text]) { byText[text] = { text: text, networks: [] }; groups.push(byText[text]); }
+    byText[text].networks.push(n);
+  });
+  if (!groups.length) { document.getElementById('mc-msg').innerHTML='<div class="alert alert-err">There’s no text to send.</div>'; return; }
   mcSetBtn('mc-send-btn', true, 'Sending...');
   readMetricoolImage().then(function(image){
-    var body = { text: document.getElementById('mc-text').value, networks: networks, dateTime: dateTime, timezone: tz,
+    if (groups.length > 1) return sendGroups(groups, image, dateTime, tz);
+    var body = { text: groups[0].text, networks: groups[0].networks, dateTime: dateTime, timezone: tz,
       sourceType: _mcCtx.sourceType, sourceRef: _mcCtx.sourceRef, contentItemId: _mcCtx.contentItemId };
     Object.keys(image).forEach(function(k){ body[k]=image[k]; });
     return mcApi('/api/metricool/send', { method:'POST', body: body });
@@ -158,8 +183,29 @@ function submitMetricool(){
       ? ' It will publish automatically.'
       : ' Approve it in the Metricool planner to publish.';
     var extra = fate + (res.note? ' '+mcEsc(res.note):'') + ((res.warnings&&res.warnings.length)? ' '+mcEsc(res.warnings.join(' ')):'');
-    el.innerHTML = '<div class="alert alert-ok">Sent to Metricool — scheduled '+mcEsc(res.scheduledFor)+'.'+extra+'</div>';
+    var each = res.sentTo ? ' Each network got its own text (' + mcEsc(res.sentTo.join(', ')) + ').' : '';
+    el.innerHTML = '<div class="alert alert-ok">Sent to Metricool — scheduled '+mcEsc(res.scheduledFor)+'.'+each+extra+'</div>';
     if (_mcCtx.onSent) _mcCtx.onSent(res);
   }).catch(function(e){ mcSetBtn('mc-send-btn', false); document.getElementById('mc-msg').innerHTML = '<div class="alert alert-err">'+mcEsc(e.message)+'</div>'; });
 }
 
+// Send each network's own text as its own Metricool post, one after another,
+// and report exactly which went if one fails part-way.
+function sendGroups(groups, image, dateTime, tz) {
+  var sent = [], last = null;
+  return groups.reduce(function(chain, g){
+    return chain.then(function(){
+      var body = { text: g.text, networks: g.networks, dateTime: dateTime, timezone: tz,
+        sourceType: _mcCtx.sourceType, sourceRef: _mcCtx.sourceRef, contentItemId: _mcCtx.contentItemId };
+      Object.keys(image).forEach(function(k){ body[k]=image[k]; });
+      return mcApi('/api/metricool/send', { method:'POST', body: body }).then(function(res){
+        var names = g.networks.map(function(n){ return MC_NETWORK_LABELS[n] || n; }).join(' and ');
+        if (!res.ok) throw new Error((sent.length ? 'Sent ' + sent.join(', ') + ', but ' : '') + names + ' failed: ' + res.error);
+        sent.push(names); last = res;
+      });
+    });
+  }, Promise.resolve()).then(function(){
+    return { ok: true, scheduledFor: last.scheduledFor, autoPublish: last.autoPublish, note: last.note,
+             warnings: last.warnings, sentTo: sent };
+  });
+}

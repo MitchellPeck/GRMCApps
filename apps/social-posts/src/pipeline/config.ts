@@ -3,10 +3,21 @@
 // colour palette. The client reads all of it from GET /api/pipeline/meta, so
 // editing this file is the whole change.
 
-export const PLATFORMS = [
-  { key: "instagram", label: "Instagram" },
-  { key: "facebook", label: "Facebook" },
-  { key: "x", label: "X" },
+// What each platform allows. `limit` is its caption length; `urlLength` is
+// what a link costs there (X counts every link as 23 characters, however long);
+// `needsImage` means a text-only post can't go there at all.
+export interface Platform {
+  key: string; label: string; limit: number; urlLength?: number; needsImage?: boolean;
+  /** How Claude should write for it. */
+  guidance: string;
+}
+export const PLATFORMS: Platform[] = [
+  { key: "instagram", label: "Instagram", limit: 2200, needsImage: true,
+    guidance: "Instagram: written to sit under an image. Open strong, short lines with breaks, a few relevant hashtags at the end are fine. Links aren't clickable in captions, so say \"link in bio\" instead of pasting a URL." },
+  { key: "facebook", label: "Facebook", limit: 16192,
+    guidance: "Facebook: warm and conversational, can run a little longer, include the full link if there is one. Hashtags only if natural." },
+  { key: "x", label: "X", limit: 280, urlLength: 23,
+    guidance: "X: one or two punchy sentences. Hard limit 280 characters, and any link counts as 23 characters. No hashtag clutter." },
 ];
 
 // New content items get these platforms unless the caller says otherwise.
