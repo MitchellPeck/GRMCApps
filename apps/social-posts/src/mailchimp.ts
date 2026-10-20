@@ -96,54 +96,50 @@ export interface CampaignContent {
   preview: string;
 }
 
-async function getLatestCampaign(
-  pool: Pool,
-  subjectMatch: string,
-  beforeDate: string | null
-): Promise<CampaignContent> {
+export interface CampaignSummary {
+  id: string; subject: string; status: string; archiveUrl: string;
+  sentAt: string; createdAt: string; issueDate: string; isDraft: boolean; dateLine: string;
+}
+
+/** The newest 30 campaigns whose subject contains `subjectMatch` (resends skipped), newest first. */
+export async function listCampaigns(pool: Pool, subjectMatch: string): Promise<CampaignSummary[]> {
   const mc = await getMailchimpAuth(pool);
   const listUrl =
     mc.base +
     "/campaigns?count=30&sort_field=create_time&sort_dir=DESC" +
     "&fields=campaigns.id,campaigns.status,campaigns.settings.subject_line,campaigns.archive_url,campaigns.send_time,campaigns.create_time";
   const listRes: any = await (await fetch(listUrl, { headers: mc.headers })).json();
-  const campaigns: any[] = listRes.campaigns || [];
-  const matches = campaigns.filter((c) => {
-    const subj = (c.settings?.subject_line || "").toLowerCase();
-    return subj.indexOf(subjectMatch) !== -1 && subj.indexOf("resend") === -1;
-  });
-  if (!matches.length) throw new Error(`No ${subjectMatch} campaigns found in Mailchimp.`);
+  const match = subjectMatch.toLowerCase();
+  const tz = (await getSetting(pool, "default_timezone")) || DEFAULT_TZ;
+  return (listRes.campaigns || [])
+    .filter((c: any) => {
+      const subj = (c.settings?.subject_line || "").toLowerCase();
+      return subj.indexOf(match) !== -1 && subj.indexOf("resend") === -1;
+    })
+    .map((c: any) => {
+      const subject = c.settings?.subject_line || "";
+      const dates: CampaignDates = { status: c.status || "", sentAt: c.send_time || "", createdAt: c.create_time || "", issueDate: parseIssueDate(subject) };
+      return { id: c.id, subject, archiveUrl: c.archive_url || "", ...dates, isDraft: isDraftStatus(dates.status), dateLine: campaignDateLine(dates, tz) };
+    });
+}
 
+/** A campaign's text, cleaned and trimmed the way the runs used it. */
+export async function getCampaignText(pool: Pool, id: string): Promise<string> {
+  const mc = await getMailchimpAuth(pool);
+  const res: any = await (await fetch(mc.base + "/campaigns/" + encodeURIComponent(id) + "/content?fields=plain_text", { headers: mc.headers })).json();
+  return cleanCampaignText(res.plain_text || "").substring(0, 4000);
+}
+
+async function getLatestCampaign(pool: Pool, subjectMatch: string, beforeDate: string | null): Promise<CampaignContent> {
+  const matches = await listCampaigns(pool, subjectMatch);
+  if (!matches.length) throw new Error(`No ${subjectMatch} campaigns found in Mailchimp.`);
   let target = matches[0];
   if (beforeDate) {
     const cutoff = new Date(beforeDate + "T23:59:59");
-    for (const c of matches) {
-      if (new Date(c.create_time) <= cutoff) { target = c; break; }
-    }
+    for (const c of matches) if (new Date(c.createdAt) <= cutoff) { target = c; break; }
   }
-
-  const contentRes: any = await (
-    await fetch(mc.base + "/campaigns/" + target.id + "/content?fields=plain_text", { headers: mc.headers })
-  ).json();
-  const cleaned = cleanCampaignText(contentRes.plain_text || "");
-
-  const subject = target.settings.subject_line || "";
-  const dates: CampaignDates = {
-    status: target.status || "",
-    sentAt: target.send_time || "",
-    createdAt: target.create_time || "",
-    issueDate: parseIssueDate(subject),
-  };
-  const tz = (await getSetting(pool, "default_timezone")) || DEFAULT_TZ;
-
-  return {
-    subject,
-    archiveUrl: target.archive_url || "",
-    ...dates,
-    isDraft: isDraftStatus(dates.status),
-    dateLine: campaignDateLine(dates, tz),
-    preview: cleaned.substring(0, 4000),
-  };
+  const { id: _id, ...rest } = target;
+  return { ...rest, preview: await getCampaignText(pool, target.id) };
 }
 
 export function getLatestGraceNotes(pool: Pool, beforeDate: string | null): Promise<CampaignContent> {

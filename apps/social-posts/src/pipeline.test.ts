@@ -453,3 +453,52 @@ test("profiles and overrides are stored, and a recurrence's override reaches its
   await updateRecurrence(pool, r.value.id, { drafting: { instructions: "Invite warmly." } }, REF);
   assert.deepEqual((await occ(r.value.id))[0].drafting, { instructions: "Invite warmly." }, "series edits reach untouched posts");
 });
+
+// Stands in for Mailchimp, Buzzsprout and Anthropic in database tests.
+function stubFetch(routes: Array<[RegExp, (url: string, init?: any) => unknown]>) {
+  const real = globalThis.fetch;
+  const calls: string[] = [];
+  globalThis.fetch = (async (url: unknown, init?: any) => {
+    const u = String(url);
+    calls.push(u);
+    const route = routes.find(([re]) => re.test(u));
+    if (!route) throw new Error("Unexpected fetch: " + u);
+    const body = route[1](u, init);
+    return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) } as unknown as Response;
+  }) as typeof fetch;
+  return { calls, restore: () => { globalThis.fetch = real; } };
+}
+
+const CAMPAIGNS = { campaigns: [
+  { id: "c25", status: "save", settings: { subject_line: "Grace Notes - October 25, 2026" }, archive_url: "https://mc/c25", send_time: "", create_time: "2026-10-23T14:00:00Z" },
+  { id: "c18", status: "sent", settings: { subject_line: "Grace Notes - October 18, 2026" }, archive_url: "https://mc/c18", send_time: "2026-10-16T14:00:00Z", create_time: "2026-10-16T13:00:00Z" },
+  { id: "b1", status: "sent", settings: { subject_line: "Weekly Blog - Oct 16" }, archive_url: "https://mc/b1", send_time: "2026-10-16T14:00:00Z", create_time: "2026-10-16T13:00:00Z" },
+] };
+
+test("a Mailchimp source picks the issue for the post's week, and a pinned ref wins", async () => {
+  const { resolveSource } = await import("./pipeline/sources");
+  await pool.query("INSERT INTO settings (key, value) VALUES ('mailchimp_api_key','k'), ('mailchimp_server','us1') ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value");
+  const f = stubFetch([
+    [/\/campaigns\?/, () => CAMPAIGNS],
+    [/\/campaigns\/(\w+)\/content/, (u) => ({ plain_text: "Text of " + /campaigns\/(\w+)\//.exec(u)![1] })],
+  ]);
+  try {
+    const gn = { kind: "mailchimp" as const, subjectContains: "grace notes", cutoff: "followingSunday" as const };
+    const wk = await resolveSource(pool, gn, null, "2026-10-14");
+    assert.equal(wk?.id, "c18");
+    assert.equal(wk?.content, "Text of c18");
+    const next = await resolveSource(pool, gn, null, "2026-10-21");
+    assert.equal(next?.id, "c25");
+    assert.equal(next?.isDraft, true, "an unsent issue is marked");
+    const pinned = await resolveSource(pool, gn, { kind: "mailchimp", id: "c18", title: "Grace Notes - October 18, 2026" }, "2026-10-21");
+    assert.equal(pinned?.id, "c18", "the post keeps the issue it was drafted from");
+    const undated = await resolveSource(pool, gn, null, null);
+    assert.equal(undated?.id, "c25", "no publish date: newest");
+    assert.equal(await resolveSource(pool, { kind: "buzzsprout" }, null, "2026-10-21"), null, "no episode picked yet");
+    const manual = await resolveSource(pool, gn, { kind: "manual", content: "Pasted", url: "https://p" }, "2026-10-21");
+    assert.equal(manual?.content, "Pasted");
+  } finally {
+    f.restore();
+    await pool.query("DELETE FROM settings WHERE key IN ('mailchimp_api_key','mailchimp_server')");
+  }
+});
