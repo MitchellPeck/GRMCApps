@@ -5,6 +5,7 @@ import { getSetting, setSetting } from "../settings";
 import { buildCaptureIcs } from "../pipeline/ical";
 import { draftAll, draftCaptions, parseDraftRequest, resolveForDraft } from "../pipeline/caption";
 import { listDraftHistory } from "../pipeline/history";
+import { planFromEpisode, proposeSeriesPlan, saveSeriesPlan } from "../pipeline/planning";
 import { listCampaigns } from "../mailchimp";
 import { listEpisodes } from "../buzzsprout";
 import { getApprovedImageBytes } from "../approvals-client";
@@ -216,6 +217,29 @@ export async function pipelineRoutes(app: FastifyInstance): Promise<void> {
       shiftDays: b.shiftDays == null ? null : Number(b.shiftDays),
     }, getIdentity(req).email);
     return r.ok ? { ok: true, ...r.value } : r;
+  }));
+
+  app.post("/api/pipeline/events/:id/plan-episode", async (req) => guard(async () => {
+    const b = (req.body ?? {}) as { episodeId?: string | number; angles?: unknown };
+    if (!b.episodeId) return { ok: false, error: "Pick an episode." };
+    const angles = Array.isArray(b.angles) ? b.angles.map(String) : [];
+    const r = await planFromEpisode(pool, (req.params as { id: string }).id, String(b.episodeId), angles,
+      getIdentity(req).email, await referenceDate(pool));
+    return r.ok ? { ok: true, items: r.value } : r;
+  }));
+
+  app.post("/api/pipeline/events/:id/plan-series/propose", async (req) => guard(async () => {
+    const b = (req.body ?? {}) as { count?: number; cadence?: string; startDate?: string };
+    const r = await proposeSeriesPlan(pool, (req.params as { id: string }).id,
+      { count: Number(b.count), cadence: String(b.cadence || "weekly"), startDate: String(b.startDate || "") });
+    return r.ok ? { ok: true, posts: r.value } : r;
+  }));
+
+  app.post("/api/pipeline/events/:id/plan-series", async (req) => guard(async () => {
+    const posts = (req.body as { posts?: unknown } | null)?.posts;
+    if (!Array.isArray(posts)) return { ok: false, error: "There's no plan to save." };
+    const r = await saveSeriesPlan(pool, (req.params as { id: string }).id, posts as any[], getIdentity(req).email);
+    return r.ok ? { ok: true, items: r.value } : r;
   }));
 
   // ── Recurring posts ──

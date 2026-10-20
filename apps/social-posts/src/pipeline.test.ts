@@ -562,3 +562,65 @@ test("a podcast post can't draft until its episode is picked", async () => {
   assert.ok(!r.ok);
   assert.match(r.error, /Pick the episode this post is about/);
 });
+
+test("planning from an episode makes one pinned post per angle, on its offset day", async () => {
+  const { planFromEpisode } = await import("./pipeline/planning");
+  const { PODCAST_PROFILE } = await import("./pipeline/drafting-seed");
+  const ev = await createEvent(pool, { name: "Pod plan", kind: "series" });
+  await updateEvent(pool, ev.id, { drafting: PODCAST_PROFILE });
+  await pool.query(`INSERT INTO settings (key, value) VALUES ('buzzsprout_api_token','t'), ('buzzsprout_podcast_id','77')
+                    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`);
+  const episode = (id: number, published_at: string) => ({ id, title: "Too small or too big?", description: "<p>Notes</p>", custom_url: null,
+    published_at, duration: 1920, episode_number: 4, season_number: 1, private: false });
+  const f = stubFetch([[/buzzsprout\.com\/api\/77\/episodes\/(\d+)\.json/, (u) => /episodes\/9\./.test(u) ? episode(9, "2026-11-01T10:00:00Z") : episode(10, "")]]);
+  try {
+    const r = await planFromEpisode(pool, ev.id, "9", ["announcement", "quote"], "me@x.org", REF);
+    assert.ok(r.ok);
+    assert.deepEqual(r.value.map((i) => [i.title, i.publishDate]), [
+      ["Announcement: Too small or too big?", "2026-11-01"], ["Pull quote: Too small or too big?", "2026-11-05"],
+    ]);
+    assert.equal(r.value[1].drafting.instructions, PODCAST_PROFILE.angles!.find((a) => a.key === "quote")!.instructions);
+    assert.deepEqual([r.value[0].sourceRef?.kind, r.value[0].sourceRef?.id], ["buzzsprout", "9"]);
+
+    const undated = await planFromEpisode(pool, ev.id, "10", ["guest"], "me@x.org", REF);
+    assert.ok(undated.ok);
+    assert.equal(undated.value[0].publishDate, "2026-11-02", "no episode date: today + offset");
+
+    assert.ok(!(await planFromEpisode(pool, ev.id, "9", [], "me@x.org", REF)).ok, "needs an angle");
+    const plain = await createEvent(pool, { name: "No source" });
+    const wrong = await planFromEpisode(pool, plain.id, "9", ["announcement"], "me@x.org", REF);
+    assert.ok(!wrong.ok);
+    assert.match(wrong.error, /source isn't Buzzsprout/);
+  } finally {
+    f.restore();
+    await pool.query("DELETE FROM settings WHERE key IN ('buzzsprout_api_token','buzzsprout_podcast_id')");
+  }
+});
+
+test("a series is planned with Claude, edited, then saved as posts", async () => {
+  const { proposeSeriesPlan, saveSeriesPlan } = await import("./pipeline/planning");
+  const ev = await createEvent(pool, { name: "Advent 2026", kind: "series", notes: "Four weeks of hope." });
+  await pool.query("INSERT INTO settings (key, value) VALUES ('anthropic_api_key','t') ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value");
+  let prompt = "";
+  const f = stubFetch([[/api\.anthropic\.com/, (_u, init) => {
+    prompt = JSON.parse(init.body).messages[0].content;
+    return { content: [{ text: JSON.stringify([
+      { date: "2026-11-29", phase: "Waiting", title: "Hope", sub: "Light the first candle." },
+      { date: "Dec 6", phase: "", title: "Peace", sub: "Second candle." },
+    ]) }] };
+  }]]);
+  try {
+    const p = await proposeSeriesPlan(pool, ev.id, { count: 2, cadence: "weekly", startDate: "2026-11-29" });
+    assert.ok(p.ok);
+    assert.match(prompt, /Generate a post schedule for a social media series called "Advent 2026"/);
+    assert.match(prompt, /Context: Four weeks of hope\./);
+    assert.deepEqual(p.value.map((x) => x.date), ["2026-11-29", ""], "a date Claude didn't format is left for the person to fill");
+    assert.ok(!(await saveSeriesPlan(pool, ev.id, p.value, "me@x.org")).ok, "every post needs a date before saving");
+    const saved = await saveSeriesPlan(pool, ev.id, [p.value[0], { ...p.value[1], date: "2026-12-06" }], "me@x.org");
+    assert.ok(saved.ok);
+    assert.deepEqual(saved.value.map((i) => [i.title, i.publishDate, i.brief, i.phase, i.eventId]), [
+      ["Hope", "2026-11-29", "Light the first candle.", "Waiting", ev.id],
+      ["Peace", "2026-12-06", "Second candle.", "", ev.id],
+    ]);
+  } finally { f.restore(); await pool.query("DELETE FROM settings WHERE key = 'anthropic_api_key'"); }
+});
