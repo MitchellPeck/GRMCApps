@@ -166,12 +166,11 @@ export async function resolveNow(
   const takeover = opts.live ? await getTakeover(pool) : NO_TAKEOVER;
 
   if (playNow.active) {
-    const built = await framesForPlayNow(pool, playNow, settings, at);
-    if (built.length) {
-      frames = built;
-      source = "play_now";
-      nothingPlayable = false;
-    }
+    // Empty while its item is being re-rendered: black for a moment, but it
+    // is still Play now that owns the screen, and the admin card says so.
+    frames = await framesForPlayNow(pool, playNow, settings, at);
+    source = "play_now";
+    nothingPlayable = false;
   }
   if (takeover.active) source = "takeover";
 
@@ -192,6 +191,11 @@ export async function buildPlan(
   // Its own start and end are known only when it is the winner; a fallback
   // entry borrowed the screen and the plan does not need them to cut.
   const isWinner = entry !== null && entry.id === resolution.entry?.id;
+  // Play now and a takeover own the screen outright; the schedule's entry must
+  // stay out of the plan, or its boundaries change the revision and the
+  // player restarts a Play now video.
+  const scheduleOwns = source === "schedule" || source === "none";
+  const shownEntry = scheduleOwns ? entry : null;
   const samsung = await getSamsung(pool);
 
   // playout.py, which feeds the narthex screen through the Blackmagic card,
@@ -231,9 +235,9 @@ export async function buildPlan(
     }),
     playlistId: showingPlaylist ? Number(showingPlaylist.id) : null,
     playlistName: source === "play_now" ? playNow.title : showingPlaylist?.name ?? "",
-    entryId: entry?.id ?? null,
-    entryLabel: entry?.label ?? "",
-    endsAt: isWinner && resolution.endsAt ? resolution.endsAt.toISOString() : null,
+    entryId: shownEntry?.id ?? null,
+    entryLabel: shownEntry?.label ?? "",
+    endsAt: scheduleOwns && isWinner && resolution.endsAt ? resolution.endsAt.toISOString() : null,
     display: {
       background: settings.background,
       transition,
@@ -268,6 +272,6 @@ export async function buildPlan(
     ...skeleton,
     revision: planRevision(skeleton),
     serverTime: opts.at.toISOString(),
-    changesAt: resolution.changesAt ? resolution.changesAt.toISOString() : null,
+    changesAt: scheduleOwns && resolution.changesAt ? resolution.changesAt.toISOString() : null,
   };
 }

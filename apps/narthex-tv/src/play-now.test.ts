@@ -39,10 +39,19 @@ test("a good row is read back", () => {
   assert.deepEqual(p, { active: true, mediaId: 7, title: "", startedAt: "2026-10-20T15:00:00.000Z", startedBy: "Pat" });
 });
 
-test("Play now of a deleted or unready item is inactive", async () => {
+test("Play now of a deleted or failed item is inactive", async () => {
   const row = JSON.stringify({ active: true, mediaId: 7, startedAt: "2026-10-20T15:00:00.000Z", startedBy: "Pat" });
   assert.equal((await getPlayNow(fakePool({ play_now: row }, { 7: null }))).active, false);
-  assert.equal((await getPlayNow(fakePool({ play_now: row }, { 7: { status: "processing", title: "X" } }))).active, false);
+  assert.equal((await getPlayNow(fakePool({ play_now: row }, { 7: { status: "failed", title: "X" } }))).active, false);
+});
+
+test("Play now survives its item being re-rendered, so fixing a typo does not power-cycle the TV", async () => {
+  const row = JSON.stringify({ active: true, mediaId: 7, startedAt: "2026-10-20T15:00:00.000Z", startedBy: "Pat" });
+  for (const status of ["pending", "processing"]) {
+    const p = await getPlayNow(fakePool({ play_now: row }, { 7: { status, title: "Notice" } }));
+    assert.equal(p.active, true, status);
+    assert.equal(p.title, "Notice");
+  }
 });
 
 test("Play now of a ready item carries its title", async () => {

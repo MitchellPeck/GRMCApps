@@ -52,15 +52,19 @@ export function parsePlayNow(raw: string): PlayNow {
 }
 
 /**
- * The live Play now, or none. An item deleted or re-ingested since it was
- * started is not playable, and rather than leave the screen black the screen
- * goes back to the schedule.
+ * The live Play now, or none.
+ *
+ * An item that was deleted, or whose conversion failed, ends it: the screen
+ * goes back to the schedule rather than sitting black. An item merely being
+ * re-rendered (a notice edited in place goes back to pending) keeps it: the
+ * screen is black for a moment, but the TV stays on -- fixing a typo must not
+ * switch the television off and on again.
  */
 export async function getPlayNow(pool: Pool): Promise<PlayNow> {
   const stored = parsePlayNow(await getSetting(pool, KEY));
   if (!stored.active) return NO_PLAY_NOW;
   const media = await getMedia(pool, stored.mediaId);
-  if (!media || media.status !== "ready") return NO_PLAY_NOW;
+  if (!media || media.status === "failed") return NO_PLAY_NOW;
   return { ...stored, title: media.title };
 }
 

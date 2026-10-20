@@ -215,10 +215,15 @@ export function sourceKeyFor(p: {
   playlistId: number;
   startedAt: string;
 }): string {
+  // While Play now or a takeover owns the screen the schedule underneath is
+  // irrelevant: an entry starting or ending must not re-cut it, or a Play now
+  // video would jump back to its start at every boundary.
+  const scheduled = p.source === "schedule" || p.source === "none";
   return (
     (p.takeoverStartedAt ? `TAKEOVER:${p.takeoverStartedAt}` : "") +
     (p.playNow ? `PLAYNOW:${p.playNow.mediaId}:${p.playNow.startedAt}:` : "") +
-    `${p.powerOn ? "awake" : "dark"}:${p.source}:${p.entryId}:${p.playlistId}:${p.startedAt}`
+    `${p.powerOn ? "awake" : "dark"}:${p.source}:` +
+    (scheduled ? `${p.entryId}:${p.playlistId}:${p.startedAt}` : "")
   );
 }
 

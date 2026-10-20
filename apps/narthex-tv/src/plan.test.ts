@@ -204,3 +204,15 @@ test("starting and clearing Play now or a takeover changes the source key", () =
   assert.notEqual(pn, to);
   assert.notEqual(sched, sourceKeyFor({ ...base, powerOn: false }));
 });
+
+test("a schedule boundary does not re-cut Play now or a takeover", () => {
+  const pn = { mediaId: 1, startedAt: "2026-10-20T15:00:00.000Z" };
+  const before = sourceKeyFor({ ...base, source: "play_now", playNow: pn, entryId: 0, playlistId: 0, startedAt: "" });
+  const after = sourceKeyFor({ ...base, source: "play_now", playNow: pn, entryId: 4, playlistId: 11, startedAt: "2026-10-20T16:00:00.000Z" });
+  assert.equal(before, after);
+  const to = { takeoverStartedAt: "y" };
+  assert.equal(
+    sourceKeyFor({ ...base, ...to, source: "takeover", entryId: 3 }),
+    sourceKeyFor({ ...base, ...to, source: "takeover", entryId: 4, playlistId: 11 })
+  );
+});
