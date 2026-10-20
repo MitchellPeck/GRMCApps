@@ -22,6 +22,10 @@ const skip = !JSDOM || !publicDir;
 
 interface Call { path: string; method: string }
 
+// JSON request bodies, keyed by the call they belong to, for tests that check
+// what was sent. Kept off Call so existing deepEqual checks are unaffected.
+const sentBodies = new WeakMap<Call, any>();
+
 // jsdom windows keep live timers, which hold the event loop open and stop the
 // test process from ever exiting. Close every window this file opened.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -42,8 +46,10 @@ function boot(): { w: any; doc: any; calls: Call[] } {
   const w = dom.window;
   openWindows.push(w);
   const calls: Call[] = [];
-  w.fetch = (path: string, opts: { method?: string } = {}) => {
-    calls.push({ path, method: opts.method ?? "GET" });
+  w.fetch = (path: string, opts: { method?: string; body?: string } = {}) => {
+    const call = { path, method: opts.method ?? "GET" };
+    calls.push(call);
+    if (typeof opts.body === "string") sentBodies.set(call, JSON.parse(opts.body));
     return Promise.resolve({ json: () => Promise.resolve({ ok: true, recordingId: 7 }) });
   };
   w.MediaRecorder = function () { /* app.js feature-detects this on load */ };
@@ -244,6 +250,46 @@ test("guests are offered as speakers and everyone not present is listed absent",
   assert.deepEqual(options, ["", "Alice", "Gina"]);
   assert.equal(doc.getElementById("absent-line").textContent, "Absent: Bob");
   assert.match(doc.getElementById("guest-chips").textContent, /Gina/);
+});
+
+test("a guest can be made a topic's presenter, listed above the attendees", { skip }, () => {
+  const { w, doc, calls } = boot();
+  w.eval(`
+    state.people = [{ id: 9, name: 'Alice', active: true }];
+    state.peopleById = { 9: state.people[0] };
+    state.attendeeIds = [9];
+    state.guests = [{ id: 5, meeting_id: 42, name: 'Gina', title: 'Architect' }];
+    renderDetail();
+  `);
+  const pres = doc.getElementById("pres-1");
+  const groups = [...pres.querySelectorAll(".pres-group-lbl")].map((l: any) => l.textContent);
+  assert.deepEqual(groups, ["Guests", "Attendees"]);
+  const chip = pres.querySelector('.chip[data-pg="5"]');
+  assert.match(chip.textContent, /Gina/);
+  chip.click();
+  const patch = calls.find((c) => c.path === "/api/items/1" && c.method === "PATCH");
+  assert.ok(patch, "the choice is saved");
+  assert.deepEqual(sentBodies.get(patch), { guestPresenterIds: [5] });
+  assert.ok(doc.getElementById("pres-1").querySelector('.chip[data-pg="5"]').classList.contains("on"));
+});
+
+test("a guest is a presenter choice even with no attendees selected", { skip }, () => {
+  const { w, doc } = boot();
+  w.eval(`
+    state.guests = [{ id: 5, meeting_id: 42, name: 'Gina', title: '' }];
+    renderDetail();
+  `);
+  assert.ok(doc.getElementById("pres-1").querySelector('.chip[data-pg="5"]'));
+});
+
+test("report style saves the instructions and the example, and blanks clear them", { skip }, () => {
+  const { doc, calls } = boot();
+  doc.getElementById("s-report-instructions").value = "One section per schedule.";
+  doc.getElementById("s-report-example").value = "";
+  doc.getElementById("btn-save-style").click();
+  const post = calls.find((c) => c.path === "/api/settings" && c.method === "POST");
+  assert.ok(post, "the style is saved");
+  assert.deepEqual(sentBodies.get(post), { reportInstructions: "One section per schedule.", reportExample: "" });
 });
 
 test("an out-of-date report says what changed and offers Docs and PDF", { skip }, () => {

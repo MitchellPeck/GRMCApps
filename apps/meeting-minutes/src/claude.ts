@@ -270,10 +270,10 @@ Write minutes that are comprehensive and well organized, so that someone who
 was not there understands what was reported, what was discussed, what was
 decided, and what happens next. Prefer the transcript and notes for detail;
 the per-item summaries are a starting point, not a limit. Keep every concrete
-fact: names, figures, amounts, dates, deadlines, counts, places, votes and
-motions (who moved, who seconded, the outcome). Group related points together
-rather than retelling the conversation in order, and leave out small talk,
-false starts and repetition.
+fact: names, figures, amounts, balances, dates, deadlines, counts, places,
+votes and motions (who moved, who seconded, the outcome). Group related points
+together rather than retelling the conversation in order, and leave out small
+talk, false starts and repetition.
 
 Write ONLY these sections, in this order, in Markdown:
 
@@ -289,26 +289,65 @@ belongs to in parentheses. Write "None recorded." if there were none.
 For each agenda item, in the order given, numbered as given:
 ### <n>. <title>
 **Presented by:** <the presenter text given, exactly> (omit the line when none is given)
-Then the item's minutes, using whichever of these labelled groups have content,
-each label on its own line followed by bullets:
-**Report:** what the presenter reported
-**Discussion:** the main points raised, and by whom where it matters
-**Decisions:** what was decided or approved
-**Follow-up:** what is to happen next, by whom and by when
+Then the item's minutes, organized to fit what was actually presented:
+- When the presenter went through several distinct reports, documents,
+  statements or schedules (for example a financial report covering Schedule A,
+  Schedule B and Schedule C, or reports from separate ministries), give each
+  one its own "#### <name>" sub-heading in the order presented, with its own
+  figures, totals and comments under it. Name each one as the speaker did.
+  Then put any discussion, decisions and follow-up that concern the item as a
+  whole after them.
+- Otherwise, use whichever of these labelled groups have content, each label
+  on its own line followed by bullets:
+  **Report:** what the presenter reported
+  **Discussion:** the main points raised, and by whom where it matters
+  **Decisions:** what was decided or approved
+  **Follow-up:** what is to happen next, by whom and by when
 An item with no record gets the single line "No discussion recorded."
 
 ## Open Questions
 Bullets for anything left unresolved or deferred to a later meeting. Omit this
 section entirely when there are none.
 
-Formatting rules: only "##" and "###" headings, plain paragraphs, "- " bullets
-(never nested or indented), and **bold**. No tables, no numbered lists, no
-italics, no links, no horizontal rules. Do not write a title, the date,
-attendance, or a list of action items; those are added separately.
+Formatting rules: only "##", "###" and "####" headings, plain paragraphs,
+"- " bullets (never nested or indented), and **bold**. Put each figure on its
+own bullet as "**Label:** value" so amounts are easy to scan. No tables, no
+numbered lists, no italics, no links, no horizontal rules. Do not write a
+title, the date, attendance, or a list of action items; those are added
+separately.
 
 Base everything strictly on the material provided. Never invent people,
-facts, figures, or decisions. Refer to people by the names used in the
+facts, figures, or decisions; if a figure was unclear in the recording, leave
+it out rather than guess. Refer to people by the names used in the
 material.`;
+
+// The organization's own guidance, from Settings, added to the system prompt:
+// standing instructions, and a past report to take the pattern from.
+export function reportSystemPrompt(instructions: string, example: string): string {
+  const parts = [REPORT_SYSTEM];
+  if (instructions.trim()) {
+    parts.push(`The organization has given these standing instructions for its minutes.
+Follow them; where they conflict with the layout above, they win, except that
+you must still never invent anything and must still leave out the title,
+attendance and action item list.
+
+<instructions>
+${instructions.trim()}
+</instructions>`);
+  }
+  if (example.trim()) {
+    parts.push(`Here is a past report the organization considers a good example. Match its
+structure, level of detail and tone for comparable items (for instance, if it
+breaks the financial report into one section per schedule, do the same). It may
+include a title, attendance and action items; ignore those parts. It describes
+a different meeting: never copy its names, figures or facts.
+
+<example_report>
+${example.trim()}
+</example_report>`);
+  }
+  return parts.join("\n\n");
+}
 
 // Write the body of the meeting minutes: summary, decisions, the agenda
 // written up item by item, and open questions. Every transcript goes in whole;
@@ -333,7 +372,11 @@ export async function generateReportBody(pool: Pool, input: ReportBodyInput): Pr
     if (it.notes) lines.push(`Typed notes:\n${it.notes}`);
     if (it.transcript) lines.push(`Transcript (speakers labeled by name where known):\n${it.transcript}`);
   });
-  const body = (await callClaude(pool, REPORT_SYSTEM, lines.join("\n"), 16000, REPORT_TIMEOUT_MS)).trim();
+  const system = reportSystemPrompt(
+    await getSetting(pool, "report_instructions"),
+    await getSetting(pool, "report_example")
+  );
+  const body = (await callClaude(pool, system, lines.join("\n"), 16000, REPORT_TIMEOUT_MS)).trim();
   if (!body) throw new Error("Claude returned an empty report. Try again.");
   return body;
 }

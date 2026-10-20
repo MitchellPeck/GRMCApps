@@ -64,10 +64,10 @@ function headerLines(input: ReportInput): string[] {
   return [`# ${input.title}`, ...(meta ? [meta] : [])];
 }
 
-// Guests get their own section at the top, with what each presented.
+// Guests get their own subsection under attendance, with what each presented.
 function guestLines(input: ReportInput): string[] {
   if (!input.guests.length) return [];
-  const lines = ["## Guests"];
+  const lines = ["### Guests"];
   for (const g of input.guests) {
     const key = g.name.trim().toLowerCase();
     const items = input.items
@@ -149,15 +149,15 @@ export function reportBodyInput(input: ReportInput): ReportBodyInput {
   };
 }
 
-// The full report around Claude's body: header, guests, attendance, then the
-// body, then the consolidated action items.
+// The full report around Claude's body: header, attendance with guests under
+// it, then the body, then the consolidated action items.
 export function buildReport(input: ReportInput, body: string): BuiltReport {
   const actions = consolidateActionItems(input.items);
   const guests = guestLines(input);
   const md: string[] = [
     ...headerLines(input), "",
-    ...(guests.length ? [...guests, ""] : []),
     ...attendanceLines(input), "",
+    ...(guests.length ? [...guests, ""] : []),
     body.trim(), "",
     "## Action Items", ...(actions.length ? actions : ["None recorded."]),
   ];
@@ -210,7 +210,7 @@ export function reportHtml(markdown: string, title: string): string {
   let inList = false;
   const closeList = () => { if (inList) { out.push("</ul>"); inList = false; } };
   for (const ln of markdown.split(/\r?\n/)) {
-    const h = /^(#{1,3})\s+(.*)$/.exec(ln);
+    const h = /^(#{1,4})\s+(.*)$/.exec(ln);
     if (h) { closeList(); out.push(`<h${h[1].length}>${inlineHtml(h[2])}</h${h[1].length}>`); continue; }
     const b = /^\s*[-*]\s+(?:\[ \]\s+)?(.*)$/.exec(ln);
     if (b) {

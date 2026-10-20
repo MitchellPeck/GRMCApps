@@ -74,6 +74,22 @@
       <div class="btn-row"><button class="btn btn-primary" id="btn-save-settings" data-default="Save settings">Save settings</button></div>
     </div>
     <div class="card">
+      <div class="ct">Report style</div>
+      <div class="hint" style="margin-bottom:10px">Guides how Claude writes every meeting report. Both are optional; changes apply the next time a report is generated.</div>
+      <div id="style-msg"></div>
+      <div class="field style-field">
+        <label for="s-report-instructions">Standing instructions</label>
+        <textarea id="s-report-instructions" placeholder="e.g. Treasurer’s report: give each schedule its own section, with the opening balance, receipts, disbursements and closing balance for each."></textarea>
+        <div class="hint">House rules for the minutes: how particular reports should be laid out, what to always include, names or terms to use.</div>
+      </div>
+      <div class="field style-field">
+        <label for="s-report-example">Example report</label>
+        <textarea id="s-report-example" placeholder="Paste a past report you were happy with."></textarea>
+        <div class="hint">Claude follows its structure and level of detail, never its facts. Paste it as it appears in the app; the title, attendance and action items in it are ignored.</div>
+      </div>
+      <div class="btn-row"><button class="btn btn-primary" id="btn-save-style" data-default="Save report style">Save report style</button></div>
+    </div>
+    <div class="card">
       <div class="ct">Transcription</div>
       <div class="hint">Live and uploaded-audio transcription run on a self-hosted Whisper service on your own server — no API key, no per-minute cost, and audio never leaves your machine. Live transcription streams your mic in real time; use a good microphone for best results.</div>
     </div>

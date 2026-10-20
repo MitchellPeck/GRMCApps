@@ -16,6 +16,8 @@ export async function setSetting(pool: Pool, key: string, value: string): Promis
 export interface SettingsView {
   anthropicKeyHint: string;
   hasAnthropicKey: boolean;
+  reportInstructions: string;
+  reportExample: string;
 }
 
 // Never returns full keys, only a hint + flags.
@@ -24,5 +26,7 @@ export async function getSettingsView(pool: Pool): Promise<SettingsView> {
   return {
     anthropicKeyHint: ak ? ak.substring(0, 10) + "..." : "",
     hasAnthropicKey: ak.length > 0,
+    reportInstructions: await getSetting(pool, "report_instructions"),
+    reportExample: await getSetting(pool, "report_example"),
   };
 }

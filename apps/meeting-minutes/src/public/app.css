@@ -110,6 +110,9 @@ body.has-rec-banner{padding-top:44px}
 .report h1{font-size:24px;margin:2px 0 10px}
 .report h2{font-size:17px;margin:20px 0 8px;padding-top:12px;border-top:1px solid var(--rule)}
 .report h3{font-size:14.5px;margin:14px 0 5px;color:var(--navy)}
+.report h4{font-size:13.5px;margin:10px 0 4px;color:var(--ink)}
+.style-field textarea{width:100%;min-height:120px;font:inherit;font-size:13px;line-height:1.45;padding:8px 10px;border:1px solid var(--rule);border-radius:6px;background:var(--field-bg);color:var(--ink);resize:vertical;box-sizing:border-box}
+.style-field textarea#s-report-example{min-height:220px}
 .report ul{margin:6px 0 6px 20px}.report li{margin:3px 0}
 .report p{margin:6px 0}
 .report code{background:var(--paper);padding:1px 5px;border-radius:4px;font-size:12px}

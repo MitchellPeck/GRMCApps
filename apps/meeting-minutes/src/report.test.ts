@@ -33,12 +33,9 @@ function input(over: Partial<ReportInput> = {}): ReportInput {
 
 const BODY = "## Summary\nThe board met.\n\n## Agenda\n### 1. Budget";
 
-test("buildReport puts guests in their own section at the top, then attendance, body and action items", () => {
+test("buildReport lists guests under attendance, then the body and action items", () => {
   const { markdown } = buildReport(input(), BODY);
-  assert.match(markdown, /^# Board\n\*\*Date:\*\* 2026-04-01 · \*\*Location:\*\* Hall\n\n## Guests\n- \*\*Gina\*\* — Architect · Presented: Building\n\n## Attendance\n/);
-  assert.match(markdown, /\*\*Present:\*\* Alice, Bob\n\*\*Absent:\*\* Carl/);
-  assert.ok(markdown.indexOf("## Guests") < markdown.indexOf("## Attendance"));
-  assert.ok(markdown.indexOf("## Attendance") < markdown.indexOf("## Summary"));
+  assert.match(markdown, /^# Board\n\*\*Date:\*\* 2026-04-01 · \*\*Location:\*\* Hall\n\n## Attendance\n\*\*Present:\*\* Alice, Bob\n\*\*Absent:\*\* Carl\n\n### Guests\n- \*\*Gina\*\* — Architect · Presented: Building\n\n## Summary/);
   assert.ok(markdown.indexOf("## Summary") < markdown.indexOf("## Action Items"));
   // The case-insensitive duplicate is merged.
   assert.equal(markdown.match(/Send figures/gi)?.length, 1);
@@ -115,4 +112,8 @@ test("reportHtml renders headings, bold, checkboxes and escapes HTML", () => {
   assert.match(html, /<h1>A &lt;b&gt;<\/h1>/);
   assert.match(html, /<p><strong>Present:<\/strong> X<\/p>/);
   assert.match(html, /<ul><li>☐ Task — <strong>Bob<\/strong><\/li><li>plain<\/li><\/ul>/);
+});
+
+test("reportHtml renders the per-schedule sub-headings", () => {
+  assert.match(reportHtml("### 1. Treasurer\n#### Schedule A\n- **Balance:** $100", "T"), /<h3>1\. Treasurer<\/h3><h4>Schedule A<\/h4>/);
 });

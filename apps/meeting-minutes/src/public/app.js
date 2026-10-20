@@ -177,7 +177,7 @@ function renderMarkdown(md){
   }
   for(var i=0;i<lines.length;i++){
     var ln=lines[i];
-    var h=ln.match(/^(#{1,3})\s+(.*)$/);
+    var h=ln.match(/^(#{1,4})\s+(.*)$/);
     if(h){ closeList(); out.push('<h'+h[1].length+'>'+inline(h[2])+'</h'+h[1].length+'>'); continue; }
     var b=ln.match(/^\s*[-*]\s+(.*)$/);
     if(b){
@@ -342,8 +342,24 @@ function loadSettings(){
     document.getElementById('s-anthropic-hint').innerHTML = res.hasAnthropicKey
       ? 'Saved (' + esc(res.anthropicKeyHint) + '). Enter a new key to replace it.'
       : 'Used to extract agendas, summarize items, and write the report.';
+    // Never overwrite text the user is part-way through editing.
+    ['s-report-instructions','s-report-example'].forEach(function(id, i){
+      var el=document.getElementById(id);
+      if(el && document.activeElement!==el) el.value = (i ? res.reportExample : res.reportInstructions) || '';
+    });
   });
 }
+document.getElementById('btn-save-style').addEventListener('click', function(){
+  setBtn('btn-save-style', true, 'Saving...');
+  api('/api/settings', { method:'POST', body:{
+    reportInstructions: document.getElementById('s-report-instructions').value,
+    reportExample: document.getElementById('s-report-example').value,
+  } }).then(function(res){
+    setBtn('btn-save-style', false);
+    if(!res.ok){ msg('style-msg','err',res.error); return; }
+    msg('style-msg','ok','Saved. The next report you generate will follow it.');
+  }).catch(function(e){ setBtn('btn-save-style', false); msg('style-msg','err',e.message); });
+});
 document.getElementById('btn-save-settings').addEventListener('click', function(){
   setBtn('btn-save-settings', true, 'Saving...');
   api('/api/settings', { method:'POST', body:{ anthropicKey:v('s-anthropic') } })

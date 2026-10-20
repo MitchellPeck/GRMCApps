@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { parseItems, stripJsonFences, isSupportedAgendaType, parseSummary, parseSpeakerMap } from "./claude";
+import { parseItems, stripJsonFences, isSupportedAgendaType, parseSummary, parseSpeakerMap, reportSystemPrompt } from "./claude";
 
 test("stripJsonFences removes code fences", () => {
   assert.equal(stripJsonFences('```json\n[]\n```'), "[]");
@@ -137,4 +137,20 @@ test("parseSummary salvages a cut-off reply instead of saving raw JSON", () => {
 
 test("parseSummary refuses unreadable JSON rather than storing it as the summary", () => {
   assert.throws(() => parseSummary('{ "summ'), /could not be read/);
+});
+
+test("reportSystemPrompt gives each presented schedule its own sub-heading", () => {
+  const base = reportSystemPrompt("", "");
+  assert.match(base, /its own\s+"#### <name>" sub-heading/);
+  assert.doesNotMatch(base, /<instructions>|<example_report>/);
+});
+
+test("reportSystemPrompt adds standing instructions and the example only when set", () => {
+  const withBoth = reportSystemPrompt("  One section per schedule.  ", "## Agenda\n### 1. Treasurer");
+  assert.match(withBoth, /<instructions>\nOne section per schedule\.\n<\/instructions>/);
+  assert.match(withBoth, /<example_report>\n## Agenda\n### 1\. Treasurer\n<\/example_report>/);
+  assert.match(withBoth, /never copy its names, figures or facts/);
+  const onlyExample = reportSystemPrompt(" ", "x");
+  assert.doesNotMatch(onlyExample, /<instructions>/);
+  assert.match(onlyExample, /<example_report>/);
 });
