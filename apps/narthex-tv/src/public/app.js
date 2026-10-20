@@ -9,12 +9,11 @@
   var screens = [];
   var localPort = 3010;
   var settings = null;
-  var defaultPlaylistId = null;
   var people = [];
   var openPlaylist = null;   // { playlist, items }
   var picked = {};           // media ids ticked in the "add media" picker
   var timezone = "America/Chicago";
-  var hours = null;          // { mode, windows, state, neverOn, events, onAction, offAction }
+  var power = null;          // { events, onAction, offAction }
 
   var $ = function (id) { return document.getElementById(id); };
   var HUB = "https://hub." + location.hostname.split(".").slice(1).join(".");
@@ -146,63 +145,93 @@
     into.innerHTML = "";
     into.className = "";
 
-    // Outside opening hours nothing else matters — say that first, and say
-    // what WOULD be playing, so it doesn't read like a fault.
-    if (data.power && data.power.on === false) {
-      var dark = el("div", "alert alert-info",
-        "The screen is off \u2014 outside the narthex's opening hours" +
-        (data.power.changesAt ? ", coming back on " + fmtWhen(data.power.changesAt) : "") + ".");
-      into.appendChild(dark);
-    }
-
+    var power = data.power || {};
     var wrap = el("div", "now");
     var what = el("div", "now-what");
+    var why = el("div", "now-why");
+    var lines = [];
 
-    if (!data.playlist) {
-      what.appendChild(el("div", "now-title", "Nothing scheduled"));
-      what.appendChild(el("div", "now-why",
-        "The screen is showing its idle background. Schedule a playlist, or pick one " +
-        "under Settings to play whenever nothing else is on."));
+    function finish() {
+      why.textContent = lines.join(" ");
+      what.appendChild(why);
       wrap.appendChild(what);
       into.appendChild(wrap);
+    }
+
+    if (data.source === "takeover") {
+      what.appendChild(el("div", "now-title", "Emergency message"));
+      lines.push("The emergency message is on screen over everything else until somebody clears it.");
+      finish();
+      return;
+    }
+
+    if (data.source === "play_now" && data.playNow) {
+      what.appendChild(el("div", "now-title", data.playNow.title));
+      lines.push("Playing because someone pressed Play now. It stays on until cleared.");
+      finish();
+      return;
+    }
+
+    if (data.source === "none" && !data.nothingPlayable) {
+      what.appendChild(el("div", "now-title", "Off"));
+      lines.push("The TV is off. Nothing is scheduled" +
+        (power.changesAt ? ", coming on " + fmtWhen(power.changesAt) : "") + ".");
+      finish();
+      return;
+    }
+
+    if (data.nothingPlayable) {
+      // Never "Playing X" over a black screen: the TV is on because the
+      // schedule says so, but there is nothing to put on it.
+      into.appendChild(el("div", "alert alert-err",
+        "Scheduled, but \u201c" + (data.playlist ? data.playlist.name : "this playlist") +
+        "\u201d has nothing to show. The screen is black."));
       return;
     }
 
     what.appendChild(el("div", "now-title", data.playlist.name));
-
-    var why = el("div", "now-why");
-    var lines = [];
-    if (data.source === "default") {
-      lines.push("Playing because nothing is scheduled right now — this is the standing default.");
-    } else if (data.entry) {
+    if (data.entry) {
       var modeText = {
         window: "Scheduled between two times",
-        until_next: "Scheduled to play until something else starts",
         recurring: "A repeating slot"
       }[data.entry.mode] || "Scheduled";
       lines.push(modeText + (data.entry.label ? " — “" + data.entry.label + "”" : "") + ".");
     }
     if (data.startedAt) lines.push("Started " + fmtWhen(data.startedAt) + ".");
-    lines.push(data.endsAt ? "Ends " + fmtWhen(data.endsAt) + "." : "No end — it plays until something else is scheduled.");
-    if (data.changesAt && data.changesAt !== data.endsAt) {
+    if (power.changesAt) lines.push("The TV turns off " + fmtWhen(power.changesAt) + ".");
+    if (data.changesAt && data.changesAt !== power.changesAt) {
       lines.push("Next change " + fmtWhen(data.changesAt) + ".");
     }
     lines.push(data.readyCount + " item" + (data.readyCount === 1 ? "" : "s") + " in the loop" +
       (data.pendingCount ? ", " + data.pendingCount + " still converting" : "") + ".");
-    why.textContent = lines.join(" ");
-    what.appendChild(why);
+    finish();
+  }
 
-    wrap.appendChild(what);
-    into.appendChild(wrap);
-
-    if (!data.readyCount) {
-      var warn = el("div", "alert alert-warn",
-        data.pendingCount
-          ? "Everything in this playlist is still converting, so the screen is blank for now."
-          : "This playlist has nothing playable in it, so the screen is blank.");
-      warn.style.marginTop = "12px";
-      into.appendChild(warn);
+  function renderPlayNow(p) {
+    var box = $("playnow-banner");
+    box.innerHTML = "";
+    if (!p) return;
+    var alert = el("div", "alert alert-info");
+    alert.style.display = "flex";
+    alert.style.alignItems = "center";
+    alert.style.gap = "12px";
+    var text = el("div");
+    text.style.flex = "1";
+    text.appendChild(el("strong", null, "Playing now: " + p.title));
+    if (p.startedBy) {
+      text.appendChild(el("div", "hint", "Started by " + p.startedBy +
+        (p.startedAt ? " " + fmtWhen(p.startedAt) : "")));
     }
+    alert.appendChild(text);
+    if (can("schedule")) {
+      alert.appendChild(button("Clear", "btn btn-secondary", async function () {
+        try {
+          await api("DELETE", "/api/play-now");
+          loadNow();
+        } catch (e) { msg("schedule-msg", e.message, "err"); }
+      }));
+    }
+    box.appendChild(alert);
   }
 
   function renderTakeover(t) {
@@ -256,6 +285,7 @@
       var data = await api("GET", "/api/schedule/now");
       timezone = data.timezone || timezone;
       describeNow(data, $("now-box"));
+      renderPlayNow(data.playNow);
       try {
         renderTakeover((await api("GET", "/api/takeover")).takeover);
       } catch (e) { /* the card is an extra; never let it break "on now" */ }
@@ -332,11 +362,8 @@
   }
 
   var MODE_HINTS = {
-    until_next: "Starts when you say and keeps playing — until another " +
-      "“until something else” entry starts later. A timed entry can still " +
-      "borrow the screen and hand it back.",
-    window: "Plays only between those two moments, then the screen goes back to " +
-      "whatever was standing before it.",
+    window: "Plays only between those two moments. The TV is on while it plays " +
+      "and turns off afterwards if nothing else is scheduled.",
     recurring: "Repeats every week on the days you tick, in the app's timezone. " +
       "Daylight saving is handled — 08:00 stays 08:00."
   };
@@ -491,11 +518,6 @@
       var main = el("div", "row-main");
       var title = el("div", "row-title");
       title.appendChild(document.createTextNode(pl.name));
-      if (pl.isDefault) {
-        var d = el("span", "pill pill-ok", "default");
-        d.style.marginLeft = "8px";
-        title.appendChild(d);
-      }
       main.appendChild(title);
       main.appendChild(el("div", "row-sub",
         pl.itemCount + " item" + (pl.itemCount === 1 ? "" : "s") +
@@ -516,19 +538,6 @@
       sel.appendChild(o);
     });
     if (current) sel.value = current;
-
-    var def = $("set-default-playlist");
-    var currentDefault = defaultPlaylistId;
-    def.innerHTML = "";
-    var none = el("option", null, "Nothing — leave the screen idle");
-    none.value = "";
-    def.appendChild(none);
-    playlists.forEach(function (pl) {
-      var o = el("option", null, pl.name);
-      o.value = pl.id;
-      def.appendChild(o);
-    });
-    def.value = currentDefault ? String(currentDefault) : "";
   }
 
   async function loadPlaylists() {
@@ -871,8 +880,11 @@
       return tile;
     }
 
+    var actions = el("div", "tile-actions");
+    if (m.status === "ready" && can("schedule")) {
+      actions.appendChild(button("Play now", "btn-sm", function () { playNow(m); }));
+    }
     if (can("upload")) {
-      var actions = el("div", "tile-actions");
       actions.appendChild(button("Rename", "btn-sm", async function () {
         var title = prompt("Name this", m.title);
         if (title === null || !title.trim()) return;
@@ -882,9 +894,23 @@
         } catch (e) { msg("media-msg", e.message, "err"); }
       }));
       actions.appendChild(button("Delete", "btn-sm", function () { deleteMedia(m); }));
-      tile.appendChild(actions);
     }
+    if (actions.childNodes.length) tile.appendChild(actions);
     return tile;
+  }
+
+  // Straight onto the screen, over the schedule, until somebody clears it.
+  // Turns the TV on if it was off.
+  async function playNow(m) {
+    try {
+      var current = (await api("GET", "/api/play-now")).playNow;
+      if (current && current.active && current.mediaId !== m.id &&
+          !confirm("Replace \u201c" + current.title + "\u201d with \u201c" + m.title + "\u201d on the screen?")) {
+        return;
+      }
+      await api("POST", "/api/play-now", { mediaId: m.id });
+      document.querySelector('.tab[data-tab="now"]').click();
+    } catch (e) { msg("media-msg", e.message, "err"); }
   }
 
   async function deleteMedia(m, force) {
@@ -1311,10 +1337,8 @@
     $("set-clock").value = settings.clock;
     $("set-clock-position").value = settings.clockPosition;
     $("set-footer").value = settings.footerText;
-    $("set-idle").value = settings.idleMessage;
     $("set-poll").value = settings.pollSeconds;
     $("set-loop").checked = settings.videoLoopSingle;
-    $("set-default-playlist").value = defaultPlaylistId ? String(defaultPlaylistId) : "";
   }
 
   $("set-save").addEventListener("click", async function () {
@@ -1331,13 +1355,10 @@
         clock: $("set-clock").value,
         clockPosition: $("set-clock-position").value,
         footerText: $("set-footer").value,
-        idleMessage: $("set-idle").value,
         pollSeconds: Number($("set-poll").value),
-        videoLoopSingle: $("set-loop").checked,
-        defaultPlaylistId: Number($("set-default-playlist").value) || 0
+        videoLoopSingle: $("set-loop").checked
       });
       settings = data.settings;
-      defaultPlaylistId = data.defaultPlaylistId;
       timezone = settings.timezone;
       fillSettings();
       msg("settings-msg", "Saved.", "ok");
@@ -1353,110 +1374,9 @@
   async function loadSettings() {
     var data = await api("GET", "/api/settings");
     settings = data.settings;
-    defaultPlaylistId = data.defaultPlaylistId;
     timezone = settings.timezone;
     fillSettings();
   }
-
-  // ── operating hours ──────────────────────────────────────────────────────
-  var FULL_DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-
-  function renderHours() {
-    if (!hours) return;
-    $("hours-mode").value = hours.mode;
-    $("hours-box").hidden = hours.mode !== "scheduled";
-    $("hours-tz").textContent = hours.timezone;
-
-    var state = $("hours-state");
-    state.innerHTML = "";
-    if (hours.neverOn) {
-      // Every row switched off is a decision we obey, so say out loud what it
-      // means rather than letting someone find out on a Sunday morning.
-      var warn = el("div", "alert alert-warn",
-        "Every row below is switched off, so the screen will stay dark until one is " +
-        "turned back on. Choose \u201cAlways on\u201d above if that isn't what you meant.");
-      state.appendChild(warn);
-    } else if (hours.mode === "scheduled" && hours.state) {
-      var line = hours.state.on
-        ? "The screen is on" + (hours.state.changesAt ? ", going dark " + fmtWhen(hours.state.changesAt) : "")
-        : "The screen is dark" + (hours.state.changesAt ? ", coming on " + fmtWhen(hours.state.changesAt) : "");
-      state.appendChild(el("div", "alert alert-info", line + "."));
-    }
-
-    var box = $("hours-list");
-    box.innerHTML = "";
-    if (!hours.windows.length) {
-      box.className = "empty";
-      box.textContent = "No hours set yet \u2014 with none, the screen stays on.";
-      return;
-    }
-    box.className = "";
-
-    hours.windows.forEach(function (win) {
-      var row = el("div", "hours-row" + (win.enabled ? "" : " is-off"));
-      row.appendChild(el("div", "hours-day", FULL_DAYS[win.day]));
-      var span = win.startTime + " \u2013 " + win.endTime;
-      if (win.endTime <= win.startTime) span += " (overnight)";
-      row.appendChild(el("div", "hours-span", span));
-
-      var actions = el("div", "row-actions");
-      actions.appendChild(button(win.enabled ? "Turn off" : "Turn on", "btn-sm", async function () {
-        try {
-          await api("PATCH", "/api/hours/" + win.id, { enabled: !win.enabled });
-          await loadHours();
-          loadNow();
-        } catch (e) { msg("settings-msg", e.message, "err"); }
-      }));
-      actions.appendChild(button("Remove", "btn-sm", async function () {
-        try {
-          await api("DELETE", "/api/hours/" + win.id);
-          await loadHours();
-          loadNow();
-        } catch (e) { msg("settings-msg", e.message, "err"); }
-      }));
-      row.appendChild(actions);
-      box.appendChild(row);
-    });
-  }
-
-  $("hours-mode").addEventListener("change", async function () {
-    try {
-      await api("PUT", "/api/settings", { hoursMode: $("hours-mode").value });
-      await loadHours();
-      await loadSettings();
-      loadNow();
-    } catch (e) { msg("settings-msg", e.message, "err"); }
-  });
-
-  $("hr-add").addEventListener("click", async function () {
-    busy("hr-add", true);
-    try {
-      await api("POST", "/api/hours", {
-        day: Number($("hr-day").value),
-        startTime: $("hr-from").value,
-        endTime: $("hr-to").value
-      });
-      await loadHours();
-      loadNow();
-    } catch (e) {
-      msg("settings-msg", e.message, "err");
-    } finally {
-      busy("hr-add", false);
-    }
-  });
-
-  $("hr-seed").addEventListener("click", async function () {
-    busy("hr-seed", true);
-    try {
-      await api("POST", "/api/hours/seed");
-      await loadHours();
-      loadNow();
-    } catch (e) {
-      msg("settings-msg", e.message, "err");
-    } finally {
-      busy("hr-seed", false);
-    }
-  });
 
   // ── the power hook ───────────────────────────────────────────────────────
   var POWER_KINDS = [
@@ -1479,11 +1399,11 @@
     var box = $(id);
     box.innerHTML = "";
     box.appendChild(el("div", "pe-head",
-      when === "on" ? "When opening hours start" : "When opening hours end"));
+      when === "on" ? "When the TV should turn on" : "When the TV should turn off"));
 
     var parsed = { kind: "none" };
     try {
-      var raw = when === "on" ? hours.onAction : hours.offAction;
+      var raw = when === "on" ? power.onAction : power.offAction;
       if (raw) parsed = JSON.parse(raw);
     } catch (e) { /* a hand-edited row; fall back to Nothing */ }
 
@@ -1588,9 +1508,9 @@
   function renderPowerEvents() {
     var box = $("power-events");
     box.innerHTML = "";
-    if (!hours || !hours.events || !hours.events.length) return;
+    if (!power || !power.events || !power.events.length) return;
     var list = el("div", "events");
-    hours.events.forEach(function (ev) {
+    power.events.forEach(function (ev) {
       var line = el("div", ev.ok ? "" : "bad",
         fmtWhen(ev.firedAt) + " \u00b7 " + ev.action + " \u00b7 " + (ev.ok ? "sent" : "failed") +
         (ev.detail ? " \u00b7 " + ev.detail : ""));
@@ -1604,7 +1524,7 @@
     try {
       var body = { onAction: readPowerEditor("on"), offAction: readPowerEditor("off") };
       await api("PUT", "/api/power", body);
-      await loadHours();
+      await loadPower();
       msg("settings-msg", "Power actions saved.", "ok");
     } catch (e) {
       msg("settings-msg", e.message, "err");
@@ -1623,17 +1543,16 @@
         msg("settings-msg", e.message, "err");
       } finally {
         busy("power-test-" + when, false);
-        await loadHours();
+        await loadPower();
       }
     });
   });
 
-  async function loadHours() {
+  async function loadPower() {
     if (!can("admin")) return;
-    var data = await api("GET", "/api/hours");
-    hours = data;
+    var data = await api("GET", "/api/power");
+    power = data;
     timezone = data.timezone || timezone;
-    renderHours();
     powerEditor("on");
     powerEditor("off");
     renderPowerEvents();
@@ -1742,7 +1661,7 @@
     try {
       var result = await api("POST", "/api/power/samsung/test", { key: "KEY_POWER" });
       msg("sam-msg", result.detail, result.ok ? "ok" : "err");
-      hours.events = result.events;
+      power.events = result.events;
       renderPowerEvents();
     } catch (e) { msg("sam-msg", e.message, "err"); }
     finally { busy("sam-test", false); }
@@ -1758,70 +1677,6 @@
     } catch (e) { msg("sam-msg", e.message, "err"); }
     finally { busy("sam-forget", false); }
   });
-
-  // ── the idle screen ─────────────────────────────────────────────────────
-  var idle = null;
-
-  function fillIdle() {
-    if (!idle) return;
-    $("idle-headline").value = idle.headline || "";
-    $("idle-message").value = idle.message || "";
-    $("idle-theme").value = idle.theme || "navy";
-    $("idle-mark").checked = Boolean(idle.showMark);
-
-    var sel = $("idle-logo");
-    sel.innerHTML = "";
-    var none = el("option", null, "No logo");
-    none.value = "0";
-    sel.appendChild(none);
-    mediaList
-      .filter(function (m) { return m.kind === "image" && m.status === "ready"; })
-      .forEach(function (m) {
-        var o = el("option", null, m.title);
-        o.value = m.id;
-        sel.appendChild(o);
-      });
-    sel.value = String(idle.logoMediaId || 0);
-    showIdlePreview();
-  }
-
-  // The rendered slide is served to screens only, so the preview borrows the
-  // logo itself rather than pretending to be the finished picture.
-  function showIdlePreview() {
-    var wrap = $("idle-preview-wrap");
-    if (!idle || !idle.logoMediaId) { wrap.hidden = true; return; }
-    $("idle-preview").src = "/api/media/" + idle.logoMediaId + "/file";
-    $("idle-preview").style.objectFit = "contain";
-    $("idle-preview").style.background = "#092D3E";
-    wrap.hidden = false;
-  }
-
-  $("idle-save").addEventListener("click", async function () {
-    busy("idle-save", true);
-    try {
-      var data = await api("PUT", "/api/idle", {
-        headline: $("idle-headline").value,
-        message: $("idle-message").value,
-        theme: $("idle-theme").value,
-        logoMediaId: Number($("idle-logo").value) || 0,
-        showMark: $("idle-mark").checked
-      });
-      idle = data.idle;
-      fillIdle();
-      msg("idle-msg", "Saved. The screen redraws it within a poll or two.", "ok");
-      loadNow();
-    } catch (e) {
-      msg("idle-msg", e.message, "err");
-    } finally {
-      busy("idle-save", false);
-    }
-  });
-
-  async function loadIdleSettings() {
-    if (!can("admin")) return;
-    idle = (await api("GET", "/api/idle")).idle;
-    fillIdle();
-  }
 
   // ── permissions ──────────────────────────────────────────────────────────
   var FLAGS = [
@@ -1947,11 +1802,6 @@
     });
     renderDayPicker();
     syncModeFields();
-    FULL_DAYS.forEach(function (name, i) {
-      var o = el("option", null, name);
-      o.value = i;
-      $("hr-day").appendChild(o);
-    });
     $("power-hint").innerHTML =
       "Recipes: a <strong>Roku TV</strong> answers POST http://&lt;ip&gt;:8060/keypress/PowerOff " +
       "and /keypress/PowerOn with no authentication at all. A <strong>Samsung</strong> needs a " +
@@ -1977,9 +1827,8 @@
     await loadSchedule().catch(function (e) { msg("schedule-msg", e.message, "err"); });
     await loadScreens().catch(function (e) { msg("screens-msg", e.message, "err"); });
     await loadPermissions().catch(function () { /* not an admin */ });
-    await loadHours().catch(function (e) { msg("settings-msg", e.message, "err"); });
+    await loadPower().catch(function (e) { msg("settings-msg", e.message, "err"); });
     await loadNotices().catch(function (e) { msg("notice-msg", e.message, "err"); });
-    await loadIdleSettings().catch(function (e) { msg("idle-msg", e.message, "err"); });
     await loadPeople();
     loadNow();
 
