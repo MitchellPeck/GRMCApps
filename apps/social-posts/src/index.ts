@@ -12,6 +12,7 @@ import { metricoolRoutes } from "./routes/metricool";
 import { podcastRoutes } from "./routes/podcast";
 import { pipelineRoutes } from "./routes/pipeline";
 import { backfillOnce } from "./pipeline/sync";
+import { migrateDrafting } from "./pipeline/migrate-drafting";
 import { referenceDate } from "./schedule";
 import { addDays } from "./dates";
 import { getSetting, setSetting } from "./settings";
@@ -53,6 +54,8 @@ async function start() {
     await setSetting(pool, IMAGE_RULE_SETTING, new Date().toISOString());
     app.log.info(fixed, "instagram image rule applied to existing posts");
   }
+  const drafting = await migrateDrafting(pool, await referenceDate(pool));
+  if (drafting.ran) app.log.info(drafting, "weekly runs set up as drafting profiles");
   await keepRecurrencesAhead();
   // Daily, so the calendar always shows HORIZON_DAYS of recurring posts.
   setInterval(() => { keepRecurrencesAhead().catch((e) => app.log.error(e)); }, 24 * 60 * 60 * 1000).unref();

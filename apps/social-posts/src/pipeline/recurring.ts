@@ -310,7 +310,7 @@ export async function applyImageRule(db: Db, today: string): Promise<{ runs: num
 export async function seedRunRecurrences(db: Db, today: string): Promise<number> {
   const seeds: Array<{ run: string; key: string; title: string; weekday: number }> = [
     { run: "wednesday", key: "wednesday", title: "Grace Notes", weekday: 3 },
-    { run: "wednesday", key: "saturday", title: "Sunday invite & preview", weekday: 6 },
+    { run: "sunday", key: "saturday", title: "Sunday invite & preview", weekday: 6 },
     { run: "friday", key: "friday", title: "Weekly blog", weekday: 5 },
   ];
   let n = 0;

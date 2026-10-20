@@ -62,7 +62,7 @@ test("backfill maps existing series posts once, and only once", async () => {
   const ev = await pool.query("SELECT * FROM events WHERE series_id IS NOT NULL ORDER BY name");
   assert.deepEqual(ev.rows.map((e) => [e.name, e.kind, e.archived]), [["Advent", "series", false], ["Lent", "series", true]]);
   const runEvents = await pool.query("SELECT id FROM events WHERE id LIKE 'run-%' ORDER BY id");
-  assert.equal(runEvents.rowCount, 3);
+  assert.deepEqual(runEvents.rows.map((r) => r.id), ["run-friday", "run-podcast", "run-sunday", "run-wednesday"]);
 
   const items = await pool.query("SELECT * FROM content_items WHERE series_id = 's-old' ORDER BY post_idx");
   assert.deepEqual(items.rows.map((i) => [i.status, i.publish_date]), [
@@ -314,6 +314,7 @@ test("weekly runs become recurrences and fill their own slots", async () => {
   assert.ok(item.ok);
   assert.equal(item.value.item.status, "drafted");
   assert.ok(item.value.recurrence);
+  assert.equal((await pool.query("SELECT event_id FROM recurrences WHERE draft_key = 'saturday'")).rows[0].event_id, "run-sunday");
 });
 
 test("duplicating an event shifts every date and starts the copies over", async () => {
@@ -623,4 +624,37 @@ test("a series is planned with Claude, edited, then saved as posts", async () =>
       ["Peace", "2026-12-06", "Second candle.", "", ev.id],
     ]);
   } finally { f.restore(); await pool.query("DELETE FROM settings WHERE key = 'anthropic_api_key'"); }
+});
+
+test("the drafting migration seeds run profiles, splits out Sunday worship, and runs once", async () => {
+  const { migrateDrafting, DRAFTING_SETTING } = await import("./pipeline/migrate-drafting");
+  const { GRACE_NOTES_PROFILE, SUNDAY_PROFILE, SERIES_INSTRUCTIONS } = await import("./pipeline/drafting-seed");
+  // Rebuild the pre-migration state: run profiles empty, the Saturday invite under Grace Notes.
+  await pool.query("DELETE FROM settings WHERE key IN ($1, 'house_voice')", [DRAFTING_SETTING]);
+  await pool.query("UPDATE events SET drafting = '{}', name = 'Grace Notes & Sunday invite' WHERE id = 'run-wednesday'");
+  await pool.query("UPDATE events SET drafting = '{}' WHERE id LIKE 'run-%'");
+  const sat = (await pool.query("SELECT id FROM recurrences WHERE draft_key = 'saturday'")).rows[0].id;
+  await pool.query("UPDATE recurrences SET event_id = 'run-wednesday' WHERE id = $1", [sat]);
+  await pool.query("UPDATE content_items SET event_id = 'run-wednesday' WHERE recurrence_id = $1", [sat]);
+  const drafted = (await occ(sat))[0];
+  await pool.query("UPDATE content_items SET status = 'drafted' WHERE id = $1", [drafted.id]);
+  await pool.query(`INSERT INTO series (id, name, context) VALUES ('s-mig', 'Lent', 'Forty days of prayer.') ON CONFLICT DO NOTHING`);
+  const lent = await pool.query(`INSERT INTO events (name, kind, series_id, notes) VALUES ('Lent', 'series', 's-mig', 'Ashes to Easter.') RETURNING id`);
+
+  const r = await migrateDrafting(pool, REF);
+  assert.equal(r.ran, true);
+  const gn = (await pool.query("SELECT name, drafting FROM events WHERE id = 'run-wednesday'")).rows[0];
+  assert.equal(gn.name, "Grace Notes");
+  assert.deepEqual(gn.drafting, GRACE_NOTES_PROFILE);
+  assert.deepEqual((await pool.query("SELECT drafting FROM events WHERE id = 'run-sunday'")).rows[0].drafting, SUNDAY_PROFILE);
+  assert.equal((await pool.query("SELECT event_id FROM recurrences WHERE id = $1", [sat])).rows[0].event_id, "run-sunday");
+  const after = await occ(sat);
+  assert.equal(after.find((x) => x.id === drafted.id)!.event_id, "run-wednesday", "a drafted Saturday post stays put");
+  assert.ok(after.filter((x) => x.id !== drafted.id).every((x) => x.event_id === "run-sunday"), "untouched ones move");
+  const lentNow = (await pool.query("SELECT notes, drafting FROM events WHERE id = $1", [lent.rows[0].id])).rows[0];
+  assert.equal(lentNow.notes, "Ashes to Easter.\n\nForty days of prayer.");
+  assert.equal(lentNow.drafting.instructions, SERIES_INSTRUCTIONS);
+  assert.ok((await pool.query("SELECT value FROM settings WHERE key = 'house_voice'")).rows[0].value.startsWith("GRMC voice rules"));
+
+  assert.equal((await migrateDrafting(pool, REF)).ran, false, "once only");
 });

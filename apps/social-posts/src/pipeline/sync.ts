@@ -16,8 +16,8 @@ export const BACKFILL_SETTING = "pipeline_backfill_v1";
 export async function ensureRunEvents(db: Db): Promise<void> {
   for (const run of Object.values(RUN_EVENTS)) {
     await db.query(
-      `INSERT INTO events (id, name, kind, color) VALUES ($1,$2,'series',$3) ON CONFLICT (id) DO NOTHING`,
-      [run.id, run.name, run.color],
+      `INSERT INTO events (id, name, kind, color) VALUES ($1,$2,$3,$4) ON CONFLICT (id) DO NOTHING`,
+      [run.id, run.name, run.kind, run.color],
     );
   }
 }

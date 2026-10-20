@@ -39,10 +39,11 @@ export const EVENT_COLORS = [
   "#092D3E", "#D3B02B", "#3f6b2e", "#9a4b3a", "#0c447c", "#7A2E86", "#0F6C6C", "#854F0B",
 ];
 
-// The automated runs don't belong to a series row, so each gets a standing
-// event of its own. The ids are fixed so drafting can find them.
-export const RUN_EVENTS: Record<string, { id: string; name: string; color: string }> = {
-  wednesday: { id: "run-wednesday", name: "Grace Notes & Sunday invite", color: "#534AB7" },
-  friday: { id: "run-friday", name: "Weekly blog", color: "#0F6C6C" },
-  podcast: { id: "run-podcast", name: "Podcast", color: "#7A2E86" },
+// The standing events the weekly runs became. Fixed ids so code can find them;
+// names and profiles are editable like any other event.
+export const RUN_EVENTS: Record<string, { id: string; name: string; color: string; kind: "series" | "department" }> = {
+  wednesday: { id: "run-wednesday", name: "Grace Notes", color: "#534AB7", kind: "series" },
+  sunday: { id: "run-sunday", name: "Sunday worship", color: "#3f6b2e", kind: "department" },
+  friday: { id: "run-friday", name: "Weekly blog", color: "#0F6C6C", kind: "series" },
+  podcast: { id: "run-podcast", name: "Podcast", color: "#7A2E86", kind: "series" },
 };
