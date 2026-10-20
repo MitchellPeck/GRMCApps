@@ -76,19 +76,10 @@ test("every field of AppSettings has a validator, so none can be forgotten", () 
   }
 });
 
-test("choosing scheduled hours is actually saved — the reported bug", () => {
-  const saved = validateSettings({ hoursMode: "scheduled" });
-  assert.equal(saved.ok, true);
-  if (!saved.ok) return;
-  assert.deepEqual(saved.value, { hoursMode: "scheduled" });
-  assert.equal(parseSettings({ hours_mode: "scheduled" }).hoursMode, "scheduled");
-});
-
 test("every validator rejects nonsense with a reason rather than accepting it", () => {
   const bad: Record<string, unknown> = {
     timezone: "Mars/Olympus", transition: "explode", fit: "squish",
     background: "chartreuse", clock: "sundial", clockPosition: "middle",
-    hoursMode: "sometimes",
   };
   for (const [field, value] of Object.entries(bad)) {
     const r = validateSettings({ [field]: value });
@@ -112,7 +103,9 @@ test("a body with nothing in it is a valid no-op", () => {
 });
 
 test("a field the endpoint does not handle is named, not ignored", () => {
-  assert.deepEqual(unknownSettingKeys({ timezone: "UTC", hoursMode: "always" }), []);
+  assert.deepEqual(unknownSettingKeys({ timezone: "UTC" }), []);
+  // Operating hours are gone: the schedule alone decides when the TV is on.
+  assert.deepEqual(unknownSettingKeys({ hoursMode: "always" }), ["hoursMode"]);
   assert.deepEqual(unknownSettingKeys({ defaultPlaylistId: 3 }), []);
   assert.deepEqual(unknownSettingKeys({ hoursmode: "x", colour: 1 }), ["hoursmode", "colour"]);
 });

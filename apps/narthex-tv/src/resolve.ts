@@ -1,12 +1,10 @@
 import { Pool } from "pg";
-import { Resolution, resolveSchedule } from "./schedule";
+import { Resolution, resolveSchedule, scheduleCoverage } from "./schedule";
 import { listEntries } from "./schedule-repo";
 import { getPlaylist, listItems, PlaylistRow } from "./playlists";
 import { AppSettings, getDefaultPlaylistId, getSamsung, loadSettings } from "./settings";
 import { buildFrames, Frame, Plan, PlanItem, planRevision } from "./plan";
-import { resolvePower } from "./power";
 import { localDateKey } from "./tz";
-import { listWindows } from "./hours";
 import { getTakeover, takeoverImageName } from "./takeover";
 import { ensureIdleSlide, loadIdle } from "./idle";
 
@@ -42,15 +40,8 @@ export async function resolveNow(pool: Pool, at: Date): Promise<NowPlaying> {
   const entries = await listEntries(pool);
   const resolution = resolveSchedule(entries, at, settings.timezone);
 
-  // Operating hours are orthogonal to the schedule: they decide whether there
-  // is a picture at all, not which picture. Resolved here so the admin UI and
-  // the TV agree about a dark screen the same way they agree about a playlist.
-  const power = resolvePower(
-    settings.hoursMode,
-    await listWindows(pool),
-    at,
-    settings.timezone
-  );
+  // Interim: Task 4 layers Play now and the takeover on this.
+  const power = scheduleCoverage(entries, at, settings.timezone);
 
   if (resolution.entry) {
     const playlist = await getPlaylist(pool, resolution.entry.playlistId);

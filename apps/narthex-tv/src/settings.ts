@@ -16,7 +16,6 @@ export interface AppSettings {
   idleMessage: string;     // shown when nothing at all is scheduled
   pollSeconds: number;     // how often the TV asks the server what to play
   videoLoopSingle: boolean; // a playlist of one video loops seamlessly
-  hoursMode: "always" | "scheduled"; // is the screen awake round the clock?
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -33,9 +32,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
   idleMessage: "",
   pollSeconds: 10,
   videoLoopSingle: true,
-  // Round the clock until somebody deliberately sets narthex hours: a screen
-  // that is dark when it should not be is the worse of the two mistakes.
-  hoursMode: "always",
 };
 
 const KEYS: Record<keyof AppSettings, string> = {
@@ -52,7 +48,6 @@ const KEYS: Record<keyof AppSettings, string> = {
   idleMessage: "idle_message",
   pollSeconds: "poll_seconds",
   videoLoopSingle: "video_loop_single",
-  hoursMode: "hours_mode",
 };
 
 export type SettingResult<T> = { ok: true; value: T } | { ok: false; error: string };
@@ -111,7 +106,6 @@ export const SETTING_VALIDATORS: {
   idleMessage: text(300),
   pollSeconds: clamped("The check-in interval", 3, 600),
   videoLoopSingle: (raw) => ({ ok: true, value: Boolean(raw) }),
-  hoursMode: chosen("Operating hours", ["always", "scheduled"] as const),
 };
 
 /** Fields this endpoint accepts. Anything else is refused, not dropped. */
@@ -192,7 +186,6 @@ export function parseSettings(raw: Record<string, string>): AppSettings {
     videoLoopSingle: raw[KEYS.videoLoopSingle] === undefined
       ? d.videoLoopSingle
       : raw[KEYS.videoLoopSingle] === "true",
-    hoursMode: oneOf(raw[KEYS.hoursMode], ["always", "scheduled"] as const, d.hoursMode),
   };
 }
 

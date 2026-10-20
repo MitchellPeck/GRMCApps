@@ -1,11 +1,7 @@
 import { FastifyInstance } from "fastify";
 import { pool } from "../db";
 import { requirePermission } from "../guard";
-import { resolvePower, validateWindow } from "../power";
-import {
-  addWindow, listPowerEvents, listWindows, recordPowerEvent, removeWindow,
-  seedDefaultWindows, updateWindow,
-} from "../hours";
+import { listPowerEvents, recordPowerEvent } from "../power-events";
 import { getPowerActionRaw, loadSettings, setPowerActionRaw } from "../settings";
 import { parseAction, realDeps, runAction, serializeAction } from "../power-actions";
 import { clearTakeover, getTakeover, startTakeover } from "../takeover";
@@ -16,78 +12,18 @@ import { loadConfig, pairingStatus, pressKey, startPairing } from "../samsung-pa
 import { NO_SAMSUNG, validateHost } from "../samsung";
 import { realDeps as powerDeps } from "../power-actions";
 
-const intParam = (value: unknown): number => {
-  const n = Number(value);
-  return Number.isInteger(n) && n > 0 ? n : 0;
-};
-
 export async function powerRoutes(app: FastifyInstance): Promise<void> {
-  app.get("/api/hours", async () => {
+  // The power hook's settings and its recent history. When the TV is on is
+  // the schedule's business now; this is only how it gets switched.
+  app.get("/api/power", async () => {
     const settings = await loadSettings(pool);
-    const windows = await listWindows(pool);
-    const state = resolvePower(settings.hoursMode, windows, new Date(), settings.timezone);
     return {
       ok: true,
-      mode: settings.hoursMode,
       timezone: settings.timezone,
-      windows,
-      // Surfaced so the admin screen can warn about a grid that would leave
-      // the narthex dark indefinitely, instead of it being found on a Sunday.
-      neverOn: settings.hoursMode === "scheduled" && windows.length > 0 && !state.on && !state.changesAt,
-      state: {
-        on: state.on,
-        changesAt: state.changesAt ? state.changesAt.toISOString() : null,
-      },
       events: await listPowerEvents(pool, 10),
       onAction: await getPowerActionRaw(pool, "on"),
       offAction: await getPowerActionRaw(pool, "off"),
     };
-  });
-
-  // Switching to scheduled for the first time seeds a sensible week rather
-  // than handing someone an empty table that means "always on" anyway.
-  app.post("/api/hours/seed", { preHandler: requirePermission("admin") }, async () => ({
-    ok: true,
-    windows: await seedDefaultWindows(pool),
-  }));
-
-  app.post("/api/hours", { preHandler: requirePermission("admin") }, async (req, reply) => {
-    const b = (req.body ?? {}) as Record<string, unknown>;
-    const candidate = {
-      day: Number(b.day),
-      startTime: String(b.startTime ?? "").trim(),
-      endTime: String(b.endTime ?? "").trim(),
-    };
-    const check = validateWindow(candidate);
-    if (!check.ok) return reply.code(400).send({ ok: false, error: check.error });
-    return { ok: true, window: await addWindow(pool, candidate) };
-  });
-
-  app.patch("/api/hours/:id", { preHandler: requirePermission("admin") }, async (req, reply) => {
-    const id = intParam((req.params as { id: string }).id);
-    const b = (req.body ?? {}) as Record<string, unknown>;
-    const existing = (await listWindows(pool)).find((w) => w.id === id);
-    if (!existing) return reply.code(404).send({ ok: false, error: "No such window." });
-
-    const merged = {
-      day: b.day === undefined ? existing.day : Number(b.day),
-      startTime: b.startTime === undefined ? existing.startTime : String(b.startTime).trim(),
-      endTime: b.endTime === undefined ? existing.endTime : String(b.endTime).trim(),
-    };
-    const check = validateWindow(merged);
-    if (!check.ok) return reply.code(400).send({ ok: false, error: check.error });
-
-    await updateWindow(pool, id, {
-      ...merged,
-      enabled: typeof b.enabled === "boolean" ? b.enabled : undefined,
-    });
-    return { ok: true, windows: await listWindows(pool) };
-  });
-
-  app.delete("/api/hours/:id", { preHandler: requirePermission("admin") }, async (req, reply) => {
-    const gone = await removeWindow(pool, intParam((req.params as { id: string }).id));
-    if (!gone) return reply.code(404).send({ ok: false, error: "No such window." });
-    return { ok: true, windows: await listWindows(pool) };
   });
 
   // ── the power hook ───────────────────────────────────────────────────────
@@ -219,8 +155,8 @@ export async function takeoverRoutes(app: FastifyInstance): Promise<void> {
       id.name || id.email
     );
     await recordPowerEvent(pool, "takeover-on", true, `${takeover.headline} — by ${takeover.startedBy}`);
-    // Now, not on the next 30-second tick: if the panel was switched off at
-    // the end of opening hours it has to come back on for this.
+    // Now, not on the next 30-second tick: if the panel was switched off
+    // because nothing was scheduled, it has to come back on for this.
     await tickPower(pool, {
       now: () => new Date(),
       actions: powerDeps,
@@ -233,7 +169,7 @@ export async function takeoverRoutes(app: FastifyInstance): Promise<void> {
     await clearTakeover(pool);
     const id = getIdentity(req);
     await recordPowerEvent(pool, "takeover-off", true, `cleared by ${id.name || id.email}`);
-    // And back off again straight away if we are outside opening hours.
+    // And back off again straight away if nothing is scheduled.
     await tickPower(pool, {
       now: () => new Date(),
       actions: powerDeps,

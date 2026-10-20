@@ -1,7 +1,10 @@
 import { Pool } from "pg";
-import { resolvePower } from "./power";
+import { desiredPower } from "./power";
 import { getTakeover } from "./takeover";
-import { listWindows, recordPowerEvent } from "./hours";
+import { getPlayNow } from "./play-now";
+import { scheduleCoverage } from "./schedule";
+import { listEntries } from "./schedule-repo";
+import { recordPowerEvent } from "./power-events";
 import { getPowerActionRaw, getSetting, loadSettings, setSetting } from "./settings";
 import { ActionDeps, parseAction, realDeps, runAction } from "./power-actions";
 
@@ -14,9 +17,9 @@ export interface RunnerDeps {
 }
 
 /**
- * One tick of the operating-hours clock: work out whether the screen should be
- * awake, and if that differs from the last thing we recorded, fire the
- * configured power action once.
+ * One tick of the power clock: work out whether the screen should be awake,
+ * and if that differs from the last thing we recorded, fire the configured
+ * power action once.
  *
  * The last state is persisted rather than held in memory so a container
  * restart mid-evening does not fire "off" all over again — and so the very
@@ -26,14 +29,16 @@ export interface RunnerDeps {
  */
 export async function tickPower(pool: Pool, deps: RunnerDeps): Promise<void> {
   const settings = await loadSettings(pool);
-  const windows = await listWindows(pool);
-  const state = resolvePower(settings.hoursMode, windows, deps.now(), settings.timezone);
+  const coverage = scheduleCoverage(await listEntries(pool), deps.now(), settings.timezone);
 
-  // An emergency has to reach a panel whose power was cut at the end of
-  // opening hours. Forcing the PLAN awake is not enough — if the off action
-  // physically switched the television off, the message goes to a dark screen.
-  const takeover = await getTakeover(pool);
-  const want = state.on || takeover.active ? "on" : "off";
+  // Play now and an emergency both have to reach a panel the schedule had
+  // switched off. Forcing the PLAN awake is not enough -- if the off action
+  // physically switched the television off, the picture goes to a dark screen.
+  const want = desiredPower(
+    coverage.on,
+    (await getPlayNow(pool)).active,
+    (await getTakeover(pool)).active
+  );
 
   const previous = await getSetting(pool, LAST_STATE_KEY);
   if (previous === want) return;

@@ -130,18 +130,6 @@ CREATE TABLE IF NOT EXISTS screens (
   created_at         timestamptz NOT NULL DEFAULT now()
 );
 
--- When the narthex screen is awake. Outside these the player renders true
--- black, and (optionally) a power action is fired at each boundary.
-CREATE TABLE IF NOT EXISTS operating_hours (
-  id         bigserial PRIMARY KEY,
-  day        integer NOT NULL,            -- 0=Sunday .. 6=Saturday
-  start_time text NOT NULL,               -- 'HH:MM' in the app timezone
-  end_time   text NOT NULL,
-  enabled    boolean NOT NULL DEFAULT true,
-  created_at timestamptz NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS operating_hours_day_idx ON operating_hours (day, start_time);
-
 -- An audit trail for the power hook. A TV that did not come on is the sort of
 -- thing somebody notices on a Sunday morning, and this is where they look.
 CREATE TABLE IF NOT EXISTS power_events (
