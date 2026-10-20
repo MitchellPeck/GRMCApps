@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GRMC Content Pipeline</title>
+<link rel="stylesheet" href="/assets/grmc.css">
+<link rel="stylesheet" href="/pipeline.css">
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <div class="seal">GR</div>
+    <div><h1>Content Pipeline</h1><p>Grace Resurrection Methodist Church</p></div>
+  </div>
+  <div class="hright">
+    <a class="btn-hdr" href="/">Social Posts</a>
+  </div>
+</header>
+
+<div class="pl-layout">
+  <nav class="tabs" id="pl-tabs">
+    <a class="tab" href="#dashboard" data-view="dashboard">Dashboard</a>
+    <a class="tab" href="#calendar" data-view="calendar">Calendar</a>
+    <a class="tab" href="#board" data-view="board">Board</a>
+    <a class="tab" href="#events" data-view="events">Events</a>
+  </nav>
+
+  <div class="pl-toolbar">
+    <div class="pl-filters" id="pl-filters" aria-label="Filters"></div>
+    <button class="btn btn-primary" type="button" data-act="new-post">New post</button>
+  </div>
+
+  <main id="pl-main" tabindex="-1"><div class="empty">Loading…</div></main>
+</div>
+
+<div class="pl-scrim" id="pl-scrim" hidden></div>
+<aside class="pl-drawer" id="pl-drawer" aria-hidden="true" aria-label="Post editor"></aside>
+<div class="pl-toast" id="pl-toast" role="status" aria-live="polite"></div>
+
+<datalist id="pl-people"></datalist>
+<script src="/assets/grmc-nav.js"></script>
+<script src="/pipeline.js"></script>
+</body>
+</html>
