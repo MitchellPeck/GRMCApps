@@ -4,14 +4,17 @@ import { referenceDate } from "./schedule";
 
 export async function savePostDrafts(
   pool: Pool, run: string, postDate: string, posts: Record<string, string>, createdBy: string
-): Promise<void> {
+): Promise<Record<string, number>> {
+  const ids: Record<string, number> = {};
   for (const key of Object.keys(posts)) {
-    await pool.query(
+    const r = await pool.query(
       `INSERT INTO post_drafts (run, post_date, key, text, status, created_by)
-       VALUES ($1,$2,$3,$4,'draft',$5)`,
+       VALUES ($1,$2,$3,$4,'draft',$5) RETURNING id`,
       [run, postDate, key, posts[key], createdBy]
     );
+    ids[key] = Number(r.rows[0].id);
   }
+  return ids;
 }
 
 export interface DraftRow {

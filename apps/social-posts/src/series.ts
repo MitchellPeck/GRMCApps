@@ -3,6 +3,8 @@ import { HISTORY_SERIES_POSTS, VOICE } from "./voice";
 import { callClaude, stripJsonFences } from "./claude";
 import { suggestDate } from "./dates";
 import { referenceDate } from "./schedule";
+import { applySeriesField, syncSeriesMeta, syncSeriesPosts } from "./pipeline/sync";
+import { pipelineStatusToSeries } from "./pipeline/rules";
 
 export interface SeriesRow {
   id: string; name: string; description: string; context: string;
@@ -11,8 +13,10 @@ export interface SeriesRow {
 export interface SeriesPost {
   seriesId: string; postIdx: number; date: string; phase: string;
   title: string; sub: string; status: string; draft: string; notes: string;
-  /** The post's `date` label ("Aug 5") resolved to YYYY-MM-DD for scheduling. */
+  /** The pipeline's publish date, else the `date` label ("Aug 5") resolved to YYYY-MM-DD. */
   scheduleDate: string;
+  /** The content item this post is tracked as in the pipeline, if any. */
+  contentItemId: string | null;
 }
 
 const FIELD_COLUMNS: Record<string, string> = {
@@ -43,6 +47,7 @@ export async function seedHistorySeries(pool: Pool): Promise<void> {
       [id, i, p.date, p.phase, p.title, p.sub]
     );
   }
+  await syncSeriesPosts(pool, id, await referenceDate(pool), "seed");
 }
 
 export async function getAllSeries(pool: Pool): Promise<{ ok: true; series: SeriesRow[] } | { ok: false; error: string }> {
@@ -59,13 +64,28 @@ export async function getAllSeries(pool: Pool): Promise<{ ok: true; series: Seri
 
 export async function getSeriesPosts(pool: Pool, seriesId: string): Promise<{ ok: true; posts: SeriesPost[] } | { ok: false; error: string }> {
   try {
-    const r = await pool.query("SELECT * FROM series_posts WHERE series_id = $1 ORDER BY post_idx", [seriesId]);
+    // Once a post is tracked in the content pipeline, its item is the source of
+    // truth for status, draft and date; the series_posts columns are a fallback.
+    const r = await pool.query(
+      `SELECT sp.*, ci.id AS ci_id, ci.status AS ci_status, ci.caption AS ci_caption,
+              ci.publish_date::text AS ci_date, ci.title AS ci_title, ci.brief AS ci_brief
+         FROM series_posts sp
+         LEFT JOIN content_items ci ON ci.series_id = sp.series_id AND ci.post_idx = sp.post_idx
+        WHERE sp.series_id = $1 ORDER BY sp.post_idx`,
+      [seriesId]
+    );
     const ref = await referenceDate(pool);
-    const posts = r.rows.map((row) => ({
-      seriesId: row.series_id, postIdx: Number(row.post_idx), date: row.date, phase: row.phase,
-      title: row.title, sub: row.sub, status: row.status, draft: row.draft, notes: row.notes,
-      scheduleDate: suggestDate({ kind: "seriesDate", label: row.date }, ref),
-    }));
+    const posts = r.rows.map((row) => {
+      const tracked = row.ci_id != null;
+      return {
+        seriesId: row.series_id, postIdx: Number(row.post_idx), date: row.date, phase: row.phase,
+        title: tracked ? row.ci_title : row.title, sub: tracked ? row.ci_brief : row.sub,
+        status: tracked ? pipelineStatusToSeries(row.ci_status) : row.status,
+        draft: tracked ? row.ci_caption : row.draft, notes: row.notes,
+        scheduleDate: (tracked && row.ci_date) || suggestDate({ kind: "seriesDate", label: row.date }, ref),
+        contentItemId: tracked ? row.ci_id : null,
+      };
+    });
     return { ok: true, posts };
   } catch (e) { return { ok: false, error: (e as Error).message }; }
 }
@@ -91,6 +111,7 @@ export async function createSeries(pool: Pool, params: CreateSeriesParams): Prom
         [id, i, p.date || "", p.phase || "", p.title, p.sub || ""]
       );
     }
+    await syncSeriesPosts(pool, id, await referenceDate(pool), "series");
     return { ok: true, id };
   } catch (e) { return { ok: false, error: (e as Error).message }; }
 }
@@ -104,6 +125,7 @@ export async function updateSeriesPostField(pool: Pool, seriesId: string, postId
       [value, seriesId, postIdx]
     );
     if (r.rowCount === 0) return { ok: false, error: "Post not found" };
+    await applySeriesField(pool, seriesId, postIdx, field, value, await referenceDate(pool));
     return { ok: true };
   } catch (e) { return { ok: false, error: (e as Error).message }; }
 }
@@ -120,6 +142,7 @@ export async function updateSeriesMeta(pool: Pool, seriesId: string, fields: Rec
     vals.push(seriesId);
     const r = await pool.query(`UPDATE series SET ${sets.join(", ")} WHERE id = $${vals.length}`, vals);
     if (r.rowCount === 0) return { ok: false, error: "Series not found" };
+    await syncSeriesMeta(pool, seriesId, fields);
     return { ok: true };
   } catch (e) { return { ok: false, error: (e as Error).message }; }
 }

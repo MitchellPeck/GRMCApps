@@ -85,6 +85,14 @@ between apps. Both are served to each app at `/assets/` (see *Shared UI* below).
   its own post. Podcast posts are scheduled from the **episode's publish date**
   rather than the current week, so an episode landing three weeks out gets posts
   three weeks out.
+
+  **Content pipeline** (`social.grmc.app/pipeline`). One planning surface over
+  what is publishing when, for which event or department, and what media has
+  to be captured first: a dashboard of gaps, publish and capture calendars
+  (drag to reschedule), a status board, and a page per event. Every run's and
+  series' drafts land in it as Drafted posts. Staff guide:
+  `docs/content-pipeline-how-to.md`; design and rollout notes:
+  `docs/superpowers/specs/2026-10-20-content-pipeline-design.md`.
 - **Approvals** (`approvals.grmc.app`) — request and grant sign-off on graphics.
   Submitters upload an image and pick an approver from a roster (managed in
   Settings); the approver approves, rejects, or requests changes. Change
