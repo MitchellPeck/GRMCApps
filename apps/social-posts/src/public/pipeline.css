@@ -304,3 +304,9 @@ header a.btn-hdr{text-decoration:none}
 /* ---- Settings ---- */
 .pl-settings{max-width:760px}
 .pl-voice{min-height:120px}
+
+/* ---- Drafting profiles ---- */
+.pl-instr{min-height:96px}
+.pl-angle-row{display:grid;grid-template-columns:1fr auto auto;gap:6px;align-items:center;border:1px solid var(--rule);border-radius:var(--r);padding:8px;margin-bottom:8px;background:var(--field-bg)}
+.pl-angle-row textarea{grid-column:1 / -1;min-height:60px;font-size:12.5px}
+.pl-angle-row input[type=number]{width:60px;border:1px solid var(--rule);border-radius:var(--r);padding:6px}

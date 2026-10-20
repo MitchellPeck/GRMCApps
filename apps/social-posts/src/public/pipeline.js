@@ -526,7 +526,7 @@ function eventForm(e) {
     + '<div class="field"><label for="ef-end">Ends</label><input id="ef-end" type="date" name="endDate" value="'+esc(e.endDate || '')+'"></div>'
     + '<div class="field"><label for="ef-color">Colour</label><input id="ef-color" type="color" name="color" value="'+esc(e.color || '#092D3E')+'"></div></div>'
     + '<div class="field"><label for="ef-owner">Owner</label><input id="ef-owner" type="email" name="ownerEmail" list="pl-people" value="'+esc(e.ownerEmail || '')+'" placeholder="Who is accountable for this event’s content"></div>'
-    + '<div class="field"><label for="ef-notes">Notes and key messages</label><textarea id="ef-notes" name="notes">'+esc(e.notes || '')+'</textarea></div>'
+    + '<div class="field"><label for="ef-notes">Notes, key messages and background for drafting</label><textarea id="ef-notes" name="notes">'+esc(e.notes || '')+'</textarea></div>'
     + '<div class="pl-form-msg"></div>'
     + '<div class="btn-row"><button class="btn btn-primary" type="submit">'+(e.id ? 'Save event' : 'Create event')+'</button>'
     + '<button class="btn btn-secondary" type="button" data-act="cancel-event-form">Cancel</button></div></form>';
@@ -548,7 +548,8 @@ function renderEvent(main, id) {
       + '<button class="btn-sm" type="button" data-act="archive-event" data-id="'+esc(e.id)+'" data-archived="'+(e.archived ? '1' : '')+'">'+(e.archived ? 'Restore' : 'Archive')+'</button>'
       + '<button class="btn-sm btn-sm-gold" type="button" data-act="new-post" data-event="'+esc(e.id)+'">New post for this event</button></div></section>'
       + '<div id="pl-event-form"></div>'
-      + '<div class="pl-stats"><span><strong>'+live.length+'</strong> posts</span><span><strong>'+done+' of '+d.media.length+'</strong> media collected</span></div>';
+      + '<div class="pl-stats"><span><strong>'+live.length+'</strong> posts</span><span><strong>'+done+' of '+d.media.length+'</strong> media collected</span></div>'
+      + draftingCardHtml(e);
 
     html += '<section class="card"><h3 class="ct">Posts</h3>'
       + (d.items.length ? '<ol class="pl-timeline">'+d.items.map(function(i){
@@ -573,7 +574,65 @@ function renderEvent(main, id) {
           : '<p class="empty">No media listed for this event’s posts yet. Open a post to add what it needs.</p>')
       + '</section>';
     main.innerHTML = html;
+    var dform = main.querySelector('form[data-form=drafting]');
+    if (dform) showDraftingFields(dform);
   });
+}
+
+// ── Drafting profile (on an event) ───────────────────────────────────────────
+var CUTOFF_LABELS = {
+  latest: 'The newest issue',
+  postDate: 'The newest issue on or before the post’s date',
+  followingSunday: 'The newest issue by the Sunday after the post (Grace Notes)',
+};
+
+function angleRowHtml(a) {
+  return '<div class="pl-angle-row">'
+    + '<input type="text" data-angle="label" value="'+esc(a.label)+'" placeholder="Angle name" aria-label="Angle name">'
+    + '<label class="pl-inline"><input type="number" data-angle="offsetDays" value="'+esc(a.offsetDays)+'" min="-30" max="60" aria-label="Days after the episode"> days after</label>'
+    + '<button class="pl-x" type="button" data-act="remove-angle" aria-label="Remove angle">×</button>'
+    + '<input type="hidden" data-angle="key" value="'+esc(a.key)+'">'
+    + '<textarea data-angle="instructions" placeholder="What a post from this angle does" aria-label="Instructions">'+esc(a.instructions)+'</textarea></div>';
+}
+
+function draftingCardHtml(e) {
+  var d = e.drafting || {}, src = d.source || { kind: 'none' };
+  var opt = function(v, t, cur){ return '<option value="'+v+'"'+(v === cur ? ' selected' : '')+'>'+t+'</option>'; };
+  return '<form class="card pl-drafting" data-form="drafting" data-id="'+esc(e.id)+'">'
+    + '<h3 class="ct">Drafting</h3>'
+    + '<p class="hint pl-under">How Draft with Claude writes this event’s posts. A recurring post or a single post can override the instructions.'
+    + ' Background comes from the event’s notes'+(e.notes ? '' : ' (empty: <button class="pl-link" type="button" data-act="edit-event" data-id="'+esc(e.id)+'">add some</button>)')+'.</p>'
+    + '<div class="row2"><div class="field"><label for="dr-kind">Source</label><select id="dr-kind" name="kind" data-act="dr-kind">'
+    +   opt('none', 'None', src.kind) + opt('mailchimp', 'A Mailchimp newsletter', src.kind) + opt('buzzsprout', 'A podcast episode (Buzzsprout)', src.kind) + '</select></div>'
+    + '<div class="field" data-dr="mailchimp"><label for="dr-subject">Campaigns whose subject contains</label>'
+    +   '<input id="dr-subject" type="text" name="subjectContains" value="'+esc(src.subjectContains || '')+'" placeholder="grace notes"></div></div>'
+    + '<div class="field" data-dr="mailchimp"><label for="dr-cutoff">Which issue</label><select id="dr-cutoff" name="cutoff">'
+    +   ['latest', 'postDate', 'followingSunday'].map(function(c){ return opt(c, CUTOFF_LABELS[c], src.cutoff || 'latest'); }).join('') + '</select></div>'
+    + '<div class="field"><label for="dr-instr">Instructions for each post</label>'
+    +   '<textarea id="dr-instr" name="instructions" class="pl-instr" placeholder="What each post should do, e.g. Warm summary of what’s inside this week’s issue. End with the link.">'+esc(d.instructions || '')+'</textarea></div>'
+    + '<div class="field" data-dr="buzzsprout"><span class="lbl">Angles</span><div id="dr-angles">'+(d.angles || []).map(angleRowHtml).join('')+'</div>'
+    +   '<button class="btn-sm" type="button" data-act="add-angle">Add an angle</button>'
+    +   '<div class="hint">Each angle becomes its own post when you plan posts from an episode.</div></div>'
+    + '<div class="pl-form-msg"></div>'
+    + '<div class="btn-row"><button class="btn btn-primary" type="submit">Save drafting</button></div></form>';
+}
+
+function showDraftingFields(form) {
+  var kind = form.querySelector('[name=kind]').value;
+  form.querySelectorAll('[data-dr]').forEach(function(el){ el.hidden = el.getAttribute('data-dr') !== kind; });
+}
+
+function readDraftingForm(form) {
+  var fd = new FormData(form), kind = fd.get('kind');
+  var source = kind === 'mailchimp' ? { kind: kind, subjectContains: String(fd.get('subjectContains') || '').trim(), cutoff: fd.get('cutoff') } : { kind: kind };
+  var angles = Array.prototype.map.call(form.querySelectorAll('.pl-angle-row'), function(row, i){
+    var g = function(k){ return row.querySelector('[data-angle='+k+']').value; };
+    var label = g('label').trim();
+    // New angles get a key from their name; existing ones keep theirs.
+    var key = g('key') || label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 30) || ('angle-' + (i + 1));
+    return { key: /^[a-z]/.test(key) ? key : 'a-' + key, label: label, offsetDays: Number(g('offsetDays') || 0), instructions: g('instructions').trim() };
+  });
+  return { source: source, instructions: String(fd.get('instructions') || '').trim(), angles: kind === 'buzzsprout' ? angles : [] };
 }
 
 // ── Editor drawer ────────────────────────────────────────────────────────────
@@ -1166,6 +1225,9 @@ function recurrenceFormHtml(r, pre, fromContentId) {
     + '</fieldset>'
     + '<div class="field"><label for="rf-owner">Owner</label><input id="rf-owner" type="email" name="ownerEmail" list="pl-people" value="'+esc(v.ownerEmail)+'" placeholder="Who gets each one published"></div>'
     + '<div class="field"><label for="rf-brief">Brief</label><textarea id="rf-brief" name="brief" placeholder="What each post is for">'+esc(v.brief)+'</textarea></div>'
+    + '<div class="field"><label for="rf-instr">Drafting instructions for each post</label>'
+    +   '<textarea id="rf-instr" name="draftInstructions" class="pl-instr" placeholder="Leave empty to use the event’s">'+esc((r && r.drafting && r.drafting.instructions) || (pre.drafting && pre.drafting.instructions) || '')+'</textarea>'
+    +   '<div class="hint">For posts that need different drafting from the rest of their event, like the Saturday invite.</div></div>'
     + '<div class="field"><span class="lbl">Media each time</span><div id="rf-tpl">'+(v.mediaTemplate || []).map(tplRowHtml).join('')+'</div>'
     +   '<button class="btn-sm" type="button" data-act="add-tpl-row">Add something to capture</button>'
     +   (r ? '<div class="hint">Changes reach upcoming posts nobody has started on. Media someone added or already collected stays.</div>' : '')+'</div>'
@@ -1223,6 +1285,7 @@ function saveRecurrence(form) {
     platforms: fd.getAll('platforms'), publishTime: fd.get('publishTime') || null,
     ownerEmail: (fd.get('ownerEmail') || '').trim(), noMediaNeeded: fd.get('noMediaNeeded') === 'on',
     rule: readRule(form), fromContentId: form.getAttribute('data-from') || undefined,
+    drafting: { instructions: (fd.get('draftInstructions') || '').trim() },
     mediaTemplate: Array.prototype.map.call(form.querySelectorAll('.pl-tpl-row'), function(row){
       var g = function(k){ return row.querySelector('[data-tpl='+k+']').value; };
       return { description: g('description').trim(), type: g('type'), offsetDays: -Number(g('before') || 0), assigneeEmail: g('assigneeEmail').trim() };
@@ -1466,6 +1529,11 @@ document.addEventListener('click', function(e){
       $('df-name').focus();
       break;
     case 'delete-media': deleteMedia(el.closest('[data-media]')); break;
+    case 'add-angle':
+      $('dr-angles').insertAdjacentHTML('beforeend', angleRowHtml({ key: '', label: '', offsetDays: 0, instructions: '' }));
+      $('dr-angles').lastElementChild.querySelector('input').focus();
+      break;
+    case 'remove-angle': el.closest('.pl-angle-row').remove(); break;
     case 'load-podcasts':
       loadPicker('/api/podcast/podcasts', 'podcasts', 'st-bz-list', 'buzzsproutPodcastId', function(p){ return { value: p.id, label: p.title }; });
       break;
@@ -1515,6 +1583,7 @@ document.addEventListener('change', function(e){
   if (act === 'quick-status') return moveStatus(el.getAttribute('data-id'), el.value);
   if (act === 'toggle-cancelled') { storeSet('pipeline.boardCancelled', el.checked); return render(); }
   if (act === 'toggle-archived') { storeSet('pipeline.eventsArchived', el.checked); return render(); }
+  if (act === 'dr-kind') return showDraftingFields(el.closest('form'));
   if (el.hasAttribute('data-mfield')) return saveMediaField(el.closest('[data-media]'), el);
   if (el.hasAttribute('data-mcollect')) return toggleCollected(el.closest('[data-media]'), el.checked);
   if (act === 'no-media' || act === 'platform') {
@@ -1541,6 +1610,13 @@ document.addEventListener('submit', function(e){
   if (kind === 'media') return addMedia(form);
   if (kind === 'recurrence') return saveRecurrence(form);
   if (kind === 'settings') return saveSettings(form);
+  if (kind === 'drafting') {
+    var dmsg = form.querySelector('.pl-form-msg');
+    api('PATCH', '/api/pipeline/events/' + encodeURIComponent(form.getAttribute('data-id')), { drafting: readDraftingForm(form) })
+      .then(function(){ toast('Drafting saved. New drafts for this event use it.', 'ok'); return refreshEvents().then(render); })
+      .catch(function(err){ dmsg.innerHTML = '<div class="alert alert-err">'+esc(err.message)+'</div>'; });
+    return;
+  }
   if (kind === 'duplicate') return submitDuplicate(form);
   if (kind === 'event') {
     var fd = new FormData(form), id = form.getAttribute('data-id');
