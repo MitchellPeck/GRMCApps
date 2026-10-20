@@ -1502,6 +1502,16 @@ function recFilesHtml() {
     return fileCardHtml(x, i, 1, 'remove-rec-file');
   }).join('') + '</div>' : '<p class="hint">No files. Add one if every post in the series uses the same image.</p>';
 }
+// The series' source: the event's, none, or (kept as-is) one set elsewhere.
+var SOURCE_CHOICES = [['', 'The event’s source'], ['none', 'None for these posts']];
+function recSourceSelect(r) {
+  var cur = r && r.drafting && r.drafting.source ? r.drafting.source.kind : '';
+  var known = SOURCE_CHOICES.some(function(c){ return c[0] === cur; });
+  return '<select id="rf-src" name="draftSource">'
+    + SOURCE_CHOICES.map(function(c){ return '<option value="'+c[0]+'"'+(c[0] === cur ? ' selected' : '')+'>'+c[1]+'</option>'; }).join('')
+    + (known ? '' : '<option value="keep" selected>Keep its current source</option>') + '</select>';
+}
+
 function redrawRecFiles() { var el = $('rf-files'); if (el) el.innerHTML = recFilesHtml(); }
 function addRecAttachment(f) { drawer.recAttachments = (drawer.recAttachments || []).concat([f]); redrawRecFiles(); }
 
@@ -1515,7 +1525,7 @@ function recurrenceFormHtml(r, pre, fromContentId) {
   var ends = rule.endDate ? 'on' : rule.count ? 'after' : 'never';
   var opt = function(val, text, cur){ return '<option value="'+val+'"'+(String(val) === String(cur) ? ' selected' : '')+'>'+text+'</option>'; };
   return '<form class="pl-drawer-body" data-form="recurrence" data-id="'+esc(r ? r.id : '')+'" data-from="'+esc(fromContentId || '')+'"'
-    // The form edits only the instructions; an override's source rides along untouched.
+    // A source this form can't show (set some other way) rides along untouched.
     + ' data-source="'+esc(JSON.stringify((r && r.drafting && r.drafting.source) || null))+'">'
     + (fromContentId ? '<p class="pl-source">This post becomes the first in the series, on its own date.</p>' : '')
     + '<div class="pl-drawer-head"><h2>'+(r ? 'Recurring post' : 'New recurring post')+'</h2><button class="pl-x" type="button" data-act="close" aria-label="Close">×</button></div>'
@@ -1551,6 +1561,10 @@ function recurrenceFormHtml(r, pre, fromContentId) {
     + '</fieldset>'
     + '<div class="field"><label for="rf-owner">Owner</label><input id="rf-owner" type="email" name="ownerEmail" list="pl-people" value="'+esc(v.ownerEmail)+'" placeholder="Who gets each one published"></div>'
     + '<div class="field"><label for="rf-brief">Brief</label><textarea id="rf-brief" name="brief" placeholder="What each post is for">'+esc(v.brief)+'</textarea></div>'
+    + '<div class="row2"><div class="field"><label for="rf-src">Source for each post</label>'+recSourceSelect(r)+'</div>'
+    + '<div class="field"><label for="rf-capmode">Caption</label><select id="rf-capmode" name="captionMode">'
+    +   '<option value="same"'+((r && r.captionMode) === 'separate' ? '' : ' selected')+'>Same everywhere</option>'
+    +   '<option value="separate"'+((r && r.captionMode) === 'separate' ? ' selected' : '')+'>Different for each platform</option></select></div></div>'
     + '<div class="field"><label for="rf-instr">Drafting instructions for each post</label>'
     +   '<textarea id="rf-instr" name="draftInstructions" class="pl-instr" placeholder="Leave empty to use the event’s">'+esc((r && r.drafting && r.drafting.instructions) || (pre.drafting && pre.drafting.instructions) || '')+'</textarea>'
     +   '<div class="hint">For posts that need different drafting from the rest of their event, like the Saturday invite.</div></div>'
@@ -1615,10 +1629,12 @@ function saveRecurrence(form) {
     ownerEmail: (fd.get('ownerEmail') || '').trim(), noMediaNeeded: fd.get('noMediaNeeded') === 'on',
     rule: readRule(form), fromContentId: form.getAttribute('data-from') || undefined,
     attachments: drawer.recAttachments || [],
+    captionMode: fd.get('captionMode') === 'separate' ? 'separate' : 'same',
     drafting: (function(){
       var d = { instructions: (fd.get('draftInstructions') || '').trim() };
-      var src = JSON.parse(form.getAttribute('data-source') || 'null');
-      if (src) d.source = src;
+      var pick = fd.get('draftSource') || '';
+      if (pick === 'keep') { var src = JSON.parse(form.getAttribute('data-source') || 'null'); if (src) d.source = src; }
+      else if (pick) d.source = { kind: pick };
       return d;
     })(),
     mediaTemplate: Array.prototype.map.call(form.querySelectorAll('.pl-tpl-row'), function(row){

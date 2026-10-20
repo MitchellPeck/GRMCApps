@@ -25,6 +25,7 @@ export interface RecurrenceRow {
   id: string; title: string; brief: string; eventId: string | null; eventName: string; eventColor: string;
   platforms: string[]; publishTime: string | null; ownerEmail: string; noMediaNeeded: boolean;
   mediaTemplate: MediaTemplateItem[]; attachments: AttachmentTemplate[]; draftKey: string; active: boolean; drafting: Override;
+  captionMode: "same" | "separate";
   rule: Rule; summary: string; nextDates: string[];
 }
 
@@ -42,7 +43,7 @@ function recurrenceOf(r: any, today: string): RecurrenceRow {
     eventName: r.event_name || "", eventColor: r.event_color || "",
     platforms: r.platforms || [], publishTime: r.publish_time ? String(r.publish_time).slice(0, 5) : null,
     ownerEmail: r.owner_email, noMediaNeeded: r.no_media_needed, mediaTemplate: r.media_template || [],
-    attachments: r.attachments || [], draftKey: r.draft_key, active: r.active, drafting: r.drafting || {}, rule, summary: describeRule(rule),
+    attachments: r.attachments || [], captionMode: r.caption_mode || "same", draftKey: r.draft_key, active: r.active, drafting: r.drafting || {}, rule, summary: describeRule(rule),
     nextDates: r.active ? occurrences(rule, addDays(today, 366)).filter((d) => d >= today).slice(0, 4) : [],
   };
 }
@@ -65,7 +66,7 @@ const TEMPLATE_FIELDS: Array<[keyof RecurrenceInput, string, string]> = [
   ["title", "title", "title"], ["brief", "brief", "brief"], ["eventId", "event_id", "event_id"],
   ["platforms", "platforms", "platforms"], ["publishTime", "publish_time", "publish_time"],
   ["ownerEmail", "owner_email", "owner_email"], ["noMediaNeeded", "no_media_needed", "no_media_needed"],
-  ["drafting", "drafting", "drafting"],
+  ["drafting", "drafting", "drafting"], ["captionMode", "caption_mode", "caption_mode"],
 ];
 
 function ruleColumns(rule: Rule): Record<string, unknown> {
@@ -94,7 +95,7 @@ export async function createRecurrence(
     title: input.title, brief: input.brief || "", event_id: input.eventId ?? null,
     platforms: input.platforms ?? DEFAULT_PLATFORMS, publish_time: input.publishTime ?? null,
     owner_email: input.ownerEmail || "", no_media_needed: !!input.noMediaNeeded,
-    media_template: JSON.stringify(input.mediaTemplate || []), attachments: JSON.stringify(input.attachments || []), draft_key: draftKey,
+    media_template: JSON.stringify(input.mediaTemplate || []), attachments: JSON.stringify(input.attachments || []), caption_mode: input.captionMode || "same", draft_key: draftKey,
     active: input.active ?? true, drafting: input.drafting || {}, created_by: createdBy, ...ruleColumns(input.rule!),
   };
   const keys = Object.keys(cols);
@@ -295,11 +296,11 @@ export async function materialize(db: Db, today: string, until: string, onlyId?:
       }
       const r = await db.query(
         `INSERT INTO content_items (title, event_id, platforms, publish_date, publish_time, status, owner_email, brief,
-                                    no_media_needed, draft_key, recurrence_id, occurrence_date, drafting, created_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$4,$12,'recurrence')
+                                    no_media_needed, draft_key, recurrence_id, occurrence_date, drafting, caption_mode, created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$4,$12,$13,'recurrence')
          ON CONFLICT (recurrence_id, occurrence_date) DO NOTHING RETURNING id`,
         [rec.title, rec.event_id, rec.platforms, date, rec.publish_time, rec.brief ? "planned" : "idea",
-         rec.owner_email, rec.brief, rec.no_media_needed, rec.draft_key, rec.id, rec.drafting || {}],
+         rec.owner_email, rec.brief, rec.no_media_needed, rec.draft_key, rec.id, rec.drafting || {}, rec.caption_mode || "same"],
       );
       if (!r.rowCount) continue;
       created++;

@@ -130,6 +130,7 @@ export interface RecurrenceInput {
   mediaTemplate?: MediaTemplateItem[]; active?: boolean;
   drafting?: Override;
   attachments?: AttachmentTemplate[];
+  captionMode?: "same" | "separate";
   rule?: Rule;
 }
 
@@ -208,6 +209,10 @@ export function parseRecurrenceInput(raw: unknown, mode: "create" | "patch"): Re
       items.push({ description: description.slice(0, 500), type: m.type, assigneeEmail, offsetDays });
     }
     out.mediaTemplate = items;
+  }
+  if ("captionMode" in b) {
+    if (b.captionMode !== "same" && b.captionMode !== "separate") return fail("Caption must be the same everywhere or different for each platform.");
+    out.captionMode = b.captionMode;
   }
   if ("attachments" in b) {
     if (!Array.isArray(b.attachments)) return fail("The media list is malformed.");

@@ -743,3 +743,15 @@ test("a recurring post's image is copied to each week, and a week can swap its o
   const again = (await getRecurrence(pool, r.value.id, REF))!;
   assert.deepEqual(again.attachments.map((x) => x.approvalId), [22]);
 });
+
+test("a recurring post sets each week's caption mode and can turn the event's source off", async () => {
+  const r = await createRecurrence(pool, { title: "Sunday recap", platforms: ["facebook", "x"], noMediaNeeded: true, captionMode: "separate",
+    drafting: { source: { kind: "none" }, instructions: "Recap the sermon." }, rule: weekly([0]) }, "me@x.org", REF);
+  assert.ok(r.ok);
+  assert.equal(r.value.captionMode, "separate");
+  const weeks = await occ(r.value.id);
+  assert.deepEqual([weeks[0].caption_mode, weeks[0].drafting], ["separate", { source: { kind: "none" }, instructions: "Recap the sermon." }]);
+  const upd = await updateRecurrence(pool, r.value.id, { captionMode: "same" }, REF);
+  assert.ok(upd.ok);
+  assert.equal((await occ(r.value.id))[1].caption_mode, "same", "untouched weeks follow the series");
+});

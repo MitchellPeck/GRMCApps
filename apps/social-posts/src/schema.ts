@@ -187,4 +187,8 @@ ALTER TABLE media_assets ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'co
 ALTER TABLE media_assets ADD COLUMN IF NOT EXISTS position integer NOT NULL DEFAULT 0;
 -- A recurring post's files (e.g. the same image every week), copied to each week.
 ALTER TABLE recurrences ADD COLUMN IF NOT EXISTS attachments jsonb NOT NULL DEFAULT '[]';
+
+-- A recurring post decides whether each week's caption is the same everywhere
+-- or different per platform.
+ALTER TABLE recurrences ADD COLUMN IF NOT EXISTS caption_mode text NOT NULL DEFAULT 'same';
 `;

@@ -305,7 +305,7 @@ function canonical(v: unknown): string {
 
 // Fields a recurring post's template sets. Changing one on a single
 // occurrence detaches it, so later series-wide edits leave it alone.
-const TEMPLATE_KEYS: Array<keyof ContentInput> = ["title", "brief", "eventId", "platforms", "ownerEmail", "publishTime", "noMediaNeeded", "publishDate", "drafting"];
+const TEMPLATE_KEYS: Array<keyof ContentInput> = ["title", "brief", "eventId", "platforms", "ownerEmail", "publishTime", "noMediaNeeded", "publishDate", "drafting", "captionMode"];
 
 /**
  * scope "future" (recurring posts only): the template fields in this change
@@ -348,7 +348,7 @@ export async function updateContent(
       for (const k of TEMPLATE_KEYS) if (k !== "publishDate" && k in input) tpl[k] = (input as Record<string, unknown>)[k];
       const map: Record<string, string> = {
         title: "title", brief: "brief", eventId: "event_id", platforms: "platforms", ownerEmail: "owner_email",
-        publishTime: "publish_time", noMediaNeeded: "no_media_needed", drafting: "drafting",
+        publishTime: "publish_time", noMediaNeeded: "no_media_needed", drafting: "drafting", captionMode: "caption_mode",
       };
       const keys = Object.keys(tpl);
       if (keys.length) {
