@@ -566,23 +566,23 @@ function renderDetail(){
   var m=state.meeting;
   var meta=[m.meeting_date, m.location].filter(Boolean).map(esc).join(' &middot; ');
   var h='';
-  // Header
+  // Details: every field, edited in place, and where the meeting stands.
   h+='<section data-sec="details" hidden>'
-    +'<div class="dhead"><h2 id="d-title-txt">'+esc(m.title)+'</h2>'
-    +(meta?'<div class="dmeta" id="d-meta-txt">'+meta+'</div>':'<div class="dmeta" id="d-meta-txt"></div>')
-    +'<div class="dedit"><button class="btn-sm" id="btn-edit-meeting">Edit details</button></div></div>'
-    +(m.description?'<div class="card"><div class="ct">About this meeting</div><div>'+esc(m.description)+'</div></div>':'')
+    +'<div class="card" id="details-card"></div>'
+    +'<div class="stats" id="details-stats"></div>'
     +'</section>';
 
-  // Attendees
+  // People: a roll call, then guests.
   h+='<section data-sec="people" hidden>'
-    +'<div class="card"><div class="ct">Who is present?</div>'
-    +'<div class="hint" style="margin-bottom:8px">Select who is present from the people library (add more under the People tab). Anyone not selected is recorded as absent. Attendees become selectable as presenters below.</div>'
-    +'<div class="chips" id="attendee-chips"></div>'
-    +'<div class="hint" id="absent-line" style="margin-top:8px"></div>'
-    +'<div class="sublbl">Guests</div>'
-    +'<div class="hint" style="margin-bottom:6px">Visitors for this meeting only. Guests count as present and can be named as speakers or chosen as presenters on an agenda item.</div>'
-    +'<div class="chips" id="guest-chips"></div>'
+    +'<div class="card"><div class="roll-head"><span class="ct" style="margin:0">Who is here?</span>'
+    +'<span id="roll-count" class="roll-count"></span><span style="flex:1"></span>'
+    +'<button class="btn-sm" id="btn-roll-all">Everyone present</button> '
+    +'<button class="btn-sm" id="btn-roll-clear">Clear</button></div>'
+    +'<div class="roll-list" id="attendee-list"></div>'
+    +'<div class="hint" style="margin-top:8px">Tap a name to mark them present or absent. Add people to the list under the People tab.</div></div>'
+    +'<div class="card"><div class="ct">Guests</div>'
+    +'<div class="hint" style="margin-bottom:6px">Visitors for this meeting only. Guests count as present and can be named as speakers or chosen as presenters.</div>'
+    +'<div class="roll-list" id="guest-list"></div>'
     +'<div id="guest-msg"></div>'
     +'<div class="guest-add"><input type="text" id="g-name" placeholder="Guest name">'
     +'<input type="text" id="g-title" placeholder="Role (optional)">'
@@ -654,9 +654,12 @@ function renderDetail(){
     // The chat (plan 5) sits beside the minutes; hidden while it has nothing.
     +'</div><aside id="chat-panel" class="chat-panel" hidden></aside></div></section>';
 
+  // The meeting's name stays above every section.
+  var head='<div class="mtg-head"><h2 id="d-title-txt">'+esc(m.title)+'</h2>'
+    +'<div class="dmeta" id="d-meta-txt">'+meta+'</div></div>';
   h='<div class="mtg-shell"><nav class="mtg-nav" id="mtg-nav"></nav>'
     +'<select id="mtg-nav-select" class="mtg-nav-select" aria-label="Section"></select>'
-    +'<div class="mtg-main">'+h+'</div></div>';
+    +'<div class="mtg-main">'+head+h+'</div></div>';
   document.getElementById('detail-body').innerHTML=h;
 
   renderAttendeeChips();
@@ -665,7 +668,11 @@ function renderDetail(){
   renderMeetingRecUi();
   renderMeetingSpeakerPanel();
 
-  document.getElementById('btn-edit-meeting').addEventListener('click', editMeeting);
+  renderDetailsCard();
+  document.getElementById('btn-roll-all').addEventListener('click', function(){
+    setAttendance(state.people.filter(function(p){ return p.active; }).map(function(p){ return p.id; }));
+  });
+  document.getElementById('btn-roll-clear').addEventListener('click', function(){ setAttendance([]); });
   document.getElementById('btn-upload-agenda').addEventListener('click', uploadAgenda);
   document.getElementById('btn-add-item').addEventListener('click', addItemManually);
   document.getElementById('btn-meeting-rec').addEventListener('click', toggleMeetingRecording);
@@ -905,28 +912,125 @@ function showSection(sec, topicId){
   });
   applyTopicFocus();
   if(state.topicFocus){
+    // A topic chosen in the menu: open it in the list and bring it into view.
     var it=(state.items||[]).filter(function(x){ return x.id===state.topicFocus; })[0];
     var body=it && document.getElementById('ibody-'+it.id);
     if(body && body.classList.contains('collapsed')) toggleItemOpen(it);
+    var row=it && document.getElementById('item-'+it.id);
+    if(row && row.scrollIntoView){ try { row.scrollIntoView({ behavior:'smooth', block:'start' }); } catch(e){} }
   }
   renderMeetingNav();
 }
-// With a topic chosen in the menu, Agenda shows only that topic.
+// Every topic stays in the list; the upload card shows only when asked for or
+// when there are no topics yet.
 function applyTopicFocus(){
-  var up=document.getElementById('agenda-upload-card'); if(up) up.hidden=!!state.topicFocus;
-  (state.items||[]).forEach(function(it){
-    var el=document.getElementById('item-'+it.id);
-    if(el) el.hidden = !!state.topicFocus && state.topicFocus!==it.id;
-  });
+  var up=document.getElementById('agenda-upload-card');
+  if(up) up.hidden = !!(state.items && state.items.length) && !state.showAgendaUpload;
 }
 document.addEventListener('click', function(e){
   var a=e.target && e.target.closest ? e.target.closest('#mtg-nav a') : null;
   if(!a) return;
   e.preventDefault();
-  if(a.hasAttribute('data-topic')) showSection('agenda', Number(a.getAttribute('data-topic')));
-  else showSection(a.getAttribute('data-sec'));
+  if(a.hasAttribute('data-topic')){ showSection('agenda', Number(a.getAttribute('data-topic'))); return; }
+  showSection(a.getAttribute('data-sec'));
   try { window.scrollTo(0, 0); } catch(err){}
 });
+
+// ── Details ─────────────────────────────────────────────────────────────────
+var STATUS_LABELS={ draft:'Draft', in_progress:'In progress', completed:'Completed' };
+function renderDetailsCard(){
+  var el=document.getElementById('details-card'); if(!el || !state.meeting) return;
+  var m=state.meeting;
+  var row=function(label, value){ return '<div class="drow"><span class="dlbl">'+label+'</span><span class="dval">'+value+'</span></div>'; };
+  if(state.editingDetails){
+    var f=function(id, label, value, ph, area){
+      return '<label class="drow"><span class="dlbl">'+label+'</span>'
+        +(area ? '<textarea id="'+id+'" rows="3">'+esc(value||'')+'</textarea>'
+               : '<input type="text" id="'+id+'" value="'+esc(value||'')+'" placeholder="'+esc(ph||'')+'">')+'</label>';
+    };
+    el.innerHTML='<form id="details-form" onsubmit="return false">'
+      +f('df-title','Title',m.title)+f('df-date','Date',m.meeting_date,'e.g. 2026-04-14 or Apr 14, 7pm')
+      +f('df-location','Location',m.location,'e.g. Fellowship Hall / Zoom')+f('df-description','About',m.description,'',true)
+      +'<label class="drow"><span class="dlbl">Status</span><select id="df-status">'
+      +Object.keys(STATUS_LABELS).map(function(k){ return '<option value="'+k+'"'+(m.status===k?' selected':'')+'>'+STATUS_LABELS[k]+'</option>'; }).join('')
+      +'</select></label>'
+      +'<div id="details-msg"></div>'
+      +'<div class="btn-row"><button class="btn btn-primary" id="btn-details-save" data-default="Save">Save</button>'
+      +'<button class="btn btn-secondary" id="btn-details-cancel" type="button">Cancel</button><span style="flex:1"></span>'
+      +'<button class="btn-sm danger-link" id="btn-details-delete" type="button">Delete meeting…</button></div></form>';
+    document.getElementById('btn-details-save').addEventListener('click', saveDetails);
+    document.getElementById('btn-details-cancel').addEventListener('click', function(){ state.editingDetails=false; renderDetailsCard(); });
+    document.getElementById('btn-details-delete').addEventListener('click', deleteMeetingDialog);
+    var t=document.getElementById('df-title'); if(t) t.focus();
+  } else {
+    el.innerHTML='<div class="dcard-head"><span class="ct" style="margin:0">Details</span><span style="flex:1"></span>'
+      +'<button class="btn-sm" id="btn-details-edit">Edit</button></div>'
+      +row('Title', esc(m.title))
+      +row('Date', esc(m.meeting_date)||'<span class="muted">Not set</span>')
+      +row('Location', esc(m.location)||'<span class="muted">Not set</span>')
+      +row('About', esc(m.description)||'<span class="muted">Nothing yet</span>')
+      +row('Status', esc(STATUS_LABELS[m.status]||m.status||'Draft'))
+      +(m.created_by_name||m.created_by_email ? row('Created', 'by '+esc(m.created_by_name||m.created_by_email)+(m.created_at?' · '+esc(fmtDate(m.created_at)):'')) : '');
+    document.getElementById('btn-details-edit').addEventListener('click', function(){ state.editingDetails=true; renderDetailsCard(); });
+  }
+  renderDetailsStats();
+  applyReadOnly();
+}
+function saveDetails(){
+  var m=state.meeting, mid=m.id;
+  var v={ title:v_('df-title'), meetingDate:v_('df-date'), location:v_('df-location'),
+    description:(document.getElementById('df-description')||{}).value||'', status:(document.getElementById('df-status')||{}).value||m.status };
+  function v_(id){ var el=document.getElementById(id); return el ? el.value.trim() : ''; }
+  if(!v.title){ msg('details-msg','err','A meeting needs a title.'); return; }
+  setBtn('btn-details-save', true, 'Saving…');
+  api('/api/meetings/'+mid, { method:'PATCH', body:v }).then(function(res){
+    if(!state.meeting || state.meeting.id!==mid) return;
+    if(!res.ok){ setBtn('btn-details-save', false); msg('details-msg','err',res.error||'Could not save.'); return; }
+    m.title=v.title; m.meeting_date=v.meetingDate; m.location=v.location; m.description=v.description.trim(); m.status=v.status;
+    state.editingDetails=false;
+    document.getElementById('d-title-txt').textContent=m.title;
+    document.getElementById('d-meta-txt').innerHTML=[m.meeting_date,m.location].filter(Boolean).map(esc).join(' &middot; ');
+    renderDetailsCard();
+    refreshReportSoon();
+  });
+}
+function deleteMeetingDialog(){
+  var m=state.meeting;
+  openModal({
+    title: 'Delete meeting',
+    fields: [],
+    danger: {
+      label: 'Delete meeting',
+      hint: 'Deleting “'+m.title+'” also deletes its agenda items, transcripts, recordings, and report. This cannot be undone.',
+      onConfirm: function(done){
+        api('/api/meetings/'+m.id, { method:'DELETE' }).then(function(res){
+          if(!res || !res.ok){ done((res && res.error) || 'Could not delete.'); return; }
+          done(null);
+          showList();
+        }).catch(function(e){ done(e.message); });
+      }
+    }
+  });
+}
+function recordedSeconds(){
+  return (state.meetingRecordings||[]).reduce(function(n, r){
+    if(!r.started_at || !r.finished_at) return n;
+    return n+Math.max(0, (new Date(r.finished_at)-new Date(r.started_at))/1000);
+  }, 0);
+}
+function renderDetailsStats(){
+  var el=document.getElementById('details-stats'); if(!el) return;
+  var active=(state.people||[]).filter(function(p){ return p.active; }).length;
+  var guests=(state.guests||[]).length;
+  var present=(state.attendeeIds||[]).length+guests;
+  var secs=recordedSeconds(), r=state.report||{};
+  var tile=function(big, small){ return '<div class="stat"><b>'+big+'</b><span>'+small+'</span></div>'; };
+  el.innerHTML=tile((state.items||[]).length, 'topics')
+    +tile(present+' / '+(active+guests), 'present')
+    +tile(secs ? fmtSpanTime(secs) : '—', 'recorded')
+    +tile(state.meeting && state.meeting.report ? (r.pages||estimatePagesJS(state.meeting.report))+' pages' : '—',
+      state.meeting && state.meeting.report ? (r.edited ? 'minutes, edited' : 'minutes') : 'no minutes yet');
+}
 
 function editMeeting(){
   var m=state.meeting;
@@ -973,30 +1077,45 @@ function editMeeting(){
 
 // ── Attendees ───────────────────────────────────────────────────────────────
 function renderAttendeeChips(){
-  var el=document.getElementById('attendee-chips');
-  var active=state.people.filter(function(p){ return p.active || state.attendeeIds.indexOf(p.id)>=0; });
-  if(!active.length){ el.innerHTML='<span class="chip empty-hint">No people in the library yet — add some under the People tab.</span>'; return; }
-  el.innerHTML=active.map(function(p){
+  var el=document.getElementById('attendee-list'); if(!el) return;
+  var shown=state.people.filter(function(p){ return p.active || state.attendeeIds.indexOf(p.id)>=0; });
+  var present=shown.filter(function(p){ return state.attendeeIds.indexOf(p.id)>=0; }).length;
+  var rc=document.getElementById('roll-count');
+  if(rc) rc.textContent = shown.length ? present+' present · '+(shown.length-present)+' absent' : '';
+  el.innerHTML = shown.length ? shown.map(function(p){
     var on=state.attendeeIds.indexOf(p.id)>=0;
-    return '<span class="chip'+(on?' on':'')+'" data-pid="'+p.id+'">'+esc(p.name)+'</span>';
-  }).join('');
-  el.querySelectorAll('.chip[data-pid]').forEach(function(c){
+    return '<button type="button" class="roll-row'+(on?' on':'')+'" data-pid="'+p.id+'" aria-pressed="'+on+'">'
+      +'<span class="roll-check" aria-hidden="true">'+(on?'&#10003;':'')+'</span>'
+      +'<span class="roll-name">'+esc(p.name)+'</span>'
+      +(p.title?'<span class="roll-title">'+esc(p.title)+'</span>':'')
+      +(on?'':'<span class="roll-absent">absent</span>')+'</button>';
+  }).join('') : '<div class="empty-hint">No people in the list yet — add some under the People tab.</div>';
+  el.querySelectorAll('.roll-row[data-pid]').forEach(function(c){
     c.addEventListener('click', function(){ toggleAttendee(Number(c.getAttribute('data-pid'))); });
   });
-  var absent=state.people.filter(function(p){ return p.active && state.attendeeIds.indexOf(p.id)<0; });
-  var al=document.getElementById('absent-line');
-  if(al) al.textContent = absent.length ? 'Absent: '+absent.map(function(p){ return p.name; }).join(', ') : 'Everyone is present.';
   renderMeetingNav();
 }
 
-// ── Guests ──────────────────────────────────────────────────────────────────
+// Mark exactly these people present.
+function setAttendance(ids){
+  if(readOnly()) return;
+  state.attendeeIds=ids.slice();
+  api('/api/meetings/'+state.meeting.id+'/attendees', { method:'PUT', body:{ personIds:state.attendeeIds } }).then(refreshReportSoon);
+  renderAttendeeChips();
+  state.items.forEach(function(it){ renderPresenterChips(it); renderSpeakerMap(it); });
+}
+
 function renderGuests(){
-  var el=document.getElementById('guest-chips'); if(!el) return;
+  var el=document.getElementById('guest-list'); if(!el) return;
   var guests=state.guests||[];
   el.innerHTML = guests.length ? guests.map(function(g){
-    return '<span class="chip on guest">'+esc(g.name)+(g.title?' <span class="guest-title">'+esc(g.title)+'</span>':'')
-      +' <button class="chip-x" data-gid="'+g.id+'" title="Remove '+esc(g.name)+'" aria-label="Remove '+esc(g.name)+'">&times;</button></span>';
-  }).join('') : '<span class="chip empty-hint">No guests.</span>';
+    var presented=(state.items||[]).filter(function(it){ return (it.guest_presenter_ids||[]).indexOf(g.id)>=0; })
+      .map(function(it){ return it.title; });
+    return '<div class="roll-row on guest-row"><span class="roll-name">'+esc(g.name)+'</span>'
+      +(g.title?'<span class="roll-title">'+esc(g.title)+'</span>':'')
+      +(presented.length?'<span class="roll-title">· presented '+esc(presented.join(', '))+'</span>':'')
+      +'<span style="flex:1"></span><button class="chip-x" data-gid="'+g.id+'" title="Remove '+esc(g.name)+'" aria-label="Remove '+esc(g.name)+'">&times;</button></div>';
+  }).join('') : '<div class="empty-hint">No guests.</div>';
   el.querySelectorAll('[data-gid]').forEach(function(b){
     b.addEventListener('click', function(){ removeGuest(Number(b.getAttribute('data-gid'))); });
   });
@@ -1053,6 +1172,7 @@ function speakerOptions(sel){
   return o;
 }
 function toggleAttendee(pid){
+  if(readOnly()) return;
   var i=state.attendeeIds.indexOf(pid);
   if(i>=0) state.attendeeIds.splice(i,1); else state.attendeeIds.push(pid);
   api('/api/meetings/'+state.meeting.id+'/attendees', { method:'PUT', body:{ personIds:state.attendeeIds } }).then(refreshReportSoon);

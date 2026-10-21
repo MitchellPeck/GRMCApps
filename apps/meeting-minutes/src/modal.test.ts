@@ -248,8 +248,9 @@ test("guests are offered as speakers and everyone not present is listed absent",
   `);
   const options = [...doc.querySelectorAll("select[data-spk] option")].map((o: any) => o.value);
   assert.deepEqual(options, ["", "Alice", "Gina"]);
-  assert.equal(doc.getElementById("absent-line").textContent, "Absent: Bob");
-  assert.match(doc.getElementById("guest-chips").textContent, /Gina/);
+  assert.equal(doc.getElementById("roll-count").textContent, "1 present · 1 absent");
+  assert.match(doc.querySelector('#attendee-list [data-pid="10"]').textContent, /Bob.*absent/);
+  assert.match(doc.getElementById("guest-list").textContent, /Gina/);
 });
 
 test("a guest can be made a topic's presenter, listed above the attendees", { skip }, () => {
@@ -780,8 +781,9 @@ test("read-only chips can't be toggled", { skip }, async () => {
   w.eval(`state.people = [{ id: 7, name: "Ann", active: true }]; state.peopleById = { 7: state.people[0] };
     state.lock = { held: false, holder: { name: "Bob" } }; renderDetail();`);
   const calls = stubFetch(w, () => ({ ok: true }));
-  const chip = doc.querySelector("#attendee-chips .chip");
-  assert.ok(chip, "an attendee chip");
+  const chip = doc.querySelector("#attendee-list .roll-row");
+  assert.ok(chip, "an attendee row");
+  assert.equal(chip.disabled, true, "disabled while someone else edits");
   chip.dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
   await flush();
   assert.equal(calls.filter((c) => c.method === "PUT").length, 0);
@@ -852,16 +854,17 @@ test("the side menu switches sections, and a redraw keeps the one you're on", { 
   assert.deepEqual(visible(doc), ["speakers"]);
 });
 
-test("a topic in the menu shows just that topic, opened", { skip }, () => {
+test("a topic in the menu scrolls to it in the full list and opens it", { skip }, () => {
   const { w, doc } = bootTwoTopics();
   w.eval("state.section = null; renderDetail()");
+  let scrolled = "";
+  w.HTMLElement.prototype.scrollIntoView = function () { scrolled = this.id; };
   doc.querySelector('#mtg-nav [data-topic="2"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
   assert.deepEqual(visible(doc), ["agenda"]);
-  assert.equal(doc.getElementById("item-1").hidden, true);
+  assert.equal(doc.getElementById("item-1").hidden, false, "the whole list stays");
   assert.equal(doc.getElementById("item-2").hidden, false);
-  assert.ok(!doc.getElementById("ibody-2").classList.contains("collapsed"));
-  doc.querySelector('#mtg-nav [data-sec="agenda"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
-  assert.equal(doc.getElementById("item-1").hidden, false);
+  assert.ok(!doc.getElementById("ibody-2").classList.contains("collapsed"), "opened");
+  assert.equal(scrolled, "item-2");
 });
 
 test("switching sections never stops a recording", { skip }, () => {
@@ -1088,4 +1091,84 @@ test("a line can be opened from the keyboard", { skip }, () => {
   assert.equal(block.getAttribute("tabindex"), "0");
   block.dispatchEvent(new w.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
   assert.ok(doc.querySelector("#report-editor textarea.rblock-edit"));
+});
+
+// ── Purpose-built sections ──────────────────────────────────────────────────
+
+test("the meeting's title shows above every section", { skip }, () => {
+  const { w, doc } = boot();
+  w.eval("state.section = 'people'; renderDetail()");
+  const head = doc.querySelector("#detail-body .mtg-head");
+  assert.ok(head && !head.closest("section"), "not inside a section");
+  assert.match(head.textContent, /April Board Meeting/);
+});
+
+test("Details shows every field without clicking Edit", { skip }, () => {
+  const { w, doc } = boot();
+  w.eval(`state.meeting.description = "Quarterly review"; state.meeting.created_by_name = "Linda";
+    state.section = "details"; renderDetail();`);
+  const d = doc.querySelector('section[data-sec="details"]').textContent;
+  for (const s of ["April Board Meeting", "2026-04-14", "Hall", "Quarterly review", "Linda"]) assert.match(d, new RegExp(s));
+  assert.equal(doc.getElementById("details-form"), null, "not in edit mode");
+});
+
+test("Edit turns the details into fields; Save sends them; Cancel puts them back", { skip }, async () => {
+  const { w, doc } = boot();
+  const calls = stubFetch(w, () => ({ ok: true }));
+  w.eval(`state.section = "details"; renderDetail();`);
+  doc.getElementById("btn-details-edit").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  const f = doc.getElementById("details-form");
+  assert.ok(f);
+  doc.getElementById("df-location").value = "Fellowship Hall";
+  doc.getElementById("btn-details-save").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  await flush();
+  const patch = calls.find((c) => c.method === "PATCH" && c.path === "/api/meetings/42");
+  assert.equal(patch!.body.location, "Fellowship Hall");
+  assert.equal(doc.getElementById("details-form"), null);
+  assert.match(doc.querySelector('section[data-sec="details"]').textContent, /Fellowship Hall/);
+  doc.getElementById("btn-details-edit").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  doc.getElementById("df-location").value = "Barn";
+  doc.getElementById("btn-details-cancel").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  assert.match(doc.querySelector('section[data-sec="details"]').textContent, /Fellowship Hall/);
+});
+
+test("Details shows where the meeting stands", { skip }, () => {
+  const { w, doc } = bootTwoTopics();
+  w.eval(`state.people = [{ id: 1, name: "A", active: true }, { id: 2, name: "B", active: true }, { id: 3, name: "C", active: true }];
+    state.attendeeIds = [1, 2]; state.guests = [{ id: 9, name: "G", title: "" }];
+    state.meetingRecordings = [{ id: 7, started_at: "2026-04-14T19:00:00Z", finished_at: "2026-04-14T20:42:05Z" }];
+    state.meeting.report = "# M"; state.report = { status: "idle", changes: [], pages: 5.5, edited: true };
+    state.section = "details"; renderDetail();`);
+  const t = doc.getElementById("details-stats").textContent;
+  assert.match(t, /2\s*topics/);
+  assert.match(t, /3 \/ 4\s*present/);
+  assert.match(t, /1:42:05\s*recorded/);
+  assert.match(t, /5\.5 pages/);
+  assert.match(t, /edited/);
+});
+
+test("People is a roll call with counts", { skip }, async () => {
+  const { w, doc } = boot();
+  const calls = stubFetch(w, () => ({ ok: true }));
+  w.eval(`state.people = [{ id: 1, name: "Ann", title: "Treasurer", active: true }, { id: 2, name: "Bob", title: "", active: true }];
+    state.peopleById = { 1: state.people[0], 2: state.people[1] }; state.attendeeIds = [1];
+    state.section = "people"; renderDetail();`);
+  assert.match(doc.getElementById("roll-count").textContent, /1 present · 1 absent/);
+  const rows = doc.querySelectorAll("#attendee-list .roll-row");
+  assert.equal(rows.length, 2);
+  assert.match(rows[0].textContent, /Ann.*Treasurer/);
+  assert.equal(rows[0].getAttribute("aria-pressed"), "true");
+  rows[1].dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  await flush();
+  assert.deepEqual(calls.find((c) => c.method === "PUT")!.body, { personIds: [1, 2] });
+  doc.getElementById("btn-roll-clear").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  await flush();
+  assert.deepEqual(calls.filter((c) => c.method === "PUT").pop()!.body, { personIds: [] });
+});
+
+test("guests show their role and what they presented", { skip }, () => {
+  const { w, doc } = boot();
+  w.eval(`state.guests = [{ id: 9, name: "Gina", title: "Architect" }]; state.items[0].guest_presenter_ids = [9];
+    state.section = "people"; renderDetail();`);
+  assert.match(doc.getElementById("guest-list").textContent, /Gina.*Architect.*Budget/);
 });
