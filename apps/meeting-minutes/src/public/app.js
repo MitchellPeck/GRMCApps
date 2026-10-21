@@ -10,14 +10,13 @@ async function api(path, { method = 'GET', body } = {}) {
     headers: body ? { 'Content-Type': 'application/json' } : undefined,
     body: body ? JSON.stringify(body) : undefined,
   });
-  const data = await normalizeApiResult(res);
-  // Someone else is editing this meeting: show it read-only from now on.
-  if (data && data.locked) lockedBy({ name: data.holder || '' });
-  return data;
+  return normalizeApiResult(res);
 }
 async function normalizeApiResult(res){
   var data = null;
   try { data = await res.json(); } catch(e){ data = null; }
+  // Someone else is editing this meeting: show it read-only from now on.
+  if (data && data.locked && typeof lockedBy === 'function') lockedBy({ name: data.holder || '' });
   if(data && typeof data.ok === 'boolean') return data;
   if(res.ok) return data && typeof data === 'object' ? data : { ok: true };
   var detail = (data && (data.error || data.message)) || (res.statusText || '');
@@ -220,35 +219,77 @@ function renderMarkdown(md){
 // keeps it alive every 30 seconds, and lets go when you leave. Anyone else sees
 // the meeting read-only; their own heartbeat takes the lock once it lapses.
 var LOCK_HEARTBEAT_MS=30000, lockTimer=null;
+var lockMeetingId=null;   // the meeting whose lock this page holds or wants
+var lockActivity=false;   // typed something since the last heartbeat
+document.addEventListener('input', function(e){
+  if(e.target && e.target.closest && e.target.closest('#detail-body')) lockActivity=true;
+}, true);
+// A recording running on this page keeps the lock, however long nobody types.
+function pageRecording(){
+  return !!((meetingRec && meetingRec.meetingId===lockMeetingId) || activeRec);
+}
+// Someone else has the meeting. Redraw read-only, but keep whatever was typed
+// and not yet saved on screen so it can be copied.
 function lockedBy(holder){
   if(!state.meeting) return;
-  var was=state.lock && !state.lock.held;
+  var was=readOnly();
   state.lock={ held:false, holder: holder||{} };
-  if(!was) renderDetail();
+  if(was) return;
+  var drafts=captureDrafts();
+  state.lockDrafts=Object.keys(drafts).length>0;
+  var mid=state.meeting.id;
+  renderDetail(); restoreDrafts(drafts);
+  // Drop anything shown that the server never accepted, keeping the drafts.
+  api('/api/meetings/'+mid).then(function(det){
+    if(!det.ok || !det.meeting || !state.meeting || state.meeting.id!==mid) return;
+    var d=captureDrafts();
+    loadMeetingState(det); state.lock={ held:false, holder: holder||{} };
+    renderDetail(); restoreDrafts(d);
+  });
+}
+// Text typed into fields that differs from what was last loaded.
+function captureDrafts(){
+  var out={};
+  document.querySelectorAll('#detail-body textarea[id], #detail-body input[type="text"][id], #detail-body input:not([type])[id]').forEach(function(el){
+    if(el.value!==el.defaultValue) out[el.id]=el.value;
+  });
+  return out;
+}
+function restoreDrafts(d){
+  Object.keys(d).forEach(function(id){ var el=document.getElementById(id); if(el) el.value=d[id]; });
 }
 function lockHeartbeat(){
-  if(!state.meeting) return;
-  var mid=state.meeting.id;
-  api('/api/meetings/'+mid+'/lock', { method:'POST' }).then(function(res){
+  var mid=lockMeetingId!=null ? lockMeetingId : (state.meeting && state.meeting.id);
+  if(mid==null) return;
+  var body={ active: lockActivity, recording: pageRecording() };
+  lockActivity=false;
+  api('/api/meetings/'+mid+'/lock', { method:'POST', body: body }).then(function(res){
     if(!res.ok || !state.meeting || state.meeting.id!==mid) return;
     var wasReadOnly=readOnly();
-    state.lock={ held: res.held, holder: res.holder };
-    if(wasReadOnly && res.held){ refreshMeeting(mid); state.lockNotice='You can edit now.'; }
-    else if(!wasReadOnly && !res.held) renderDetail();
+    if(!res.held){ if(!wasReadOnly) lockedBy(res.holder); return; }
+    state.lock={ held: true, holder: res.holder };
+    if(wasReadOnly){ state.lockNotice='You can edit now.'; refreshMeeting(mid); }
   });
 }
 function startLockHeartbeat(){
   stopLockHeartbeat();
+  lockMeetingId=state.meeting ? state.meeting.id : null;
   lockHeartbeat();
   lockTimer=setInterval(lockHeartbeat, LOCK_HEARTBEAT_MS);
 }
 function stopLockHeartbeat(){ if(lockTimer){ clearInterval(lockTimer); lockTimer=null; } }
 function releaseMeetingLock(){
-  if(!state.meeting || !state.lock || !state.lock.held) return;
-  try { fetch('/api/meetings/'+state.meeting.id+'/lock', { method:'DELETE', keepalive:true }); } catch(e){}
-  state.lock=null;
+  if(lockMeetingId==null || !state.lock || !state.lock.held) return;
+  try { fetch('/api/meetings/'+lockMeetingId+'/lock', { method:'DELETE', keepalive:true }); } catch(e){}
+  state.lock=null; lockMeetingId=null;
 }
-window.addEventListener('pagehide', releaseMeetingLock);
+window.addEventListener('pagehide', function(){ if(!pageRecording()) releaseMeetingLock(); });
+// Read-only chips and toggles swallow the click before their own handlers.
+document.addEventListener('click', function(e){
+  if(!readOnly()) return;
+  var chip=e.target && e.target.closest ? e.target.closest('#detail-body .chip') : null;
+  if(chip){ e.preventDefault(); e.stopPropagation(); }
+}, true);
 function readOnly(){ return !!(state.lock && !state.lock.held); }
 
 // While someone else edits: a banner, and every control disabled except
@@ -265,11 +306,16 @@ function applyReadOnly(){
   if(!readOnly()) return;
   var h=state.lock.holder||{}, who=h.name||h.email||'Someone else';
   var b=document.createElement('div'); b.className='alert alert-warn'; b.id='lock-banner';
-  b.textContent='Being edited by '+who+'. You can look, listen and export, but not change anything.';
+  b.textContent='Being edited by '+who+'. You can look, listen and export, but not change anything.'
+    +(state.lockDrafts ? ' What you were typing is still on screen: copy anything you haven’t saved.' : '');
   body.insertBefore(b, body.firstChild);
   body.querySelectorAll('input, textarea, select, button').forEach(function(el){
     if(el.matches('.sec-play, .spk-play, #btn-report-print')) return;
-    el.disabled=true;
+    // A recording running on this page can always be stopped and saved.
+    if(activeRec && activeRec.btn===el) return;
+    if(meetingRec && el.id==='btn-meeting-rec') return;
+    el.readOnly=true;
+    if(el.tagName!=='TEXTAREA' && !(el.tagName==='INPUT' && /^(text|)$/.test(el.type))) el.disabled=true;
   });
 }
 
@@ -292,12 +338,17 @@ document.querySelectorAll('.tab').forEach(function(t){
 function showList(){
   stopRecording();
   stopPolling();
-  stopLockHeartbeat();
-  releaseMeetingLock();
-  // Summarize the item left open, so nothing is lost on the way out.
+  // Summarize the item left open, so nothing is lost on the way out; let go of
+  // the lock after, or that request would take it straight back.
+  var leaving=Promise.resolve();
   if(state.openItemId && state.items){
     var open=state.items.filter(function(x){return x.id===state.openItemId;})[0];
-    if(open) summarizeIfNeeded(open);
+    if(open) leaving=summarizeIfNeeded(open);
+  }
+  // A whole-meeting recording carries on from the list: keep its lock alive.
+  if(!pageRecording()){
+    stopLockHeartbeat();
+    leaving.then(releaseMeetingLock, releaseMeetingLock);
   }
   document.getElementById('view-detail').style.display='none';
   document.getElementById('view-list').style.display='block';
@@ -470,6 +521,7 @@ function openMeeting(id){
     if(!state.meeting || state.meeting.id!==det.meeting.id) state.lastFix=null;
     state.people = (peopleRes.ok?peopleRes.people:[]);
     state.peopleById = {}; state.people.forEach(function(p){ state.peopleById[p.id]=p; });
+    state.lockDrafts = false;
     state.meeting = det.meeting;
     state.attendeeIds = det.attendeeIds;
     state.items = det.items;
@@ -489,11 +541,14 @@ function openMeeting(id){
 function refreshMeeting(mid){
   api('/api/meetings/'+mid).then(function(det){
     if(!det.ok || !det.meeting || !state.meeting || state.meeting.id!==mid) return;
-    state.meeting=det.meeting; state.attendeeIds=det.attendeeIds; state.items=det.items;
-    state.meetingRecordings=det.meetingRecordings||[]; state.meetingSpeakerStats=det.meetingSpeakerStats||[];
-    state.guests=det.guests||[]; state.report=det.report||null;
+    loadMeetingState(det);
     renderDetail();
   });
+}
+function loadMeetingState(det){
+  state.meeting=det.meeting; state.attendeeIds=det.attendeeIds; state.items=det.items;
+  state.meetingRecordings=det.meetingRecordings||[]; state.meetingSpeakerStats=det.meetingSpeakerStats||[];
+  state.guests=det.guests||[]; state.report=det.report||null;
 }
 
 function renderDetail(){
@@ -993,6 +1048,7 @@ function invalidateSummary(it){
 // Ask the server to summarize now rather than after the edit delay. A queued
 // or in-flight transcription always wins: the server summarizes once it lands.
 function summarizeIfNeeded(it){
+  if(readOnly()) return Promise.resolve();
   if(isTranscribing(it) || meetingProcessing()) return Promise.resolve();
   if(!itemHasContent(it)) return Promise.resolve();
   if(it.summary || it.summarize_status==='processing') return Promise.resolve();
@@ -1860,6 +1916,7 @@ function pollOnce(){
       afterPollRound();
     });
   }).catch(function(){ if(gen===pollGen && anyPendingWork()) startPolling(); });
+  applyReadOnly();
 }
 
 // Keep polling while work remains on the server.

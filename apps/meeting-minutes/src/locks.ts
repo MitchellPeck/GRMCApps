@@ -18,6 +18,11 @@ export interface Lock {
   editedAt: Date;
 }
 
+// While a meeting is being recorded or its recording is still being
+// processed, nobody types: the idle rule waits.
+const BUSY = new Set(["recording", "queued", "processing"]);
+const busy = (status: unknown) => BUSY.has(String(status));
+
 export type LockResult = { held: true; lock: Lock } | { held: false; lock: Lock };
 
 export function lockLive(lock: Lock | null, now: Date, recording: boolean): boolean {
@@ -44,6 +49,7 @@ export async function acquireLock(
 ): Promise<LockResult> {
   const now = opts.now ?? new Date();
   const c = await pool.connect();
+  let released = false;
   try {
     await c.query("BEGIN");
     const ins = await c.query(
@@ -57,9 +63,15 @@ export async function acquireLock(
         WHERE l.meeting_id = $1 FOR UPDATE OF l`,
       [meetingId]
     );
+    if (!r.rows[0]) {
+      // Released between the insert and the select: it's free, so try again.
+      await c.query("ROLLBACK");
+      c.release(); released = true;
+      return acquireLock(pool, meetingId, who, opts);
+    }
     const current = rowToLock(r.rows[0]);
     const mine = current.email === who.email;
-    if (!mine && lockLive(current, now, r.rows[0].recording_status === "recording")) {
+    if (!mine && lockLive(current, now, busy(r.rows[0].recording_status))) {
       await c.query("COMMIT");
       return { held: false, lock: current };
     }
@@ -75,10 +87,10 @@ export async function acquireLock(
     await c.query("COMMIT");
     return { held: true, lock: rowToLock(u.rows[0]) };
   } catch (e) {
-    await c.query("ROLLBACK");
+    if (!released) await c.query("ROLLBACK");
     throw e;
   } finally {
-    c.release();
+    if (!released) c.release();
   }
 }
 
@@ -93,5 +105,5 @@ export async function getLock(pool: Pool, meetingId: number, now = new Date()): 
   );
   if (!r.rows[0]) return null;
   const lock = rowToLock(r.rows[0]);
-  return { lock, live: lockLive(lock, now, r.rows[0].recording_status === "recording") };
+  return { lock, live: lockLive(lock, now, busy(r.rows[0].recording_status)) };
 }

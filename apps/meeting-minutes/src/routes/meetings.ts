@@ -80,8 +80,6 @@ function messagePage(reply: FastifyReply, status: number, title: string, text: s
   );
 }
 
-// One section of a stored recording as MP3, streamed, for the ▶ on a part of
-// the minutes. start/end are seconds on that recording's timeline.
 // Who holds a meeting's lock, as the caller sees it. Null when nobody does.
 async function lockFor(meetingId: number, email: string): Promise<{ held: boolean; holder: { email: string; name: string } } | null> {
   const l = await getLock(pool, meetingId);
@@ -89,6 +87,8 @@ async function lockFor(meetingId: number, email: string): Promise<{ held: boolea
   return { held: l.lock.email === email, holder: { email: l.lock.email, name: l.lock.name } };
 }
 
+// One section of a stored recording as MP3, streamed, for the ▶ on a part of
+// the minutes. start/end are seconds on that recording's timeline.
 export async function sendSection(
   reply: FastifyReply,
   storagePath: string | undefined,
@@ -122,7 +122,10 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
   app.post("/api/meetings/:id/lock", async (req, reply) => {
     const id = Number((req.params as { id: string }).id);
     if (!Number.isFinite(id) || !(await getMeeting(pool, id))) { reply.code(404); return { ok: false, error: "Meeting not found." }; }
-    const r = await acquireLock(pool, id, getIdentity(req));
+    // Typing (not yet saved) or a recording running on the page counts as
+    // activity, so the lock doesn't lapse for idleness under the person using it.
+    const b = (req.body ?? {}) as { active?: unknown; recording?: unknown };
+    const r = await acquireLock(pool, id, getIdentity(req), { edit: b.active === true || b.recording === true });
     return { ok: true, held: r.held, holder: { email: r.lock.email, name: r.lock.name } };
   });
 

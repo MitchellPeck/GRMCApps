@@ -196,3 +196,7 @@ body.has-rec-banner{padding-top:44px}
 .fix-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:8px}
 .fix-row input{flex:1 1 140px;min-width:0}
 .fix-row select{flex:0 1 200px;min-width:0}
+
+/* Someone else is editing: nothing on the page can be toggled. */
+#detail-body.readonly .chip{pointer-events:none;opacity:.75}
+#detail-body.readonly textarea[readonly], #detail-body.readonly input[readonly]{background:var(--bg-soft,#f6f7f9)}

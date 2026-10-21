@@ -706,7 +706,7 @@ test("someone else's meeting is read-only, with their name, and play still works
   const banner = doc.getElementById("lock-banner");
   assert.ok(banner, "banner shown");
   assert.match(banner.textContent, /Being edited by Ann/);
-  assert.equal(doc.getElementById("fix-from").disabled, true);
+  assert.equal(doc.getElementById("fix-from").readOnly, true, "text stays selectable for copying");
   assert.equal(doc.getElementById("btn-report").disabled, true);
   assert.equal(doc.querySelector("#report-box .sec-play").disabled, false);
   assert.equal(doc.getElementById("btn-report-print").disabled, false);
@@ -727,11 +727,90 @@ test("a write refused because someone else took the meeting turns the page read-
   await w.eval("saveItemField(state.items[0], { notes: 'x' })");
   await flush();
   assert.match(doc.getElementById("lock-banner").textContent, /Being edited by Bob/);
-  assert.equal(doc.getElementById("fix-from").disabled, true);
+  assert.equal(doc.getElementById("fix-from").readOnly, true);
 });
 
-test("leaving a meeting lets go of its lock", { skip }, () => {
+test("leaving a meeting lets go of its lock", { skip }, async () => {
   const { w, calls } = boot();
-  w.eval("state.lock = { held: true, holder: { email: '', name: '' } }; showList()");
+  w.eval("state.lock = { held: true, holder: { email: '', name: '' } }; lockMeetingId = 42; showList()");
+  await flush();
   assert.ok(calls.some((c: any) => c.method === "DELETE" && c.path === "/api/meetings/42/lock"));
+});
+
+// ── Edit lock: losing it never loses work ───────────────────────────────────
+
+function stubFetch(w: any, route: (path: string, opts: any) => any) {
+  const calls: Array<{ path: string; method: string; body: any }> = [];
+  w.fetch = (path: string, opts: any = {}) => {
+    const body = typeof opts.body === "string" ? JSON.parse(opts.body) : undefined;
+    calls.push({ path, method: opts.method ?? "GET", body });
+    const a = route(path, opts) ?? { ok: true };
+    return Promise.resolve({ ok: a.ok !== false, status: a.status ?? 200, json: () => Promise.resolve(a) });
+  };
+  return calls;
+}
+
+test("losing the lock keeps what you were typing on screen", { skip }, async () => {
+  const { w, doc } = boot();
+  w.eval("state.lock = { held: true, holder: { email: 'me@x', name: 'Me' } }; renderDetail();");
+  doc.getElementById("nt-1").value = "Half-typed notes about the roof";
+  stubFetch(w, (p) => p.endsWith("/lock") ? { ok: true, held: false, holder: { email: "b@x", name: "Bob" } } : { ok: true });
+  w.eval("lockHeartbeat()");
+  await flush();
+  assert.match(doc.getElementById("lock-banner").textContent, /Being edited by Bob/);
+  assert.equal(doc.getElementById("nt-1").value, "Half-typed notes about the roof");
+  assert.match(doc.getElementById("lock-banner").textContent, /copy anything you haven’t saved/);
+});
+
+test("the heartbeat says when you've been typing or are recording", { skip }, async () => {
+  const { w, doc } = boot();
+  w.eval("state.lock = { held: true, holder: { email: 'me@x', name: 'Me' } }; renderDetail();");
+  const calls = stubFetch(w, (p) => p.endsWith("/lock") ? { ok: true, held: true, holder: {} } : { ok: true });
+  w.eval("lockHeartbeat()");
+  await flush();
+  doc.getElementById("nt-1").dispatchEvent(new w.Event("input", { bubbles: true }));
+  w.eval("lockHeartbeat()");
+  await flush();
+  const beats = calls.filter((c) => c.path.endsWith("/lock")).map((c) => c.body);
+  assert.deepEqual(beats, [{ active: false, recording: false }, { active: true, recording: false }]);
+});
+
+test("read-only chips can't be toggled", { skip }, async () => {
+  const { w, doc } = boot();
+  w.eval(`state.people = [{ id: 7, name: "Ann", active: true }]; state.peopleById = { 7: state.people[0] };
+    state.lock = { held: false, holder: { name: "Bob" } }; renderDetail();`);
+  const calls = stubFetch(w, () => ({ ok: true }));
+  const chip = doc.querySelector("#attendee-chips .chip");
+  assert.ok(chip, "an attendee chip");
+  chip.dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  await flush();
+  assert.equal(calls.filter((c) => c.method === "PUT").length, 0);
+  assert.deepEqual(Array.from(w.eval("state.attendeeIds")), []);
+});
+
+test("a refused upload also turns the page read-only", { skip }, async () => {
+  const { w, doc } = boot();
+  w.eval("renderDetail()");
+  stubFetch(w, () => ({ ok: false, status: 423, locked: true, holder: "Bob", error: "Bob is editing this meeting." }));
+  await w.eval("apiForm('/api/meetings/42/agenda', new FormData())");
+  await flush();
+  assert.match(doc.getElementById("lock-banner").textContent, /Bob/);
+});
+
+test("a viewer opening and closing topics asks for no summaries", { skip }, async () => {
+  const { w } = boot();
+  w.eval(`state.items[0].notes = "some notes"; state.lock = { held: false, holder: { name: "Bob" } }; renderDetail();`);
+  const calls = stubFetch(w, () => ({ ok: true }));
+  await w.eval("summarizeIfNeeded(state.items[0])");
+  assert.equal(calls.length, 0);
+});
+
+test("going back to the list mid-recording keeps the recorder's lock", { skip }, () => {
+  const { w } = boot();
+  const calls = stubFetch(w, () => ({ ok: true }));
+  w.eval(`state.lock = { held: true, holder: {} }; lockMeetingId = 42;
+    meetingRec = { meetingId: 42, recordingId: 7, title: "x", mr: { state: "recording", stop(){}, requestData(){} }, stream: { getTracks(){ return []; } }, t0: 0 };
+    stopRecording = function(){};
+    showList();`);
+  assert.ok(!calls.some((c) => c.method === "DELETE"), "lock kept while recording");
 });

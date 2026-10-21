@@ -5,18 +5,24 @@ import { acquireLock } from "./locks";
 
 // Every write on a meeting goes through its lock: the first person to change
 // something takes the lock if it is free, and anyone else is refused with 423
-// while it is held. Recording uploads are exempt — a two-hour recording must
-// never lose a chunk to a lock — and so are reads and creating a meeting.
+// while it is held. Recording uploads are never refused (see RECORDING below),
+// and reads and creating a meeting don't take part.
 
 const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 const EXEMPT = new Set([
   "POST /api/meetings",
-  "POST /api/meeting-recordings/:rid/chunk",
-  "POST /api/meeting-recordings/:rid/marker",
-  "POST /api/meeting-recordings/:rid/finish",
   // The lock routes manage the lock themselves.
   "POST /api/meetings/:id/lock",
   "DELETE /api/meetings/:id/lock",
+]);
+// Recorded audio is never refused: losing a recording to the lock would be
+// worse than any clash. These uploads keep the recorder's lock alive, take it
+// when it is free, and leave someone else's alone.
+const RECORDING = new Set([
+  "POST /api/meeting-recordings/:rid/chunk",
+  "POST /api/meeting-recordings/:rid/marker",
+  "POST /api/meeting-recordings/:rid/finish",
+  "POST /api/items/:itemId/transcribe",
 ]);
 
 // The meeting a request writes to, from whichever id its route carries.
@@ -42,7 +48,7 @@ export function lockGuard(pool: Pool) {
     if (!exists.rows[0]) return; // the route answers 404 itself
     const who = getIdentity(req);
     const r = await acquireLock(pool, Number(meetingId), who, { edit: true });
-    if (r.held) return;
+    if (r.held || RECORDING.has(`${req.method} ${route}`)) return;
     const holder = r.lock.name || r.lock.email || "Someone else";
     reply.code(423).send({ ok: false, locked: true, holder, error: `${holder} is editing this meeting.` });
     return reply;

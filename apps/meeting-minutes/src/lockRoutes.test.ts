@@ -78,3 +78,42 @@ test("creating a meeting and reading one are never locked", { skip: !url }, asyn
   const made = await app.inject({ method: "POST", url: "/api/meetings", headers: B, payload: { title: "New" } });
   assert.equal(made.statusCode, 200);
 });
+
+const old = new Date(Date.now() - 20 * 60_000);
+async function lockedByAnnLongAgo(id: number) {
+  await app.inject({ method: "POST", url: `/api/meetings/${id}/lock`, headers: A });
+  await pool.query("UPDATE meeting_locks SET edited_at = $2 WHERE meeting_id = $1", [id, old]);
+}
+
+test("recording uploads keep the recorder's lock alive and never take someone else's", { skip: !url }, async () => {
+  await setup();
+  const { id, rec } = await meetingWithItem();
+  await lockedByAnnLongAgo(id);
+  await app.inject({ method: "POST", url: `/api/meeting-recordings/${rec}/marker`, headers: A, payload: { itemId: 0, atSeconds: 1 } });
+  const edited = (await pool.query("SELECT edited_at FROM meeting_locks WHERE meeting_id = $1", [id])).rows[0].edited_at;
+  assert.ok(new Date(edited).getTime() > old.getTime() + 60_000, "the recorder's upload counts as activity");
+  await app.inject({ method: "POST", url: `/api/meeting-recordings/${rec}/marker`, headers: B, payload: { itemId: 0, atSeconds: 2 } });
+  assert.equal((await pool.query("SELECT email FROM meeting_locks WHERE meeting_id = $1", [id])).rows[0].email, "a@x");
+});
+
+test("a heartbeat while typing or recording counts as activity; a bare one doesn't", { skip: !url }, async () => {
+  await setup();
+  const { id } = await meetingWithItem();
+  await lockedByAnnLongAgo(id);
+  await app.inject({ method: "POST", url: `/api/meetings/${id}/lock`, headers: A, payload: {} });
+  const bare = JSON.parse((await app.inject({ method: "POST", url: `/api/meetings/${id}/lock`, headers: B })).body);
+  assert.equal(bare.held, true, "idle lapsed: Bob takes it");
+  await lockedByAnnLongAgo(id);
+  await pool.query("UPDATE meeting_locks SET email = 'a@x', name = 'Ann' WHERE meeting_id = $1", [id]);
+  await app.inject({ method: "POST", url: `/api/meetings/${id}/lock`, headers: A, payload: { active: true } });
+  const busy = JSON.parse((await app.inject({ method: "POST", url: `/api/meetings/${id}/lock`, headers: B })).body);
+  assert.equal(busy.held, false, "Ann is typing: Bob can't take it");
+});
+
+test("uploading a topic's recorded audio is never refused by the lock", { skip: !url }, async () => {
+  await setup();
+  const { id, item } = await meetingWithItem();
+  await app.inject({ method: "POST", url: `/api/meetings/${id}/lock`, headers: A });
+  const r = await app.inject({ method: "POST", url: `/api/items/${item}/transcribe`, headers: B, payload: "" });
+  assert.notEqual(r.statusCode, 423);
+});

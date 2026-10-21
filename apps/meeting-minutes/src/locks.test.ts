@@ -78,3 +78,28 @@ test("an edit keeps the lock from going idle; a heartbeat alone does not", { ski
     assert.equal((await getLock(pool, id, at(17 * 60_000)))!.live, true);
   } finally { await pool.end(); }
 });
+
+test("while the recording is still processing, the lock isn't lost for idleness", { skip: !url }, async () => {
+  const pool = new Pool({ connectionString: url });
+  try {
+    const id = await fresh(pool);
+    await acquireLock(pool, id, A, { now: T0 });
+    await pool.query("UPDATE meeting_locks SET heartbeat_at = $2 WHERE meeting_id = $1", [id, at(20 * 60_000)]);
+    for (const status of ["recording", "queued", "processing"]) {
+      await pool.query("UPDATE meetings SET recording_status = $2 WHERE id = $1", [id, status]);
+      assert.equal((await getLock(pool, id, at(20 * 60_000)))!.live, true, status);
+    }
+    await pool.query("UPDATE meetings SET recording_status = 'done' WHERE id = $1", [id]);
+    assert.equal((await getLock(pool, id, at(20 * 60_000)))!.live, false);
+  } finally { await pool.end(); }
+});
+
+test("a lock released mid-acquire is simply taken", { skip: !url }, async () => {
+  const pool = new Pool({ connectionString: url });
+  try {
+    const id = await fresh(pool);
+    await acquireLock(pool, id, A);
+    const [r] = await Promise.all([acquireLock(pool, id, B), releaseLock(pool, id, "a@x")]);
+    assert.ok(r.lock, "no crash");
+  } finally { await pool.end(); }
+});
