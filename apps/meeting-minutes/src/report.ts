@@ -249,7 +249,7 @@ export function reportHtml(markdown: string, title: string): string {
   const out: string[] = [];
   let inList = false;
   const closeList = () => { if (inList) { out.push("</ul>"); inList = false; } };
-  for (const ln of markdown.split(/\r?\n/)) {
+  for (const ln of stripRangeMarkers(markdown).split(/\r?\n/)) {
     const h = /^(#{1,4})\s+(.*)$/.exec(ln);
     if (h) { closeList(); out.push(`<h${h[1].length}>${inlineHtml(h[2])}</h${h[1].length}>`); continue; }
     const b = /^\s*[-*]\s+(?:\[ \]\s+)?(.*)$/.exec(ln);

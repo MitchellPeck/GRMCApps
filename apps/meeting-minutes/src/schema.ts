@@ -139,6 +139,10 @@ ALTER TABLE meetings ADD COLUMN IF NOT EXISTS report_error text NOT NULL DEFAULT
 -- Fingerprints of what the saved report was built from (see report.ts).
 ALTER TABLE meetings ADD COLUMN IF NOT EXISTS report_sources jsonb NOT NULL DEFAULT '{}';
 
+-- When the report text last changed: written, or edited by hand or by chat.
+-- Later than report_generated_at means the minutes have been edited.
+ALTER TABLE meetings ADD COLUMN IF NOT EXISTS report_updated_at timestamptz;
+
 -- People at one meeting who are not in the library: visitors, speakers.
 -- Guests are present by definition.
 CREATE TABLE IF NOT EXISTS meeting_guests (

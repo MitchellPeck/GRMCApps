@@ -6,6 +6,7 @@ import { getIdentity } from "../identity";
 import { config } from "../config";
 import { extractAgendaItems, isSupportedAgendaType } from "../claude";
 import { reportHtml } from "../report";
+import { stripRangeMarkers } from "../ranges";
 import {
   EDIT_SUMMARY_DELAY_MS, itemHasContent, reportState, requestReport, requestSummary,
 } from "../minutesWork";
@@ -21,7 +22,7 @@ import {
   listAgendaItems, getAgendaItem, updateAgendaItem, deleteAgendaItem,
   setTranscribeStatus, listItemStatuses, reportFileName,
   setMeetingRecordingStatus, addTopicMarker, rewriteMeetingSpeakerMap,
-  listGuests, addGuest, removeGuest,
+  listGuests, addGuest, removeGuest, reportEdited, saveReportEdit,
 } from "../meetings";
 import { enqueueTranscription, enqueueStoredRecording, enqueueMeetingProcessing } from "../transcribeQueue";
 import {
@@ -533,6 +534,11 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
     if (!meeting) { reply.code(404); return { ok: false, error: "Meeting not found." }; }
     const items = await listAgendaItems(pool, id);
     if (!items.length) { reply.code(422); return { ok: false, error: "Add agenda items before generating a report." }; }
+    const b = (req.body ?? {}) as { replaceEdits?: unknown };
+    if (reportEdited(meeting) && b.replaceEdits !== true) {
+      reply.code(409);
+      return { ok: false, edited: true, error: "Regenerating replaces the edits you've made to these minutes." };
+    }
     await requestReport(id);
     const after = await getMeeting(pool, id);
     if (!after) { reply.code(404); return { ok: false, error: "Meeting not found." }; }
@@ -541,6 +547,22 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
       report: await reportState(pool, after),
       markdown: after.report_status === "idle" ? after.report : undefined,
     };
+  });
+
+  // Save the minutes after editing them on the page.
+  app.put("/api/meetings/:id/report", async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    const meeting = Number.isFinite(id) ? await getMeeting(pool, id) : null;
+    if (!meeting) { reply.code(404); return { ok: false, error: "Meeting not found." }; }
+    const b = (req.body ?? {}) as { markdown?: unknown };
+    if (typeof b.markdown !== "string") { reply.code(400); return { ok: false, error: "markdown must be text." }; }
+    if (meeting.report_status === "pending") {
+      reply.code(409); return { ok: false, error: "The report is being written. Try again when it finishes." };
+    }
+    if (!meeting.report_generated_at) { reply.code(409); return { ok: false, error: "Generate the report first." }; }
+    await saveReportEdit(pool, id, b.markdown);
+    const after = await getMeeting(pool, id);
+    return { ok: true, report: await reportState(pool, after!) };
   });
 
   // "Open in Google Docs": opened in its own tab. Sends the user through
@@ -560,10 +582,12 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
     const { email } = getIdentity(req);
     if (!email) return messagePage(reply, 401, "Not signed in", "Sign in through the GRMC hub and try again.");
 
-    // The same report opened twice goes to the same Doc.
+    // The same report opened twice goes to the same Doc; once it has been
+    // edited, the next export is a new Doc with the edits.
+    const reportAt = meeting.report_updated_at ?? meeting.report_generated_at;
     const existing = await pool.query(
       "SELECT doc_url FROM report_docs WHERE meeting_id = $1 AND email = $2 AND report_at = $3",
-      [id, email, meeting.report_generated_at]
+      [id, email, reportAt]
     );
     if (existing.rows[0]) return reply.redirect(existing.rows[0].doc_url);
 
@@ -574,7 +598,7 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
       await pool.query(
         `INSERT INTO report_docs (meeting_id, email, doc_url, report_at) VALUES ($1, $2, $3, $4)
          ON CONFLICT (meeting_id, email) DO UPDATE SET doc_url = $3, report_at = $4`,
-        [id, email, url, meeting.report_generated_at]
+        [id, email, url, reportAt]
       );
       return reply.redirect(url);
     } catch (e) {
@@ -615,6 +639,6 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
     if (!meeting.report) { reply.code(404); return { ok: false, error: "No report has been generated yet." }; }
     reply.header("content-type", "text/markdown; charset=utf-8");
     reply.header("content-disposition", `attachment; filename="${reportFileName(meeting.title, meeting.meeting_date)}"`);
-    return reply.send(meeting.report);
+    return reply.send(stripRangeMarkers(meeting.report));
   });
 }

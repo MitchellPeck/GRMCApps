@@ -7,10 +7,10 @@ import { transcriptForAi } from "./transcript";
 import { AudioRange, segmentsRange } from "./ranges";
 import { latestMeetingRecording, listRecordings } from "./recordings";
 import { chronologicalSpeakerOrder } from "./segmentation";
-import { buildReport, reportBodyInput, reportChanges, ReportInput, reportSources, ReportSources } from "./report";
+import { buildReport, estimatePages, reportBodyInput, reportChanges, ReportInput, reportSources, ReportSources } from "./report";
 import {
   AgendaItem, MeetingRow, getAgendaItem, getAttendeeIds, getMeeting, itemPresenterNames, listAgendaItems, listGuests,
-  listPendingReports, listUnfinishedSummaries, saveReport, setAttendees, setReportStatus,
+  listPendingReports, listUnfinishedSummaries, reportEdited, saveReport, setAttendees, setReportStatus,
   setSummarizeStatus, updateAgendaItem,
 } from "./meetings";
 
@@ -292,6 +292,9 @@ export interface ReportState {
   error: string;
   generatedAt: string | null;
   changes: string[]; // empty when the saved report matches the meeting
+  edited: boolean; // changed by hand or chat since it was generated
+  updatedAt: string | null;
+  pages: number; // rough printed length
 }
 
 export async function reportState(dbPool: Pool, meeting: MeetingRow): Promise<ReportState> {
@@ -311,6 +314,9 @@ export async function reportState(dbPool: Pool, meeting: MeetingRow): Promise<Re
     error: meeting.report_error,
     generatedAt: meeting.report_generated_at,
     changes,
+    edited: reportEdited(meeting),
+    updatedAt: meeting.report_updated_at,
+    pages: estimatePages(meeting.report),
   };
 }
 

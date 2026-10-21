@@ -176,3 +176,14 @@ test("the report is written from the timed transcript when there is one", () => 
   assert.equal(body.items[0].transcript, "[0:01] Bob: hi");
   assert.equal(body.items[1].transcript, "Ann: edited");
 });
+
+test("reportHtml never shows range markers", () => {
+  const html = reportHtml("### 1. Budget <!--t:m12:600.0-1200.0-->\n- [ ] Send — **Bob** <!--t:m12:700.0-720.0-->", "x");
+  assert.doesNotMatch(html, /<!--t:|t:m12/);
+  assert.match(html, /<h3>1\. Budget<\/h3>/);
+});
+
+test("reportHtml is unchanged for a report without markers", () => {
+  const md = "# Board\n\n## Summary\nMet.\n- [ ] Send — **Bob**";
+  assert.match(reportHtml(md, "x"), /<li>☐ Send — <strong>Bob<\/strong><\/li>/);
+});

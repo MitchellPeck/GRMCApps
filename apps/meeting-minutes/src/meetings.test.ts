@@ -8,7 +8,7 @@ import {
   listAgendaItems, getAgendaItem, updateAgendaItem, deleteAgendaItem, saveReport,
   setTranscribeStatus, listUnfinishedTranscriptions, listItemStatuses, reportFileName,
   setMeetingRecordingStatus, listUnfinishedMeetingProcessing, addTopicMarker,
-  listTopicMarkers, setMeetingSpeakerMap, rewriteMeetingSpeakerMap,
+  listTopicMarkers, setMeetingSpeakerMap, rewriteMeetingSpeakerMap, saveReportEdit, reportEdited,
 } from "./meetings";
 import { appendMeetingChunk, getMeetingRecording } from "./recordings";
 
@@ -465,4 +465,29 @@ test("guests can present agenda items, only at their own meeting", { skip: !url 
   await removeGuest(pool, (g as any).id);
   assert.deepEqual((await getAgendaItem(pool, iid))!.guest_presenter_ids, [], "removing the guest removes the presenter");
   await pool.end();
+});
+
+test("an edited report keeps its generation time and reads as edited", { skip: !url }, async () => {
+  const pool = new Pool({ connectionString: url });
+  await reset(pool);
+  try {
+    const m = await createMeeting(pool, { title: "Edits", meetingDate: "", location: "", description: "", email: "", name: "" });
+    assert.ok(m.ok);
+    await saveReport(pool, m.id, "# A");
+    const generated = (await getMeeting(pool, m.id))!;
+    assert.equal(reportEdited(generated), false);
+    assert.ok(generated.report_updated_at);
+
+    await saveReportEdit(pool, m.id, "# B");
+    const edited = (await getMeeting(pool, m.id))!;
+    assert.equal(edited.report, "# B");
+    assert.equal(String(edited.report_generated_at), String(generated.report_generated_at));
+    assert.deepEqual(edited.report_sources, generated.report_sources);
+    assert.equal(reportEdited(edited), true);
+
+    await saveReport(pool, m.id, "# C");
+    assert.equal(reportEdited((await getMeeting(pool, m.id))!), false);
+  } finally {
+    await pool.end();
+  }
 });

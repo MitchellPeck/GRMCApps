@@ -19,6 +19,7 @@ export interface MeetingRow {
   agenda_file_name: string;
   report: string;
   report_generated_at: string | null;
+  report_updated_at: string | null;
   recording_status: MeetingRecordingStatus;
   recording_error: string;
   speaker_map: SpeakerMap;
@@ -493,11 +494,25 @@ export async function saveReport(
 ): Promise<void> {
   await pool.query(
     `UPDATE meetings
-        SET report = $2, report_sources = $3, report_generated_at = now(), status = 'completed',
+        SET report = $2, report_sources = $3, report_generated_at = now(), report_updated_at = now(), status = 'completed',
             report_status = 'idle', report_error = '', updated_at = now()
       WHERE id = $1`,
     [meetingId, report, JSON.stringify(sources)]
   );
+}
+
+// The minutes after editing. What they were generated from, and when, stay.
+export async function saveReportEdit(pool: Pool, meetingId: number, markdown: string): Promise<void> {
+  await pool.query(
+    "UPDATE meetings SET report = $2, report_updated_at = clock_timestamp(), updated_at = now() WHERE id = $1",
+    [meetingId, markdown]
+  );
+}
+
+// Whether the minutes have changed since they were generated.
+export function reportEdited(m: Pick<MeetingRow, "report_generated_at" | "report_updated_at">): boolean {
+  if (!m.report_generated_at || !m.report_updated_at) return false;
+  return new Date(m.report_updated_at).getTime() > new Date(m.report_generated_at).getTime();
 }
 
 // Any status other than `error` clears the stored error message.
