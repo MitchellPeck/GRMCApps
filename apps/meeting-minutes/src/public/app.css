@@ -332,3 +332,32 @@ body.has-rec-banner .chat-panel{top:64px}
    by side; the other sections keep a comfortable reading width. */
 #view-detail.layout{max-width:1220px}
 .mtg-main > section:not([data-sec="minutes"]), .mtg-head{max-width:760px}
+
+/* ── Mini player ────────────────────────────────────────────────────────── */
+.mini-player{position:fixed;right:16px;bottom:calc(16px + env(safe-area-inset-bottom,0px));z-index:70;width:340px;max-width:calc(100vw - 32px);
+  background:var(--navy);color:#fff;border-radius:var(--r-lg);box-shadow:var(--shadow-lg);padding:10px 12px;display:flex;flex-direction:column;gap:6px}
+.mini-player[hidden]{display:none}
+.mp-top{display:flex;align-items:center;gap:8px}
+.mp-label{flex:1;min-width:0;font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mp-row{display:flex;align-items:center;gap:6px}
+.mp-btn{background:rgba(255,255,255,.12);border:none;color:#fff;border-radius:6px;padding:4px 8px;font:inherit;font-size:12px;cursor:pointer;white-space:nowrap}
+.mp-btn:hover{background:rgba(255,255,255,.22)}
+.mp-main{font-size:14px;min-width:40px}
+.mp-close{padding:3px 7px}
+.mp-time{flex:1;text-align:center;font-size:12px;font-variant-numeric:tabular-nums;opacity:.85}
+.mp-seek{width:100%;accent-color:var(--gold)}
+.mp-volume{width:64px;accent-color:var(--gold)}
+body.has-mini-player .layout{padding-bottom:150px}
+@media (max-width:720px){ .mini-player{left:16px;right:16px;width:auto} }
+
+/* Wider pages: the minutes (with the chat) use the room; other sections read
+   comfortably. */
+#view-detail.layout{max-width:1480px}
+.mtg-main > section:not([data-sec="minutes"]), .mtg-head{max-width:880px}
+.minutes-layout:has(.chat-panel:not([hidden])){grid-template-columns:minmax(0,1fr) minmax(300px,380px)}
+@media (max-width:720px){
+  .minutes-layout,.minutes-layout:has(.chat-panel:not([hidden])){display:flex;flex-direction:column}
+  .chat-panel{order:-1;max-height:60vh}
+}
+.chat-title{display:flex;align-items:center;gap:8px;justify-content:space-between}
+.chat-card.confirm{background:var(--pending-bg);color:var(--pending-fg)}

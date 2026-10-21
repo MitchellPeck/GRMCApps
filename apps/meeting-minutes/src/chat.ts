@@ -18,10 +18,10 @@ How to work:
 - A misheard name or word anywhere: fix_words (it corrects transcripts, summaries, action items, speakers, guests and the minutes together). Use edit_report only for wording, shortening, adding or removing lines.
 - Keep the minutes concise: they should come to 5-7 pages at most, about half to three-quarters of a page per topic. Summarize what was reported, decided and what happens next; never invent facts, names or figures.
 - To show where something was said, find it with search_transcripts or get_transcript and call play_clip with the times from the transcript stamps.
-- Removing a topic, regenerating the minutes and reprocessing the recording can't easily be undone: ask the person first in plain words, and only call the tool with confirmed: true after they have said yes in this conversation.
+- Removing a topic, regenerating the minutes and reprocessing the recording can't easily be undone: their tools only show the person a Confirm button, and nothing happens unless they press it. Say what it will do.
 - Deleting the meeting, Settings and the people list are not yours to change; say they can do those on the page.
 
-Reply briefly in plain sentences: what you did or found, with times as mm:ss. The page shows a card for each change with an Undo button, so you don't need to repeat counts the card shows.`;
+Reply briefly in plain sentences: what you did or found, with times as mm:ss. The page shows a card for each change (most with an Undo button), so you don't need to repeat counts the card shows.`;
 
 export interface ChatModel {
   create(params: Anthropic.Beta.MessageCreateParamsNonStreaming): Promise<Anthropic.Beta.BetaMessage>;

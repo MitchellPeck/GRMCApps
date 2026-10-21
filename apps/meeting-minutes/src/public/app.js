@@ -315,7 +315,7 @@ function applyReadOnly(){
     +(state.lockDrafts ? ' What you were typing is still on screen: copy anything you haven’t saved.' : '');
   body.insertBefore(b, body.firstChild);
   body.querySelectorAll('input, textarea, select, button').forEach(function(el){
-    if(el.matches('.sec-play, .spk-play, #btn-report-print, #mtg-nav-select')) return;
+    if(el.matches('.sec-play, .spk-play, #btn-report-print, #mtg-nav-select, .rec-topic, [id^="mp-"]')) return;
     // A recording running on this page can always be stopped and saved.
     if(activeRec && activeRec.btn===el) return;
     if(meetingRec && el.id==='btn-meeting-rec') return;
@@ -554,8 +554,11 @@ function openMeeting(id){
 function refreshMeeting(mid){
   api('/api/meetings/'+mid).then(function(det){
     if(!det.ok || !det.meeting || !state.meeting || state.meeting.id!==mid) return;
+    var drafts=captureDrafts();
     loadMeetingState(det);
-    renderDetail();
+    renderDetail(); restoreDrafts(drafts);
+    // Work the change set off (summaries, a report, processing) shows landing.
+    if(typeof anyPendingWork==='function' && anyPendingWork()) startPolling();
   });
 }
 function loadMeetingState(det){
@@ -616,7 +619,7 @@ function renderDetail(){
     +state.items.map(function(it, i){ return '<option value="'+it.id+'">'+(i+1)+'. '+esc(it.title)+'</option>'; }).join('')
     +'</select>'
     +'<button class="btn btn-secondary btn-sm" id="btn-fix-preview">Check</button>'
-    +'<button class="btn btn-primary btn-sm" id="btn-fix-apply">Fix</button>'
+    +'<button class="btn btn-primary btn-sm" id="btn-fix-apply" disabled title="Check first">Fix</button>'
     +'</div><div id="fix-msg"></div><div id="fix-result">'+(state.lastFix ? fixResultHtml(state.lastFix) : '')+'</div></div>';
 
   h+='</section>';
@@ -675,7 +678,9 @@ function renderDetail(){
 
   renderDetailsCard();
   document.getElementById('btn-roll-all').addEventListener('click', function(){
-    setAttendance(state.people.filter(function(p){ return p.active; }).map(function(p){ return p.id; }));
+    var ids=state.people.filter(function(p){ return p.active; }).map(function(p){ return p.id; });
+    state.attendeeIds.forEach(function(id){ if(ids.indexOf(id)<0) ids.push(id); });
+    setAttendance(ids);
   });
   document.getElementById('btn-roll-clear').addEventListener('click', function(){ setAttendance([]); });
   document.getElementById('btn-upload-agenda').addEventListener('click', uploadAgenda);
@@ -687,6 +692,11 @@ function renderDetail(){
   document.getElementById('btn-report').addEventListener('click', generateReport);
   document.getElementById('btn-fix-preview').addEventListener('click', function(){ runFix(true); });
   document.getElementById('btn-fix-apply').addEventListener('click', function(){ runFix(false); });
+  ['fix-from','fix-to','fix-scope'].forEach(function(id){
+    var el=document.getElementById(id);
+    el.addEventListener('input', syncFixApply); el.addEventListener('change', syncFixApply);
+  });
+  syncFixApply();
   document.getElementById('btn-report-cancel').addEventListener('click', cancelReport);
   document.getElementById('btn-report-print').addEventListener('click', function(){ window.print(); });
   document.getElementById('btn-add-guest').addEventListener('click', addGuest);
@@ -730,7 +740,7 @@ function estimatePagesJS(md){
   return words ? Math.max(0.5, Math.round(words/400*2)/2) : 0;
 }
 function reportEditable(){
-  return !!(state.meeting && state.meeting.report) && !readOnly()
+  return !!(state.meeting && state.meeting.report) && !readOnly() && !state.chatSending
     && !(state.report && state.report.status==='pending');
 }
 function reportEditorHtml(){
@@ -867,7 +877,8 @@ document.addEventListener('click', function(e){
 function renderChatPanel(){
   var el=document.getElementById('chat-panel'); if(!el || !state.meeting) return;
   el.hidden=false;
-  el.innerHTML='<div class="chat-head"><b>Ask or tell it what to fix</b>'
+  el.innerHTML='<div class="chat-head"><div class="chat-title"><b>Ask or tell it what to fix</b>'
+    +'<button type="button" class="btn-sm" id="btn-chat-reset" title="Start a new conversation">Start over</button></div>'
     +'<div class="hint">“It’s Jon, not John”, “Shorten item 3”, “Play where they voted on the budget”.</div></div>'
     +'<div class="chat-log" id="chat-log" aria-live="polite"></div>'
     +'<div class="chat-compose"><textarea id="chat-input" rows="2" placeholder="Type a message…"></textarea>'
@@ -879,6 +890,7 @@ function renderChatPanel(){
     if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); sendChat(); }
   });
   document.getElementById('btn-chat-send').addEventListener('click', sendChat);
+  document.getElementById('btn-chat-reset').addEventListener('click', resetChat);
   renderChatLog();
 }
 function chatCardHtml(c){
@@ -888,6 +900,13 @@ function chatCardHtml(c){
       +'" data-start="'+esc(c.start)+'" data-end="'+esc(c.end)+'" title="Play '+span+'">&#9654;</button>'
       +'<span><b>'+esc(c.topic||'')+'</b> <span class="sec-time">'+span+'</span>'
       +(c.quote?'<span class="chat-quote">“'+esc(c.quote)+'”</span>':'')+'</span></div>';
+  }
+  if(c.kind==='confirm'){
+    return '<div class="chat-card confirm'+(c.done?' undone':'')+'"><span>'+esc(c.label)+'</span>'
+      +(c.done ? '<span class="hint">Done</span>'
+        : '<button type="button" class="btn-sm chat-confirm" data-action="'+esc(c.action)+'"'
+          +(c.itemId!=null?' data-item="'+esc(c.itemId)+'"':'')+(c.recordingId!=null?' data-rec="'+esc(c.recordingId)+'"':'')+'>Confirm</button>')
+      +'</div>';
   }
   return '<div class="chat-card change'+(c.undone?' undone':'')+'"><span>'+esc(c.summary)+'</span>'
     +(c.undone ? '<span class="hint">Undone</span>'
@@ -904,48 +923,95 @@ function renderChatLog(){
     : '<div class="empty-hint">Nothing asked yet.</div>';
   log.scrollTop=log.scrollHeight;
 }
+var CHAT_POLL_MS=2000;
+function changeCardCount(msgs){
+  return (msgs||[]).reduce(function(n, m){ return n+(m.cards||[]).filter(function(c){ return c.kind==='change'; }).length; }, 0);
+}
 function loadChat(){
   if(!state.meeting) return;
   var mid=state.meeting.id;
   api('/api/meetings/'+mid+'/chat').then(function(res){
-    if(!res.ok || !state.meeting || state.meeting.id!==mid || state.chatSending) return;
-    state.chat=res.messages||[];
+    if(!res.ok || !state.meeting || state.meeting.id!==mid) return;
+    if(!state.chatSending) state.chat=res.messages||[];
+    // A message sent before the page was (re)opened is still being worked on.
+    if(res.working && !state.chatSending){ state.chatSending=true; pollChat(mid, changeCardCount(state.chat)); }
     renderChatLog();
   });
+}
+// Until the turn finishes: then show it, and refresh the page if it changed
+// anything.
+function pollChat(mid, cardsBefore){
+  setTimeout(function(){
+    if(!state.meeting || state.meeting.id!==mid){ state.chatSending=false; return; }
+    api('/api/meetings/'+mid+'/chat').then(function(res){
+      if(!state.meeting || state.meeting.id!==mid){ state.chatSending=false; return; }
+      if(res.ok && res.working){ pollChat(mid, cardsBefore); return; }
+      state.chatSending=false;
+      setBtn('btn-chat-send', false);
+      if(res.ok) state.chat=res.messages||[];
+      renderChatLog();
+      renderReportEditor();
+      if(res.ok && changeCardCount(state.chat)>cardsBefore) refreshMeeting(mid);
+    }, function(){ pollChat(mid, cardsBefore); });
+  }, CHAT_POLL_MS);
+}
+function chatFailed(text, error){
+  state.chatSending=false; setBtn('btn-chat-send', false);
+  state.chat.push({ role:'assistant', text:error, cards:[], error:true });
+  state.chatDraft=text; var inp=document.getElementById('chat-input'); if(inp) inp.value=text;
+  renderChatLog(); renderReportEditor();
 }
 function sendChat(){
   var input=document.getElementById('chat-input');
   var text=input ? input.value.trim() : '';
   if(!text || state.chatSending || readOnly()) return;
-  var mid=state.meeting.id;
+  var mid=state.meeting.id, before=changeCardCount(state.chat);
   state.chat=(state.chat||[]).concat([{ role:'user', text:text, cards:[] }]);
-  state.chatSending=true; state.chatDraft=''; input.value='';
+  state.chatDraft=''; input.value='';
   setBtn('btn-chat-send', true, 'Sending…');
-  renderChatLog();
-  // The chat can change the minutes on the server: save any edit first.
+  // The chat can change the minutes on the server: save any edit first, and
+  // keep the editor shut until it's done.
+  if(commitOpenLine) commitOpenLine();
+  state.chatSending=true; renderReportEditor();
   flushReportSave().then(function(){
     return api('/api/meetings/'+mid+'/chat', { method:'POST', body:{ message:text } });
   }).then(function(res){
-    state.chatSending=false;
-    if(!state.meeting || state.meeting.id!==mid) return;
-    setBtn('btn-chat-send', false);
-    if(!res.ok){
-      state.chat.push({ role:'assistant', text:res.error||'Something went wrong.', cards:[], error:true });
-      state.chatDraft=text;
-      var inp=document.getElementById('chat-input'); if(inp) inp.value=text;
-      renderChatLog();
-      return;
-    }
-    state.chat.push({ role:'assistant', text:res.reply||'', cards:res.cards||[] });
-    renderChatLog();
-    if((res.cards||[]).some(function(c){ return c.kind==='change'; })) refreshMeeting(mid);
-  }, function(){
-    state.chatSending=false; setBtn('btn-chat-send', false);
-    state.chat.push({ role:'assistant', text:'Couldn’t reach the server. Check your connection and try again.', cards:[], error:true });
-    state.chatDraft=text; var inp=document.getElementById('chat-input'); if(inp) inp.value=text;
-    renderChatLog();
+    if(!state.meeting || state.meeting.id!==mid){ state.chatSending=false; return; }
+    if(!res.ok){ chatFailed(text, res.error||'Something went wrong.'); return; }
+    pollChat(mid, before);
+  }, function(){ chatFailed(text, 'Couldn’t reach the server. Check your connection and try again.'); });
+  renderChatLog();
+}
+function resetChat(){
+  if(!state.meeting || state.chatSending) return;
+  if(!confirm('Start a new conversation? The chat forgets this one; changes it made stay.')) return;
+  var mid=state.meeting.id;
+  api('/api/meetings/'+mid+'/chat/reset', { method:'POST' }).then(function(res){
+    if(!res.ok){ msg('report-msg','err',res.error); return; }
+    state.chat=[]; renderChatLog();
   });
 }
+// A Confirm card runs the page's own route for the action, only when pressed.
+document.addEventListener('click', function(e){
+  var btn=e.target && e.target.closest ? e.target.closest('.chat-confirm') : null;
+  if(!btn || !state.meeting || readOnly()) return;
+  var mid=state.meeting.id, action=btn.getAttribute('data-action');
+  var item=btn.getAttribute('data-item'), rec=btn.getAttribute('data-rec');
+  btn.disabled=true;
+  var go = action==='remove_topic' ? api('/api/items/'+item, { method:'DELETE' })
+    : action==='regenerate_report' ? flushReportSave().then(function(){ return api('/api/meetings/'+mid+'/report', { method:'POST', body:{ replaceEdits:true } }); })
+    : action==='reprocess_recording' ? api('/api/meeting-recordings/'+rec+'/reprocess', { method:'POST' })
+    : Promise.resolve({ ok:false, error:'Unknown action.' });
+  go.then(function(res){
+    if(!res.ok){ btn.disabled=false; msg('report-msg','err',res.error||'That didn’t work.'); return; }
+    (state.chat||[]).forEach(function(m){ (m.cards||[]).forEach(function(c){
+      var same=function(a, b){ return (a==null?'':String(a))===(b==null?'':String(b)); };
+      if(c.kind==='confirm' && c.action===action && same(c.itemId, item) && same(c.recordingId, rec)) c.done=true;
+    }); });
+    renderChatLog();
+    refreshMeeting(mid);
+  });
+});
 document.addEventListener('click', function(e){
   var btn=e.target && e.target.closest ? e.target.closest('.chat-undo') : null;
   if(!btn || !state.meeting || readOnly()) return;
@@ -1142,48 +1208,6 @@ function renderDetailsStats(){
       state.meeting && state.meeting.report ? (r.edited ? 'minutes, edited' : 'minutes') : 'no minutes yet');
 }
 
-function editMeeting(){
-  var m=state.meeting;
-  openModal({
-    title: 'Edit meeting',
-    fields: [
-      { id:'title', label:'Title', type:'text', value:m.title, required:true },
-      { id:'date', label:'Date', type:'text', value:m.meeting_date||'', placeholder:'e.g. 2026-04-14 or Apr 14, 7pm' },
-      { id:'loc', label:'Location', type:'text', value:m.location||'', placeholder:'e.g. Fellowship Hall / Zoom' },
-      { id:'desc', label:'Description', type:'textarea', value:m.description||'' },
-      { id:'status', label:'Status', type:'select', value:m.status||'draft', options:[
-        { value:'draft', label:'Draft' },
-        { value:'in_progress', label:'In progress' },
-        { value:'completed', label:'Completed' }
-      ]}
-    ],
-    onSave: function(v, done){
-      api('/api/meetings/'+m.id, { method:'PATCH', body:{
-        title:v.title, meetingDate:v.date, location:v.loc, description:v.desc, status:v.status
-      }}).then(function(res){
-        if(!res.ok){ done(res.error||'Could not save.'); return; }
-        m.title=v.title.trim(); m.meeting_date=v.date.trim();
-        m.location=v.loc.trim(); m.description=v.desc.trim(); m.status=v.status;
-        document.getElementById('d-title-txt').textContent=m.title;
-        document.getElementById('d-meta-txt').innerHTML=[m.meeting_date,m.location].filter(Boolean).map(esc).join(' &middot; ');
-        done(null);
-        refreshReportSoon();
-      }).catch(function(e){ done(e.message); });
-    },
-    danger: {
-      label: 'Delete meeting',
-      // openModal escapes this, so pass the raw title.
-      hint: 'Deleting “'+m.title+'” also deletes its agenda items, transcripts, recordings, and report. This cannot be undone.',
-      onConfirm: function(done){
-        api('/api/meetings/'+m.id, { method:'DELETE' }).then(function(res){
-          if(!res || !res.ok){ done((res && res.error) || 'Could not delete.'); return; }
-          done(null);
-          showList();
-        }).catch(function(e){ done(e.message); });
-      }
-    }
-  });
-}
 
 // ── Attendees ───────────────────────────────────────────────────────────────
 function renderAttendeeChips(){
@@ -1720,9 +1744,99 @@ function speakerSamplesHtml(st, recId){
 
 // One player for every sample button on the page. A second click on the
 // playing clip stops it.
+// ── Mini player ─────────────────────────────────────────────────────────────
+// Whatever is playing — a part of the minutes, a topic, a chat clip or a voice
+// sample — gets the same small player in the bottom-right corner: play/pause,
+// back and forward 15 seconds, stop, a seek bar, speed and volume.
+var mp={ audio:null, onStop:null, offset:function(){ return 0; } };
+var MP_SKIP=15, MP_SPEEDS=[1, 1.25, 1.5, 2];
+function miniPlayerEl(){
+  var el=document.getElementById('mini-player');
+  if(el) return el;
+  el=document.createElement('div');
+  el.id='mini-player'; el.className='mini-player'; el.hidden=true;
+  el.setAttribute('role','region'); el.setAttribute('aria-label','Audio player');
+  el.innerHTML='<div class="mp-top"><span class="mp-label" id="mp-label"></span>'
+    +'<button type="button" class="mp-btn mp-close" id="mp-stop" title="Stop" aria-label="Stop">&#9632;</button></div>'
+    +'<input type="range" class="mp-seek" id="mp-seek" min="0" max="1000" value="0" aria-label="Position">'
+    +'<div class="mp-row">'
+    +'<button type="button" class="mp-btn" id="mp-back" title="Back '+MP_SKIP+' seconds" aria-label="Back '+MP_SKIP+' seconds">&#8634; '+MP_SKIP+'</button>'
+    +'<button type="button" class="mp-btn mp-main" id="mp-toggle" title="Pause" aria-label="Pause">&#10074;&#10074;</button>'
+    +'<button type="button" class="mp-btn" id="mp-fwd" title="Forward '+MP_SKIP+' seconds" aria-label="Forward '+MP_SKIP+' seconds">'+MP_SKIP+' &#8635;</button>'
+    +'<span class="mp-time" id="mp-time"></span>'
+    +'<button type="button" class="mp-btn" id="mp-speed" title="Speed">1&times;</button>'
+    +'<input type="range" class="mp-volume" id="mp-volume" min="0" max="1" step="0.05" value="1" aria-label="Volume" title="Volume">'
+    +'</div>';
+  document.body.appendChild(el);
+  var a=function(){ return mp.audio; };
+  el.querySelector('#mp-toggle').addEventListener('click', function(){
+    var au=a(); if(!au) return;
+    if(au.paused){ var p=au.play(); if(p && p['catch']) p['catch'](function(){}); } else au.pause();
+    miniPlayerUpdate();
+  });
+  var skip=function(d){ var au=a(); if(!au) return;
+    var max=isFinite(au.duration) ? au.duration : Infinity;
+    au.currentTime=Math.max(0, Math.min(max, (au.currentTime||0)+d)); miniPlayerUpdate(); };
+  el.querySelector('#mp-back').addEventListener('click', function(){ skip(-MP_SKIP); });
+  el.querySelector('#mp-fwd').addEventListener('click', function(){ skip(MP_SKIP); });
+  el.querySelector('#mp-stop').addEventListener('click', function(){ if(mp.onStop) mp.onStop(); else miniPlayerHide(); });
+  el.querySelector('#mp-volume').addEventListener('input', function(){ var au=a(); if(au) au.volume=Number(this.value); });
+  el.querySelector('#mp-seek').addEventListener('input', function(){
+    var au=a(); if(au && isFinite(au.duration) && au.duration>0) au.currentTime=Number(this.value)/1000*au.duration;
+  });
+  el.querySelector('#mp-speed').addEventListener('click', function(){
+    var au=a(); if(!au) return;
+    var i=MP_SPEEDS.indexOf(au.playbackRate||1); au.playbackRate=MP_SPEEDS[(i+1)%MP_SPEEDS.length];
+    this.innerHTML=au.playbackRate+'&times;';
+  });
+  return el;
+}
+function miniPlayerShow(audio, label, onStop, offset){
+  var el=miniPlayerEl();
+  mp.audio=audio; mp.onStop=onStop; mp.offset=offset||function(){ return 0; };
+  if(!audio._mp){
+    audio._mp=true;
+    ['timeupdate','play','pause','loadedmetadata','durationchange'].forEach(function(ev){
+      audio.addEventListener(ev, function(){ if(mp.audio===audio) miniPlayerUpdate(); });
+    });
+  }
+  el.querySelector('#mp-label').textContent=label||'Playing';
+  var vol=el.querySelector('#mp-volume'); if(typeof audio.volume==='number') vol.value=audio.volume;
+  el.querySelector('#mp-speed').innerHTML=(audio.playbackRate||1)+'&times;';
+  el.hidden=false;
+  document.body.classList.add('has-mini-player');
+  miniPlayerUpdate();
+}
+function miniPlayerHide(audio){
+  if(audio && mp.audio!==audio) return;
+  var el=document.getElementById('mini-player'); if(el) el.hidden=true;
+  document.body.classList.remove('has-mini-player');
+  mp.audio=null; mp.onStop=null;
+}
+function miniPlayerUpdate(){
+  var el=document.getElementById('mini-player'), au=mp.audio; if(!el || !au) return;
+  var t=el.querySelector('#mp-toggle');
+  t.innerHTML = au.paused ? '&#9654;' : '&#10074;&#10074;';
+  t.title = t.getAttribute('aria-label') ? (au.paused ? 'Play' : 'Pause') : '';
+  t.setAttribute('aria-label', au.paused ? 'Play' : 'Pause');
+  var cur=au.currentTime||0, dur=isFinite(au.duration) ? au.duration : 0, off=mp.offset();
+  el.querySelector('#mp-time').textContent=fmtSpanTime(off+cur)+(dur ? ' / '+fmtSpanTime(off+dur) : '');
+  el.querySelector('#mp-seek').value = dur ? Math.round(cur/dur*1000) : 0;
+}
+// What a play button belongs to, for the player's label.
+function audioLabel(btn){
+  var box=btn.closest('h1,h2,h3,h4,li,p,.chat-card,.ihead,.voice-card,.spk-row,.spk-excerpts li');
+  // A topic row or chat card: its title, not every badge in it.
+  var named=box && box.querySelector('.ititle, .chat-card b, .spk-tag');
+  var text=(named ? (box.querySelector('.inum') ? box.querySelector('.inum').textContent+'. ' : '')+named.textContent
+    : box ? box.textContent : btn.title||'').replace(/[▶■…]/g,'').replace(/\d+:\d{2}(?::\d{2})?\s*[–-]\s*\d+:\d{2}(?::\d{2})?/g,'')
+    .replace(/\s+/g,' ').trim();
+  return text.length>70 ? text.slice(0,68)+'…' : text;
+}
+
 var samplePlayer=null, samplePlayingBtn=null;
 function stopSample(){
-  if(samplePlayer){ try { samplePlayer.pause(); } catch(e){} }
+  if(samplePlayer){ try { samplePlayer.pause(); } catch(e){} miniPlayerHide(samplePlayer); }
   if(samplePlayingBtn){ samplePlayingBtn.innerHTML='&#9654;'; samplePlayingBtn=null; }
 }
 document.addEventListener('click', function(e){
@@ -1743,6 +1857,7 @@ document.addEventListener('click', function(e){
   btn.innerHTML='&#9632;';
   var p=samplePlayer.play();
   if(p && p['catch']) p['catch'](function(){ if(samplePlayingBtn===btn) stopSample(); });
+  miniPlayerShow(samplePlayer, 'Voice sample: '+audioLabel(btn), stopSample, function(){ return start; });
 });
 
 // Meeting-wide speaker naming: one set of voices for the whole recording.
@@ -2037,7 +2152,7 @@ var sectionPlayer=null, sectionPlayingBtn=null, sectionUrl='', sectionPart=null;
 function stopSection(){
   // Dropping the source (rather than src='', which raises an error event)
   // ends the download, so the server stops cutting.
-  if(sectionPlayer){ try { sectionPlayer.pause(); sectionPlayer.removeAttribute('src'); sectionPlayer.load(); } catch(e){} }
+  if(sectionPlayer){ try { sectionPlayer.pause(); sectionPlayer.removeAttribute('src'); sectionPlayer.load(); } catch(e){} miniPlayerHide(sectionPlayer); }
   sectionUrl=''; sectionPart=null;
   if(sectionPlayingBtn){ sectionPlayingBtn.innerHTML='&#9654;'; sectionPlayingBtn.classList.remove('loading'); sectionPlayingBtn=null; }
 }
@@ -2071,10 +2186,12 @@ document.addEventListener('click', function(e){
   };
   sectionPlayingBtn=btn;
   playSectionPart(Number(btn.getAttribute('data-start')));
+  miniPlayerShow(sectionPlayer, audioLabel(btn), stopSection, function(){ return sectionPart ? sectionPart.from : 0; });
 });
 
 function playSectionPart(from){
   var btn=sectionPlayingBtn, part=sectionPart;
+  part.from=from;
   part.to=Math.min(part.end, from+SECTION_PART_SECONDS);
   var url=part.base+'/section?start='+from.toFixed(2)+'&end='+part.to.toFixed(2);
   sectionPlayer.src=url; sectionUrl=url;
@@ -2571,7 +2688,15 @@ function fixResultHtml(f){
   return '<div class="alert alert-ok">Changed '+esc(fixCountsText(f))+'. '
     +'<button class="btn-sm fix-undo" data-change="'+f.changeId+'">Undo</button></div>'+libraryFlagHtml(f);
 }
+// Fix is offered only after Check has shown what these exact words would change.
+function fixKey(){ return [v('fix-from'), v('fix-to'), (document.getElementById('fix-scope')||{}).value||''].join('\u0000'); }
+function syncFixApply(){
+  var b=document.getElementById('btn-fix-apply'); if(!b) return;
+  b.disabled = !state.fixChecked || state.fixChecked!==fixKey() || readOnly();
+  b.title = b.disabled ? 'Check first' : '';
+}
 function runFix(dryRun){
+  if(!dryRun && state.fixChecked!==fixKey()){ msg('fix-msg','err','Check first, to see what it would change.'); return; }
   var from=v('fix-from'), to=v('fix-to'), scope=document.getElementById('fix-scope').value;
   if(!from || !to){ msg('fix-msg','err','Say what to replace and what with.'); return; }
   var body={ from: from, to: to }; if(scope) body.itemId=Number(scope); if(dryRun) body.dryRun=true;
@@ -2584,12 +2709,14 @@ function runFix(dryRun){
     var out=document.getElementById('fix-result');
     if(!res.ok){ msg('fix-msg','err',res.error); return; }
     if(dryRun){
+      state.fixChecked = res.total ? fixKey() : null;
+      syncFixApply();
       out.innerHTML = res.total
         ? '<div class="alert alert-info">Will change '+esc(fixCountsText(res))+'.</div>'+libraryFlagHtml(res)
         : '<div class="alert alert-info">“'+esc(from)+'” isn’t in this meeting. Capital letters count: “John” and “john” are different.</div>';
       return;
     }
-    state.lastFix=res;
+    state.lastFix=res; state.fixChecked=null;
     out.innerHTML=fixResultHtml(res);
     refreshMeeting(mid);
   });

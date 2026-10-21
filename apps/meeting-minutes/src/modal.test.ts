@@ -84,21 +84,14 @@ function typeConfirm(w: any, doc: any, text: string): any {
 // meeting was still there — "delete meeting does not work".
 test("Enter in the confirmation box deletes, it does not save", { skip }, () => {
   const { w, doc, calls } = boot();
-  w.eval("editMeeting()");
+  w.eval("deleteMeetingDialog()");
   pressEnter(w, typeConfirm(w, doc, "DELETE"));
   assert.deepEqual(calls, [{ path: "/api/meetings/42", method: "DELETE" }]);
 });
 
-test("Enter in an ordinary field still saves", { skip }, () => {
-  const { w, doc, calls } = boot();
-  w.eval("editMeeting()");
-  pressEnter(w, doc.getElementById("mf-title"));
-  assert.deepEqual(calls, [{ path: "/api/meetings/42", method: "PATCH" }]);
-});
-
 test("a mistyped confirmation neither deletes nor saves", { skip }, () => {
   const { w, doc, calls } = boot();
-  w.eval("editMeeting()");
+  w.eval("deleteMeetingDialog()");
   pressEnter(w, typeConfirm(w, doc, "delet"));
   assert.deepEqual(calls, []);
   assert.equal(doc.getElementById("modal-danger-btn").disabled, true);
@@ -106,7 +99,7 @@ test("a mistyped confirmation neither deletes nor saves", { skip }, () => {
 
 test("clicking the delete button after confirming deletes", { skip }, async () => {
   const { w, doc, calls } = boot();
-  w.eval("editMeeting()");
+  w.eval("deleteMeetingDialog()");
   typeConfirm(w, doc, "DELETE");
   const btn = doc.getElementById("modal-danger-btn");
   assert.equal(btn.disabled, false);
@@ -128,7 +121,7 @@ test("every meeting is deletable regardless of what it is called", { skip }, () 
   ];
   for (const title of awkward) {
     const { w, doc, calls } = boot();
-    w.eval(`state.meeting.title = ${JSON.stringify(title)}; editMeeting();`);
+    w.eval(`state.meeting.title = ${JSON.stringify(title)}; deleteMeetingDialog();`);
     typeConfirm(w, doc, "DELETE");
     assert.equal(doc.getElementById("modal-danger-btn").disabled, false, `blocked on: ${title}`);
     doc.getElementById("modal-danger-btn").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
@@ -139,7 +132,7 @@ test("every meeting is deletable regardless of what it is called", { skip }, () 
 test("the confirmation is case-insensitive and tolerates padding", { skip }, () => {
   for (const typed of ["delete", "  Delete  ", "DELETE"]) {
     const { w, doc } = boot();
-    w.eval("editMeeting()");
+    w.eval("deleteMeetingDialog()");
     typeConfirm(w, doc, typed);
     assert.equal(doc.getElementById("modal-danger-btn").disabled, false, `blocked on: ${JSON.stringify(typed)}`);
   }
@@ -147,7 +140,7 @@ test("the confirmation is case-insensitive and tolerates padding", { skip }, () 
 
 test("the dialog names the meeting being deleted", { skip }, () => {
   const { w, doc } = boot();
-  w.eval("editMeeting()");
+  w.eval("deleteMeetingDialog()");
   assert.match(doc.querySelector(".modal-danger .hint").textContent, /April Board Meeting/);
 });
 
@@ -641,6 +634,7 @@ test("applying a fix offers Undo, and Undo sends the change back", { skip }, asy
   });
   doc.getElementById("fix-from").value = "John";
   doc.getElementById("fix-to").value = "Jon";
+  w.eval("state.fixChecked = fixKey(); syncFixApply();"); // Checked already
   doc.getElementById("btn-fix-apply").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
   await flush();
   assert.match(doc.getElementById("fix-result").textContent, /Changed 6 places/);
@@ -1271,23 +1265,64 @@ test("the chat panel sits beside the minutes and shows the conversation so far",
   assert.match(doc.getElementById("chat-log").textContent, /giving is ahead/);
 });
 
-test("sending a message posts it and shows the reply with its change card", { skip }, async () => {
-  const { w, doc, calls } = bootChat((p, o) => p.endsWith("/chat") && o.method === "POST"
-    ? { ok: true, reply: "Fixed it.", cards: [{ kind: "change", summary: "“John” → “Jon”: 3 places", changeId: 12 }] }
-    : p.endsWith("/chat") ? { ok: true, messages: [] } : { ok: true });
+test("sending a message starts it, shows Working, then the reply and its change card", { skip }, async () => {
+  let polls = 0;
+  const { w, doc, calls } = bootChat((p, o) => {
+    if (p.endsWith("/chat") && o.method === "POST") return { ok: true, started: true };
+    if (p.endsWith("/chat")) {
+      polls++;
+      return polls < 2 ? { ok: true, working: true, messages: [{ role: "user", text: "It's Jon, not John", cards: [] }] }
+        : { ok: true, working: false, messages: [{ role: "user", text: "It's Jon, not John", cards: [] },
+          { role: "assistant", text: "Fixed it.", cards: [{ kind: "change", summary: "“John” → “Jon”: 3 places", changeId: 12 }] }] };
+    }
+    return { ok: true };
+  });
+  w.eval("CHAT_POLL_MS = 10;");
   doc.getElementById("chat-input").value = "It's Jon, not John";
   doc.getElementById("btn-chat-send").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
   assert.match(doc.getElementById("chat-log").textContent, /It's Jon, not John/);
   assert.match(doc.getElementById("chat-log").textContent, /Working/);
-  await flush();
+  await new Promise((r) => setTimeout(r, 120));
   assert.deepEqual(calls.find((c) => c.method === "POST" && c.path === "/api/meetings/42/chat")!.body, { message: "It's Jon, not John" });
   const log = doc.getElementById("chat-log").textContent;
   assert.match(log, /Fixed it\./);
   assert.match(log, /“John” → “Jon”: 3 places/);
   assert.doesNotMatch(log, /Working/);
+  assert.ok(calls.some((c) => c.method === "GET" && c.path === "/api/meetings/42"), "the page refreshed after a change");
   doc.querySelector("#chat-log .chat-undo").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
   await flush();
   assert.ok(calls.some((c) => c.method === "POST" && c.path === "/api/meetings/42/changes/12/undo"));
+});
+
+test("a Confirm card does the action only when pressed, through the page's own route", { skip }, async () => {
+  const { w, doc, calls } = bootChat((p) => p.endsWith("/chat") ? { ok: true, working: false, messages: [
+    { role: "assistant", text: "Shall I remove it?", cards: [{ kind: "confirm", action: "remove_topic", itemId: 1, label: "Remove the topic “Budget”" }] }] } : { ok: true });
+  w.eval("loadChat()");
+  await flush();
+  assert.ok(!calls.some((c) => c.method === "DELETE"));
+  const btn = doc.querySelector("#chat-log .chat-confirm");
+  assert.match(btn.closest(".chat-card").textContent, /Remove the topic “Budget”/);
+  btn.dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  await flush();
+  assert.ok(calls.some((c) => c.method === "DELETE" && c.path === "/api/items/1"));
+});
+
+test("Start over clears the conversation", { skip }, async () => {
+  const { w, doc, calls } = bootChat((p) => p.endsWith("/chat") ? history : { ok: true });
+  w.eval("loadChat()");
+  await flush();
+  w.confirm = () => true;
+  doc.getElementById("btn-chat-reset").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  await flush();
+  assert.ok(calls.some((c) => c.method === "POST" && c.path === "/api/meetings/42/chat/reset"));
+  assert.match(doc.getElementById("chat-log").textContent, /Nothing asked yet/);
+});
+
+test("while the chat is working, lines of the minutes don't open", { skip }, () => {
+  const { w, doc } = bootChat(() => ({ ok: true, messages: [] }));
+  w.eval("state.chatSending = true;");
+  doc.querySelector('#report-editor .rblock[data-line="2"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  assert.equal(doc.querySelector("#report-editor textarea"), null);
 });
 
 test("Enter sends; Shift+Enter is a new line", { skip }, async () => {
@@ -1327,4 +1362,86 @@ test("while someone else edits, the chat can't be used", { skip }, () => {
   w.eval(`state.lock = { held: false, holder: { name: "Bob" } }; renderDetail();`);
   assert.equal(doc.getElementById("btn-chat-send").disabled, true);
   assert.equal(doc.getElementById("chat-input").readOnly, true);
+});
+
+// ── Review and feedback follow-ups ─────────────────────────────────────────
+
+test("one mini player for all audio, with play/pause, skip, stop and volume", { skip }, () => {
+  const { w, doc } = boot();
+  const players = fakeAudio(w);
+  const box = doc.createElement("div");
+  box.innerHTML = w.eval(`renderMarkdown("### 1. Budget <!--t:m12:600.0-1200.0-->")`);
+  doc.body.appendChild(box);
+  box.querySelector(".sec-play").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  const mp = doc.getElementById("mini-player");
+  assert.ok(mp && !mp.hidden, "shown");
+  assert.match(mp.textContent, /1\. Budget/);
+  const a = players[0];
+  a.currentTime = 30; a.duration = 600; a.volume = 1;
+  doc.getElementById("mp-toggle").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  assert.equal(a.paused, true);
+  doc.getElementById("mp-fwd").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  assert.equal(a.currentTime, 45);
+  doc.getElementById("mp-back").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  assert.equal(a.currentTime, 30);
+  const vol = doc.getElementById("mp-volume");
+  vol.value = "0.4"; vol.dispatchEvent(new w.Event("input", { bubbles: true }));
+  assert.equal(a.volume, 0.4);
+  doc.getElementById("mp-stop").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  assert.equal(mp.hidden, true);
+});
+
+test("Fix waits for a Check of exactly those words", { skip }, async () => {
+  const { w, doc, posts } = bootFix({ "/fix": { ok: true, dry: true, counts, total: 6, changeId: null, libraryMatches: [] } });
+  const apply = doc.getElementById("btn-fix-apply");
+  assert.equal(apply.disabled, true);
+  doc.getElementById("fix-from").value = "John";
+  doc.getElementById("fix-to").value = "Jon";
+  doc.getElementById("btn-fix-preview").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  await flush();
+  assert.equal(apply.disabled, false);
+  const to = doc.getElementById("fix-to");
+  to.value = "Jonny"; to.dispatchEvent(new w.Event("input", { bubbles: true }));
+  assert.equal(apply.disabled, true, "changed words need a new Check");
+  void posts;
+});
+
+test("a recorder without the lock can still tap topics", { skip }, () => {
+  const { w, doc } = bootTwoTopics();
+  w.eval(`state.lock = { held: false, holder: { name: "Bob" } }; state.section = "recording"; renderDetail();
+    meetingRec = { meetingId: 42, recordingId: 7, title: "M", topic: "", topicId: null, t0: performance.now(),
+      mr: { state: "recording" }, stream: { getTracks(){ return []; } } };
+    renderMeetingRecUi(); applyReadOnly();`);
+  assert.equal(doc.querySelector("#rec-topics .rec-topic").disabled, false);
+});
+
+test("Everyone present keeps people already marked present", { skip }, async () => {
+  const { w, doc } = boot();
+  const calls = stubFetch(w, () => ({ ok: true }));
+  w.eval(`state.people = [{ id: 1, name: "A", active: true }, { id: 2, name: "Old", active: false }];
+    state.peopleById = { 1: state.people[0], 2: state.people[1] }; state.attendeeIds = [2];
+    state.section = "people"; renderDetail();`);
+  doc.getElementById("btn-roll-all").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  await flush();
+  assert.deepEqual([...calls.find((c) => c.method === "PUT")!.body.personIds].sort(), [1, 2]);
+});
+
+test("a refresh keeps what's being typed in the details form", { skip }, async () => {
+  const { w, doc } = boot();
+  stubFetch(w, (p) => p === "/api/meetings/42" ? { ok: true, meeting: { id: 42, title: "Server", report: "" }, attendeeIds: [], items: [], guests: [] } : { ok: true });
+  w.eval(`state.section = "details"; state.editingDetails = true; renderDetail();`);
+  doc.getElementById("df-location").value = "Typed but not saved";
+  w.eval("refreshMeeting(42)");
+  await flush();
+  assert.equal(doc.getElementById("df-location").value, "Typed but not saved");
+});
+
+test("a topic's ▶ labels the player with the topic, not its badges", { skip }, () => {
+  const { w, doc } = boot();
+  fakeAudio(w);
+  w.eval(`state.items[0].summary = "Done."; state.items[0].transcript = "x"; state.items[0].transcript_source = "meeting";
+    state.items[0].transcript_recording_id = 5; state.items[0].transcript_segments = [{ text: "x", speaker: "S0", start: 1, end: 9 }];
+    state.section = "agenda"; renderDetail();`);
+  doc.querySelector("#item-1 .ihead .sec-play").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  assert.equal(doc.getElementById("mp-label").textContent, "1. Budget");
 });
