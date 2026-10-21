@@ -134,12 +134,28 @@ export function attachRanges(body: string, items: ReportItemInput[]): string {
   }).join("\n");
 }
 
+// The lines of the report that write up items[index]: its "###" heading up to
+// the next "#", "##" or "###" heading. Null when the report has no heading
+// for it.
+export function topicSectionLines<T extends { title: string }>(
+  markdown: string, items: T[], index: number
+): { start: number; end: number } | null {
+  const lines = markdown.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    if (!/^###\s/.test(lines[i]) || topicFor(lines[i], items) !== items[index]) continue;
+    let end = i + 1;
+    while (end < lines.length && !/^#{1,3}\s/.test(lines[end])) end++;
+    return { start: i, end };
+  }
+  return null;
+}
+
 const normTitle = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
 
 // The agenda item a "###" heading writes up: "### 3. Title" by its number,
 // otherwise by title, for an organization whose example numbers topics its own
 // way ("### I. Title", "### 1.2 Title"). Null when it matches no item.
-function topicFor(heading: string, items: ReportItemInput[]): ReportItemInput | null {
+export function topicFor<T extends { title: string }>(heading: string, items: T[]): T | null {
   const n = /^###\s+(\d+)\.\s/.exec(heading);
   if (n) return items[Number(n[1]) - 1] ?? null;
   const text = normTitle(heading.replace(/^###\s+(?:(?:\d+(?:\.\d+)*|[ivxlcdm]+|[a-z])[.)]?\s+)?/i, ""));

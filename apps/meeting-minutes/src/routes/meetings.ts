@@ -7,6 +7,7 @@ import { config } from "../config";
 import { extractAgendaItems, isSupportedAgendaType } from "../claude";
 import { reportHtml } from "../report";
 import { stripRangeMarkers } from "../ranges";
+import { fixWords, listChanges, undoChange } from "../fixes";
 import {
   EDIT_SUMMARY_DELAY_MS, itemHasContent, reportState, requestReport, requestSummary,
 } from "../minutesWork";
@@ -549,6 +550,42 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
       report: await reportState(pool, after),
       markdown: after.report_status === "idle" ? after.report : undefined,
     };
+  });
+
+  // Fix a misheard name or word across the meeting, or one topic. dryRun
+  // only counts.
+  app.post("/api/meetings/:id/fix", async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    if (!Number.isFinite(id) || !(await getMeeting(pool, id))) { reply.code(404); return { ok: false, error: "Meeting not found." }; }
+    const b = (req.body ?? {}) as { from?: unknown; to?: unknown; itemId?: unknown; dryRun?: unknown };
+    const from = typeof b.from === "string" ? b.from.trim() : "";
+    const to = typeof b.to === "string" ? b.to.trim() : "";
+    if (!from || !to || from === to) { reply.code(400); return { ok: false, error: "Say what to replace and what with." }; }
+    const itemId = b.itemId === undefined || b.itemId === null || b.itemId === "" ? undefined : Number(b.itemId);
+    if (itemId !== undefined) {
+      const it = Number.isFinite(itemId) ? await getAgendaItem(pool, itemId) : null;
+      if (!it || it.meeting_id !== id) { reply.code(404); return { ok: false, error: "Agenda item not found." }; }
+    }
+    const r = await fixWords(pool, id, from, to, { itemId, dryRun: b.dryRun === true, by: getIdentity(req).email });
+    if (!r.total && b.dryRun !== true) {
+      reply.code(422); return { ok: false, error: `Nothing to change: “${from}” isn't in this meeting.`, ...r };
+    }
+    return { ok: true, ...r };
+  });
+
+  app.get("/api/meetings/:id/changes", async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    if (!Number.isFinite(id) || !(await getMeeting(pool, id))) { reply.code(404); return { ok: false, error: "Meeting not found." }; }
+    return { ok: true, changes: await listChanges(pool, id) };
+  });
+
+  app.post("/api/meetings/:id/changes/:cid/undo", async (req, reply) => {
+    const p = req.params as { id: string; cid: string };
+    const id = Number(p.id), cid = Number(p.cid);
+    if (!Number.isFinite(id) || !Number.isFinite(cid)) { reply.code(404); return { ok: false, error: "That change wasn't found." }; }
+    const r = await undoChange(pool, id, cid);
+    if (!r.ok) reply.code(r.status);
+    return r;
   });
 
   // Stop writing a report, e.g. one stuck waiting on a topic.

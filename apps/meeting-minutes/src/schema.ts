@@ -148,6 +148,22 @@ ALTER TABLE meetings ADD COLUMN IF NOT EXISTS report_updated_at timestamptz;
 -- otherwise. NULL for topics transcribed before it was kept.
 ALTER TABLE agenda_items ADD COLUMN IF NOT EXISTS transcript_recording_id bigint;
 
+-- Bulk changes to a meeting (fix a name everywhere, a speaker rename, later
+-- chat edits), with the fields they touched before and after, so each can be
+-- undone while nothing else has changed those fields since.
+CREATE TABLE IF NOT EXISTS meeting_changes (
+  id          bigserial PRIMARY KEY,
+  meeting_id  bigint NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+  kind        text NOT NULL,
+  summary     text NOT NULL,
+  before      jsonb NOT NULL,
+  after       jsonb NOT NULL,
+  undone_at   timestamptz,
+  created_by  text NOT NULL DEFAULT '',
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS meeting_changes_meeting_idx ON meeting_changes (meeting_id, id);
+
 -- People at one meeting who are not in the library: visitors, speakers.
 -- Guests are present by definition.
 CREATE TABLE IF NOT EXISTS meeting_guests (
