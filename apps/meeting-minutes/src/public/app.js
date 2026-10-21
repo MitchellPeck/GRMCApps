@@ -235,6 +235,8 @@ function lockedBy(holder){
   var was=readOnly();
   state.lock={ held:false, holder: holder||{} };
   if(was) return;
+  // A line being edited goes into the minutes (unsaved) so it stays on screen.
+  if(commitOpenLine) commitOpenLine();
   var drafts=captureDrafts();
   state.lockDrafts=Object.keys(drafts).length>0;
   var mid=state.meeting.id;
@@ -283,7 +285,10 @@ function releaseMeetingLock(){
   try { fetch('/api/meetings/'+lockMeetingId+'/lock', { method:'DELETE', keepalive:true }); } catch(e){}
   state.lock=null; lockMeetingId=null;
 }
-window.addEventListener('pagehide', function(){ if(!pageRecording()) releaseMeetingLock(); });
+window.addEventListener('pagehide', function(){
+  if(reportDirty) saveReportNow(true);
+  if(!pageRecording()) releaseMeetingLock();
+});
 // Read-only chips and toggles swallow the click before their own handlers.
 document.addEventListener('click', function(e){
   if(!readOnly()) return;
@@ -310,7 +315,7 @@ function applyReadOnly(){
     +(state.lockDrafts ? ' What you were typing is still on screen: copy anything you haven’t saved.' : '');
   body.insertBefore(b, body.firstChild);
   body.querySelectorAll('input, textarea, select, button').forEach(function(el){
-    if(el.matches('.sec-play, .spk-play, #btn-report-print')) return;
+    if(el.matches('.sec-play, .spk-play, #btn-report-print, #mtg-nav-select')) return;
     // A recording running on this page can always be stopped and saved.
     if(activeRec && activeRec.btn===el) return;
     if(meetingRec && el.id==='btn-meeting-rec') return;
@@ -336,7 +341,12 @@ document.querySelectorAll('.tab').forEach(function(t){
   t.addEventListener('click', function(){ switchTab(t.getAttribute('data-tab')); });
 });
 function showList(){
-  if(reportSaveTimer) saveReportNow();
+  if(!reportDirty && !reportSaving){ leaveMeeting(); return; }
+  flushReportSave().then(function(ok){
+    if(ok || confirm("Your last change to the minutes hasn't saved. Leave anyway?")) leaveMeeting();
+  });
+}
+function leaveMeeting(){
   stopRecording();
   stopPolling();
   // Summarize the item left open, so nothing is lost on the way out; let go of
@@ -523,7 +533,7 @@ function openMeeting(id){
     state.people = (peopleRes.ok?peopleRes.people:[]);
     state.peopleById = {}; state.people.forEach(function(p){ state.peopleById[p.id]=p; });
     state.lockDrafts = false;
-    state.meeting = det.meeting;
+    adoptMeeting(det.meeting);
     state.attendeeIds = det.attendeeIds;
     state.items = det.items;
     state.meetingRecordings = det.meetingRecordings || [];
@@ -547,7 +557,7 @@ function refreshMeeting(mid){
   });
 }
 function loadMeetingState(det){
-  state.meeting=det.meeting; state.attendeeIds=det.attendeeIds; state.items=det.items;
+  adoptMeeting(det.meeting); state.attendeeIds=det.attendeeIds; state.items=det.items;
   state.meetingRecordings=det.meetingRecordings||[]; state.meetingSpeakerStats=det.meetingSpeakerStats||[];
   state.guests=det.guests||[]; state.report=det.report||null;
 }
@@ -610,7 +620,7 @@ function renderDetail(){
 
   // Agenda upload
   h+='<section data-sec="agenda" hidden>';
-  h+='<div class="card"><div class="ct">Agenda</div>'
+  h+='<div class="card" id="agenda-upload-card"><div class="ct">Agenda</div>'
     +'<div id="agenda-msg"></div>'
     +(m.agenda_file_name?'<div class="hint" style="margin-bottom:8px">Loaded from: '+esc(m.agenda_file_name)+'</div>':'')
     +'<div class="field"><label>Upload agenda (PDF, image, or text)</label>'
@@ -712,7 +722,7 @@ function reportEditorHtml(){
   if(!m || !m.report) return '';
   return '<div class="report report-editor" id="report-editor">'
     +reportLines(m.report).map(function(l, i){
-      return '<div class="rblock" data-line="'+i+'">'+renderMarkdown(l.text+(l.marker?' '+l.marker:''))+'</div>';
+      return '<div class="rblock" tabindex="0" data-line="'+i+'">'+renderMarkdown(l.text+(l.marker?' '+l.marker:''))+'</div>';
     }).join('')+'</div>'
     +'<div class="hint" id="report-edit-hint">Click any line to change it. Changes save as you go.</div>';
 }
@@ -723,56 +733,116 @@ function renderReportEditor(){
     var n=estimatePagesJS(state.meeting.report); pg.textContent='≈ '+n+' page'+(n===1?'':'s');
   }
 }
+// The line the next mousedown landed on: clicking another line while one is
+// open redraws the editor on blur, before that click arrives, so open it here.
+var pendingLine=null, commitOpenLine=null;
+document.addEventListener('mousedown', function(e){
+  var block=e.target && e.target.closest ? e.target.closest('#report-editor .rblock') : null;
+  pendingLine = block && !e.target.closest('.sec-play, textarea') ? Number(block.getAttribute('data-line')) : null;
+}, true);
 document.addEventListener('click', function(e){
   var block=e.target && e.target.closest ? e.target.closest('#report-editor .rblock') : null;
   if(!block || e.target.closest('.sec-play, textarea')) return;
+  openLine(Number(block.getAttribute('data-line')));
+});
+document.addEventListener('keydown', function(e){
+  if(e.key!=='Enter') return;
+  var block=e.target && e.target.classList && e.target.classList.contains('rblock') ? e.target : null;
+  if(!block) return;
+  e.preventDefault();
+  openLine(Number(block.getAttribute('data-line')));
+});
+function openLine(i){
   if(!reportEditable()) return;
-  var i=Number(block.getAttribute('data-line'));
-  var line=reportLines(state.meeting.report)[i]; if(!line) return;
+  var block=document.querySelector('#report-editor .rblock[data-line="'+i+'"]'); if(!block) return;
+  var lines=reportLines(state.meeting.report), line=lines[i]; if(!line) return;
   var ta=document.createElement('textarea');
-  ta.className='rblock-edit'; ta.value=line.text; ta.rows=Math.max(1, Math.ceil(line.text.length/80));
+  ta.className='rblock-edit'; ta.id='rblock-edit'; ta.value=line.text; ta.rows=Math.max(1, Math.ceil(line.text.length/80));
   block.innerHTML=''; block.appendChild(ta); ta.focus();
   var done=false;
+  // Put the text back into the minutes. Returns how many lines it became.
+  function commit(){
+    if(done) return 1; done=true; commitOpenLine=null;
+    if(ta.value===line.text) return 1;
+    var next=replaceLine(reportLines(state.meeting.report), i, ta.value);
+    var grew=next.length-lines.length+1;
+    state.meeting.report=joinReportLines(next);
+    scheduleReportSave();
+    return grew;
+  }
+  commitOpenLine=commit;
   ta.addEventListener('keydown', function(ev){
-    if(ev.key==='Escape'){ done=true; renderReportEditor(); }
+    if(ev.key==='Escape'){ done=true; commitOpenLine=null; pendingLine=null; renderReportEditor(); }
   });
   ta.addEventListener('blur', function(){
-    if(done) return; done=true;
-    if(ta.value===line.text){ renderReportEditor(); return; }
-    state.meeting.report=joinReportLines(replaceLine(reportLines(state.meeting.report), i, ta.value));
+    if(done) return;
+    var grew=commit(), target=pendingLine; pendingLine=null;
     renderReportEditor();
-    scheduleReportSave();
+    if(target!==null && target!==i) openLine(target>i ? target+grew-1 : target);
   });
-});
+}
 
-var reportSaveTimer=null, REPORT_SAVE_MS=800;
+// Saving: the page knows when the minutes have changes the server doesn't have
+// yet (reportDirty). Until they are saved they are kept: server data arriving
+// meanwhile doesn't replace them, and leaving, exporting or regenerating saves
+// them first. Saves run one at a time, in order.
+var reportSaveTimer=null, REPORT_SAVE_MS=800, reportDirty=false, reportSaving=null;
 function reportSaveStatus(text, kind){
   var el=document.getElementById('report-save'); if(!el) return;
   el.textContent=text; el.className='hint report-save'+(kind?' '+kind:'');
 }
 function scheduleReportSave(){
+  reportDirty=true;
   reportSaveStatus('Saving…');
   if(reportSaveTimer) clearTimeout(reportSaveTimer);
   reportSaveTimer=setTimeout(saveReportNow, REPORT_SAVE_MS);
 }
+// Resolves true when the minutes on screen are saved.
 function saveReportNow(keepalive){
   if(reportSaveTimer){ clearTimeout(reportSaveTimer); reportSaveTimer=null; }
-  if(!state.meeting) return Promise.resolve();
-  var mid=state.meeting.id, md=state.meeting.report;
+  if(!state.meeting || !reportDirty) return reportSaving || Promise.resolve(true);
+  var mid=state.meeting.id;
   if(keepalive){
     try { fetch('/api/meetings/'+mid+'/report', { method:'PUT', keepalive:true,
-      headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({ markdown: md }) }); } catch(e){}
-    return Promise.resolve();
+      headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({ markdown: state.meeting.report }) }); } catch(e){}
+    return Promise.resolve(true);
   }
-  return api('/api/meetings/'+mid+'/report', { method:'PUT', body:{ markdown: md } }).then(function(res){
-    if(!state.meeting || state.meeting.id!==mid) return;
-    if(!res.ok){ reportSaveStatus(res.error||'Could not save.', 'err'); return; }
-    if(res.report){ state.report=res.report; }
-    reportSaveStatus('Saved');
-  });
+  var run=function(){
+    if(!state.meeting || state.meeting.id!==mid || !reportDirty) return true;
+    var md=state.meeting.report;
+    return api('/api/meetings/'+mid+'/report', { method:'PUT', body:{ markdown: md } }).then(function(res){
+      if(!state.meeting || state.meeting.id!==mid) return false;
+      if(!res.ok){ reportSaveStatus(res.error||'Could not save.', 'err'); return false; }
+      if(state.meeting.report===md) reportDirty=false;
+      if(res.report){ state.report=res.report; renderReportState(); }
+      reportSaveStatus(reportDirty ? 'Saving…' : 'Saved');
+      return !reportDirty;
+    }, function(){
+      reportSaveStatus('Couldn’t save — check your connection. Your change is still here.', 'err');
+      return false;
+    });
+  };
+  var chain=(reportSaving||Promise.resolve()).then(run);
+  reportSaving=chain;
+  chain.then(function(){ if(reportSaving===chain) reportSaving=null; });
+  return chain;
 }
-// Leaving with a save still waiting: send it anyway.
-window.addEventListener('pagehide', function(){ if(reportSaveTimer) saveReportNow(true); });
+function flushReportSave(){ return saveReportNow(); }
+// Server data for the open meeting, keeping minutes that aren't saved yet.
+function adoptMeeting(m){
+  if(reportDirty && state.meeting && m && state.meeting.id===m.id) m.report=state.meeting.report;
+  state.meeting=m;
+}
+window.addEventListener('beforeunload', function(e){ if(reportDirty){ e.preventDefault(); e.returnValue=''; } });
+// "Open in Google Docs" exports what is saved, so save first. The tab opens at
+// once (no popup blocker) and goes to the Doc once the save is in.
+document.addEventListener('click', function(e){
+  var a=e.target && e.target.closest ? e.target.closest('#btn-report-gdoc') : null;
+  if(!a || (!reportDirty && !reportSaving)) return;
+  e.preventDefault();
+  var href=a.getAttribute('href'), win=window.open('', '_blank');
+  flushReportSave().then(function(){ if(win) win.location=href; else window.location.href=href; });
+});
 
 // ── Sections and the side menu ──────────────────────────────────────────────
 var SECTIONS=[['details','Details'],['people','People'],['agenda','Agenda'],['recording','Recording'],['speakers','Speakers'],['minutes','Minutes']];
@@ -843,6 +913,7 @@ function showSection(sec, topicId){
 }
 // With a topic chosen in the menu, Agenda shows only that topic.
 function applyTopicFocus(){
+  var up=document.getElementById('agenda-upload-card'); if(up) up.hidden=!!state.topicFocus;
   (state.items||[]).forEach(function(it){
     var el=document.getElementById('item-'+it.id);
     if(el) el.hidden = !!state.topicFocus && state.topicFocus!==it.id;
@@ -854,6 +925,7 @@ document.addEventListener('click', function(e){
   e.preventDefault();
   if(a.hasAttribute('data-topic')) showSection('agenda', Number(a.getAttribute('data-topic')));
   else showSection(a.getAttribute('data-sec'));
+  try { window.scrollTo(0, 0); } catch(err){}
 });
 
 function editMeeting(){
@@ -1451,7 +1523,7 @@ function renderMeetingSpeakerPanel(){
     savingMspk=true;
     var mid=state.meeting.id;
     setBtn('btn-save-mspk', true, 'Saving...');
-    api('/api/meetings/'+mid+'/speaker-map', { method:'PUT', body:{ speakerMap:newMap } })
+    flushReportSave().then(function(){ return api('/api/meetings/'+mid+'/speaker-map', { method:'PUT', body:{ speakerMap:newMap } }); })
       .then(function(res){
         if(!res.ok){ savingMspk=false; setBtn('btn-save-mspk', false); msg('mspk-msg','err',res.error||'Could not save.'); return; }
         savingMspk=false;
@@ -1459,7 +1531,7 @@ function renderMeetingSpeakerPanel(){
         return api('/api/meetings/'+mid).then(function(det){
           if(!state.meeting || state.meeting.id!==mid) return;
           if(det.ok){
-            state.meeting=det.meeting;
+            adoptMeeting(det.meeting);
             state.meetingRecordings=det.meetingRecordings||[];
             state.meetingSpeakerStats=det.meetingSpeakerStats||[];
             state.attendeeIds=det.attendeeIds;
@@ -2117,7 +2189,7 @@ function pollOnce(){
     return api('/api/meetings/'+state.meeting.id).then(function(det){
       if(gen!==pollGen) return;
       if(det.ok){
-        state.meeting=det.meeting;
+        adoptMeeting(det.meeting);
         state.meetingRecordings = det.meetingRecordings || [];
         state.meetingSpeakerStats = det.meetingSpeakerStats || [];
         syncItems(det.items);
@@ -2152,7 +2224,7 @@ function afterPollRound(){
 // summarize any pending items, then write the report.
 function generateReport(){
   if(state.openItemId){ var open=state.items.filter(function(x){return x.id===state.openItemId;})[0]; if(open) collapseItem(open); }
-  postReport(false);
+  flushReportSave().then(function(){ postReport(false); });
 }
 
 // The server refuses to replace edited minutes unless asked to; ask first.
@@ -2210,7 +2282,9 @@ function runFix(dryRun){
   var body={ from: from, to: to }; if(scope) body.itemId=Number(scope); if(dryRun) body.dryRun=true;
   var mid=state.meeting.id;
   msg('fix-msg','','');
-  api('/api/meetings/'+mid+'/fix', { method:'POST', body: body }).then(function(res){
+  (dryRun ? Promise.resolve() : flushReportSave()).then(function(){
+    return api('/api/meetings/'+mid+'/fix', { method:'POST', body: body });
+  }).then(function(res){
     if(!state.meeting || state.meeting.id!==mid) return;
     var out=document.getElementById('fix-result');
     if(!res.ok){ msg('fix-msg','err',res.error); return; }

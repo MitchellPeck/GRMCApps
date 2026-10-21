@@ -989,3 +989,103 @@ test("no report yet: no editor", { skip }, () => {
   w.eval(`state.meeting.report = ""; state.section = "minutes"; renderDetail();`);
   assert.equal(doc.getElementById("report-editor"), null);
 });
+
+// ── Minutes edits are never silently lost ──────────────────────────────────
+
+function editLine(w: any, doc: any, line: number, text: string) {
+  doc.querySelector(`#report-editor .rblock[data-line="${line}"]`).dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  const ta = doc.querySelector("#report-editor textarea.rblock-edit");
+  ta.value = text;
+  ta.dispatchEvent(new w.Event("blur"));
+}
+
+test("a refresh while an edit is unsaved keeps the edit and saves it", { skip }, async () => {
+  const { w, doc, calls } = bootMinutes((p, o) => {
+    if (o.method === "PUT") return { ok: true, report: { status: "idle", changes: [], pages: 1 } };
+    if (p === "/api/meetings/42") return { ok: true, meeting: { id: 42, title: "M", report: "# Server copy", report_generated_at: "2026-04-14T10:00:00Z" },
+      attendeeIds: [], items: [], guests: [], report: { status: "idle", changes: [] } };
+    return { ok: true };
+  });
+  editLine(w, doc, 2, "The board met at length.");
+  w.eval("refreshMeeting(42)");
+  await flush();
+  assert.match(w.eval("state.meeting.report"), /The board met at length\./);
+  await new Promise((r) => setTimeout(r, 950));
+  const put = calls.filter((c) => c.method === "PUT").pop();
+  assert.match(put!.body.markdown, /The board met at length\./);
+});
+
+test("a save that can't reach the server says so, and Back tries again", { skip }, async () => {
+  const b = bootMinutes();
+  let fail = true;
+  const puts: any[] = [];
+  b.w.fetch = (path: string, opts: any = {}) => {
+    if (opts.method === "PUT") { puts.push(JSON.parse(opts.body)); if (fail) return Promise.reject(new TypeError("Failed to fetch")); }
+    return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true, report: { status: "idle", changes: [] } }) });
+  };
+  b.w.confirm = () => false;
+  editLine(b.w, b.doc, 2, "Edited offline.");
+  await new Promise((r) => setTimeout(r, 950));
+  assert.match(b.doc.getElementById("report-save").textContent, /Couldn’t save/);
+  fail = false;
+  b.w.eval("showList()");
+  await flush();
+  assert.equal(puts.length, 2, "retried on the way out");
+  assert.match(puts[1].markdown, /Edited offline\./);
+});
+
+test("Open in Google Docs right after an edit saves the edit first", { skip }, async () => {
+  const { w, doc, calls } = bootMinutes();
+  const opened: any = { location: "" };
+  w.open = () => opened;
+  editLine(w, doc, 2, "Last fix.");
+  doc.getElementById("btn-report-gdoc").dispatchEvent(new w.MouseEvent("click", { bubbles: true, cancelable: true }));
+  await flush();
+  assert.ok(calls.some((c) => c.method === "PUT"), "saved before export");
+  assert.equal(opened.location, "/api/meetings/42/google-doc");
+});
+
+test("regenerating right after an edit saves it first, so the warning knows", { skip }, async () => {
+  const { w, doc, calls } = bootMinutes();
+  editLine(w, doc, 2, "Edited.");
+  doc.getElementById("btn-report").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  await flush();
+  const order = calls.filter((c) => c.path.endsWith("/report")).map((c) => c.method);
+  assert.deepEqual(order.slice(0, 2), ["PUT", "POST"]);
+});
+
+test("losing the lock with a line open keeps what was typed", { skip }, async () => {
+  const { w, doc } = bootMinutes();
+  doc.querySelector('#report-editor .rblock[data-line="2"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  doc.querySelector("#report-editor textarea.rblock-edit").value = "Half a sentence";
+  w.eval("lockedBy({ name: 'Bob' })");
+  await flush();
+  assert.match(doc.getElementById("detail-body").innerHTML + w.eval("state.meeting.report"), /Half a sentence/);
+});
+
+test("a read-only phone viewer can still switch sections", { skip }, () => {
+  const { w, doc } = boot();
+  w.eval(`state.lock = { held: false, holder: { name: "Bob" } }; renderDetail();`);
+  assert.equal(doc.getElementById("mtg-nav-select").disabled, false);
+});
+
+test("clicking another line while one is open opens it straight away", { skip }, () => {
+  const { w, doc } = bootMinutes();
+  doc.querySelector('#report-editor .rblock[data-line="2"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  const ta = doc.querySelector("#report-editor textarea.rblock-edit");
+  ta.value = "Changed.";
+  const other = doc.querySelector('#report-editor .rblock[data-line="4"]');
+  other.dispatchEvent(new w.MouseEvent("mousedown", { bubbles: true }));
+  ta.dispatchEvent(new w.Event("blur"));
+  const open = doc.querySelector("#report-editor textarea.rblock-edit");
+  assert.ok(open, "the second line opened");
+  assert.equal(open.value, "- **Income:** $5");
+});
+
+test("a line can be opened from the keyboard", { skip }, () => {
+  const { w, doc } = bootMinutes();
+  const block = doc.querySelector('#report-editor .rblock[data-line="2"]');
+  assert.equal(block.getAttribute("tabindex"), "0");
+  block.dispatchEvent(new w.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  assert.ok(doc.querySelector("#report-editor textarea.rblock-edit"));
+});
