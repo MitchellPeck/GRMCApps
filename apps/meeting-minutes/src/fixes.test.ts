@@ -3,7 +3,8 @@ import { test } from "node:test";
 import { Pool } from "pg";
 import { addPerson } from "./people";
 import { addAgendaItem, addGuest, createMeeting, getAgendaItem, getMeeting, listGuests, saveReport, saveReportEdit, updateAgendaItem } from "./meetings";
-import { fixWords, listChanges, undoChange } from "./fixes";
+import { fixWords, listChanges, renameTopicSpeakers, undoChange } from "./fixes";
+import { reportEdited, rewriteMeetingSpeakerMap } from "./meetings";
 
 const url = process.env.TEST_DATABASE_URL;
 
@@ -120,5 +121,57 @@ test("a speaker name is one change, not one per topic, and relabels the transcri
     assert.equal((await getAgendaItem(pool, a))!.transcript, "Tom Smith: John said hello");
     assert.deepEqual((await getMeeting(pool, mid))!.speaker_map, { S0: "Tom Smith" });
     assert.deepEqual((await getAgendaItem(pool, b))!.speaker_map, { S0: "Tom Smith" });
+  } finally { await pool.end(); }
+});
+
+test("after the report, a speaker rename updates the minutes and keeps summaries", { skip: !url }, async () => {
+  const pool = new Pool({ connectionString: url });
+  try {
+    const { mid, a } = await setup(pool);
+    await updateAgendaItem(pool, a, { summary: "Speaker 1 reported.", actionItems: [{ task: "Send figures", owner: "Speaker 1" }] });
+    await saveReport(pool, mid, "### 1. Budget\nSpeaker 1 reported.\n- [ ] Send figures — **Speaker 1** (Budget)");
+    await rewriteMeetingSpeakerMap(pool, mid, { S0: "Linda" });
+    const it = (await getAgendaItem(pool, a))!;
+    assert.equal(it.transcript, "Linda: John said hello");
+    assert.equal(it.summary, "Linda reported.");
+    assert.equal(it.status, "done");
+    assert.deepEqual(it.action_items, [{ task: "Send figures", owner: "Linda" }]);
+    const m = (await getMeeting(pool, mid))!;
+    assert.equal(m.report, "### 1. Budget\nLinda reported.\n- [ ] Send figures — **Linda** (Budget)");
+    assert.equal(reportEdited(m), true);
+    const [change] = await listChanges(pool, mid);
+    assert.equal(change.kind, "rename");
+    assert.equal(change.summary, "“Speaker 1” → “Linda”");
+    assert.deepEqual(await undoChange(pool, mid, change.id), { ok: true });
+    assert.equal((await getAgendaItem(pool, a))!.summary, "Speaker 1 reported.");
+  } finally { await pool.end(); }
+});
+
+test("before the report, a speaker rename still clears the summary for rewriting", { skip: !url }, async () => {
+  const pool = new Pool({ connectionString: url });
+  try {
+    const { mid, a } = await setup(pool);
+    await pool.query("UPDATE meetings SET report = '', report_generated_at = NULL WHERE id = $1", [mid]);
+    await rewriteMeetingSpeakerMap(pool, mid, { S0: "Linda" });
+    const it = (await getAgendaItem(pool, a))!;
+    assert.equal(it.summary, "");
+    assert.equal(it.status, "pending");
+  } finally { await pool.end(); }
+});
+
+test("a topic's own speaker rename after the report changes only that topic", { skip: !url }, async () => {
+  const pool = new Pool({ connectionString: url });
+  try {
+    const { mid, b } = await setup(pool);
+    await updateAgendaItem(pool, b, { transcriptSegments: [{ text: "Roof leaks", speaker: "R0", start: 0, end: 1 }], transcriptRecordingId: 4 });
+    await updateAgendaItem(pool, b, { summary: "Speaker 1 said the roof leaks.", status: "done" });
+    await saveReport(pool, mid, "### 1. Budget\nSpeaker 1 spoke.\n### 2. Roof\nSpeaker 1 said the roof leaks.");
+    const r = await renameTopicSpeakers(pool, b, { R0: "Tom" });
+    assert.ok(r.changeId);
+    const it = (await getAgendaItem(pool, b))!;
+    assert.equal(it.transcript, "Tom: Roof leaks");
+    assert.equal(it.summary, "Tom said the roof leaks.");
+    assert.deepEqual(it.speaker_map, { R0: "Tom" });
+    assert.equal((await getMeeting(pool, mid))!.report, "### 1. Budget\nSpeaker 1 spoke.\n### 2. Roof\nTom said the roof leaks.");
   } finally { await pool.end(); }
 });

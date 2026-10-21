@@ -7,7 +7,7 @@ import { config } from "../config";
 import { extractAgendaItems, isSupportedAgendaType } from "../claude";
 import { reportHtml } from "../report";
 import { stripRangeMarkers } from "../ranges";
-import { fixWords, listChanges, undoChange } from "../fixes";
+import { fixWords, listChanges, renameTopicSpeakers, undoChange } from "../fixes";
 import {
   EDIT_SUMMARY_DELAY_MS, itemHasContent, reportState, requestReport, requestSummary,
 } from "../minutesWork";
@@ -219,10 +219,14 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
       reply.code(400);
       return { ok: false, error: "speakerMap must be an object." };
     }
+    const hadReport = !!(await getMeeting(pool, id))!.report_generated_at;
     await rewriteMeetingSpeakerMap(pool, id, b.speakerMap as Record<string, unknown>);
-    // The rewrite cleared every meeting-sourced summary; write them again.
-    for (const it of await listAgendaItems(pool, id)) {
-      if (it.transcript_source === "meeting" && itemHasContent(it)) await requestSummary(it.id);
+    // Without minutes yet, the rewrite cleared every meeting-sourced summary;
+    // write them again. With minutes, it corrected them in place.
+    if (!hadReport) {
+      for (const it of await listAgendaItems(pool, id)) {
+        if (it.transcript_source === "meeting" && itemHasContent(it)) await requestSummary(it.id);
+      }
     }
     return { ok: true };
   });
@@ -266,6 +270,19 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
     const b = (req.body ?? {}) as any;
     const existing = await getAgendaItem(pool, itemId);
     if (!existing) { reply.code(404); return { ok: false, error: "Agenda item not found." }; }
+    // A recorded transcript is rendered from its segments; free text written
+    // over it would be lost at the next re-render.
+    if (typeof b.transcript === "string" && b.transcript !== existing.transcript && existing.transcript_segments.length) {
+      reply.code(409);
+      return { ok: false, error: "This transcript comes from the recording; fix words with “Fix a name or word”." };
+    }
+    // Once the minutes exist, new speaker names correct them in place.
+    const meeting = await getMeeting(pool, existing.meeting_id);
+    if (meeting?.report_generated_at && b.speakerMap && typeof b.speakerMap === "object"
+        && JSON.stringify(b.speakerMap) !== JSON.stringify(existing.speaker_map)) {
+      await renameTopicSpeakers(pool, itemId, b.speakerMap, getIdentity(req).email);
+      delete b.speakerMap;
+    }
     // New words or new speaker names make the summary stale. Clear it and
     // summarize again once the edits settle, whether or not the page stays open.
     const contentChanged =

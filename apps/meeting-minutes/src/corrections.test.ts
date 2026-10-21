@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { renamedVoices, replaceInActionItems, replaceInSegments, replaceWords } from "./corrections";
+import { renamedVoices, replaceInActionItems, replaceInSegments, replaceMany, replaceWords } from "./corrections";
 
 test("replaceWords matches whole words only, keeps possessives and punctuation", () => {
   assert.deepEqual(replaceWords("John met Johnson. John's car, john.", "John", "Jon"),
@@ -33,4 +33,11 @@ test("renamedVoices pairs old and new display names, skipping names still in use
   assert.deepEqual(renamedVoices({ S0: "John", S1: "John" }, { S0: "Linda", S1: "John" }, ["S0", "S1"]), []);
   assert.deepEqual(renamedVoices({ S0: "A", S1: "A" }, { S0: "B", S1: "B" }, ["S0", "S1"]), [{ from: "A", to: "B" }]);
   assert.deepEqual(renamedVoices({ S0: "A" }, { S0: "A" }, ["S0"]), []);
+});
+
+test("replaceMany applies several renames at once, so two names can swap", () => {
+  assert.deepEqual(replaceMany("Ann thanked Bob.", [{ from: "Ann", to: "Bob" }, { from: "Bob", to: "Ann" }]),
+    { text: "Bob thanked Ann.", count: 2 });
+  assert.deepEqual(replaceMany("Speaker 1 and Speaker 10", [{ from: "Speaker 1", to: "Linda" }]),
+    { text: "Linda and Speaker 10", count: 1 });
 });

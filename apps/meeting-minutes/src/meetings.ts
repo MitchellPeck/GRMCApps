@@ -6,6 +6,7 @@ import { listPeople, matchPersonByName } from "./people";
 import { SpeakerStat, speakerStats } from "./speakers";
 import { removeRecordingFiles, removeMeetingRecordingFiles } from "./recordings";
 import { chronologicalSpeakerOrder } from "./segmentation";
+import { renameMeetingSpeakers } from "./fixes";
 
 export type MeetingRecordingStatus = "idle" | "recording" | "queued" | "processing" | "done" | "error";
 
@@ -698,6 +699,13 @@ export async function rewriteMeetingSpeakerMap(
   for (const [k, v] of Object.entries(rawMap ?? {})) {
     const name = String(v ?? "").trim();
     if (name) map[k] = name;
+  }
+  // Once the minutes exist, a rename corrects them in place instead of
+  // clearing every summary to be written again.
+  const m = await pool.query("SELECT report_generated_at FROM meetings WHERE id = $1", [meetingId]);
+  if (m.rows[0]?.report_generated_at) {
+    await renameMeetingSpeakers(pool, meetingId, map);
+    return;
   }
   const client = await pool.connect();
   try {

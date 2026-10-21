@@ -72,3 +72,15 @@ export function renamedVoices(
   }
   return out;
 }
+
+// Several whole-word replacements in one pass, so renames can't feed into each
+// other (two names can swap). Longer names win where they overlap.
+export function replaceMany(text: string, pairs: Array<{ from: string; to: string }>): { text: string; count: number } {
+  const usable = pairs.filter((p) => p.from && p.from !== p.to).sort((a, b) => b.from.length - a.from.length);
+  if (!usable.length || !text) return { text, count: 0 };
+  const to = new Map(usable.map((p) => [p.from, p.to]));
+  const re = new RegExp(`(?<![\\p{L}\\p{N}])(?:${usable.map((p) => escapeRegex(p.from)).join("|")})(?![\\p{L}\\p{N}])`, "gu");
+  let count = 0;
+  const out = text.replace(re, (m) => { count++; return to.get(m) ?? m; });
+  return { text: out, count };
+}
