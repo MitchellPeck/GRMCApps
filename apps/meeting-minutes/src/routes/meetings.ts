@@ -7,6 +7,7 @@ import { config } from "../config";
 import { extractAgendaItems, isSupportedAgendaType } from "../claude";
 import { reportHtml } from "../report";
 import { stripRangeMarkers } from "../ranges";
+import { patchItem, saveMeetingSpeakers } from "../actions";
 import { lockGuard } from "../lockGuard";
 import { acquireLock, getLock, releaseLock } from "../locks";
 import { fixWords, listChanges, renameTopicSpeakers, undoChange } from "../fixes";
@@ -251,15 +252,7 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
       reply.code(400);
       return { ok: false, error: "speakerMap must be an object." };
     }
-    const hadReport = !!(await getMeeting(pool, id))!.report_generated_at;
-    await rewriteMeetingSpeakerMap(pool, id, b.speakerMap as Record<string, unknown>);
-    // Without minutes yet, the rewrite cleared every meeting-sourced summary;
-    // write them again. With minutes, it corrected them in place.
-    if (!hadReport) {
-      for (const it of await listAgendaItems(pool, id)) {
-        if (it.transcript_source === "meeting" && itemHasContent(it)) await requestSummary(it.id);
-      }
-    }
+    await saveMeetingSpeakers(pool, id, b.speakerMap as Record<string, unknown>);
     return { ok: true };
   });
 
@@ -299,47 +292,9 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
   // Patch an agenda item: presenters, notes, transcript, status, speaker map.
   app.patch("/api/items/:itemId", async (req, reply) => {
     const itemId = Number((req.params as { itemId: string }).itemId);
-    const b = (req.body ?? {}) as any;
-    const existing = await getAgendaItem(pool, itemId);
-    if (!existing) { reply.code(404); return { ok: false, error: "Agenda item not found." }; }
-    // A recorded transcript is rendered from its segments; free text written
-    // over it would be lost at the next re-render.
-    if (typeof b.transcript === "string" && b.transcript !== existing.transcript && existing.transcript_segments.length) {
-      reply.code(409);
-      return { ok: false, error: "This transcript comes from the recording; fix words with “Fix a name or word”." };
-    }
-    // Once the minutes exist, new speaker names correct them in place.
-    const meeting = await getMeeting(pool, existing.meeting_id);
-    if (meeting?.report_generated_at && b.speakerMap && typeof b.speakerMap === "object"
-        && JSON.stringify(b.speakerMap) !== JSON.stringify(existing.speaker_map)) {
-      await renameTopicSpeakers(pool, itemId, b.speakerMap, getIdentity(req).email);
-      delete b.speakerMap;
-    }
-    // New words or new speaker names make the summary stale. Clear it and
-    // summarize again once the edits settle, whether or not the page stays open.
-    const contentChanged =
-      (typeof b.transcript === "string" && b.transcript !== existing.transcript)
-      || (typeof b.notes === "string" && b.notes !== existing.notes)
-      || (typeof b.appendTranscript === "string" && !!b.appendTranscript.trim())
-      || (!!b.speakerMap && typeof b.speakerMap === "object"
-        && JSON.stringify(b.speakerMap) !== JSON.stringify(existing.speaker_map));
-    if (contentChanged) { b.summary = ""; b.actionItems = []; b.status = "pending"; }
-    const r = await updateAgendaItem(pool, itemId, {
-      title: b.title,
-      description: b.description,
-      status: b.status,
-      notes: b.notes,
-      transcript: b.transcript,
-      appendTranscript: b.appendTranscript,
-      speakerMap: b.speakerMap && typeof b.speakerMap === "object" ? b.speakerMap : undefined,
-      summary: b.summary,
-      actionItems: Array.isArray(b.actionItems) ? b.actionItems : undefined,
-      presenterIds: b.presenterIds ? (b.presenterIds as any[]).map(Number) : undefined,
-      guestPresenterIds: Array.isArray(b.guestPresenterIds) ? (b.guestPresenterIds as any[]).map(Number) : undefined,
-    });
-    if (!r.ok) { reply.code(r.status); return r; }
-    if (contentChanged) await requestSummary(itemId, EDIT_SUMMARY_DELAY_MS);
-    return { ...r, summaryQueued: contentChanged };
+    const r = await patchItem(pool, itemId, (req.body ?? {}) as Record<string, unknown>, getIdentity(req).email);
+    reply.code(r.status);
+    return r.body;
   });
 
   app.delete("/api/items/:itemId", async (req, reply) => {

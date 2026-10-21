@@ -9,6 +9,9 @@ import { DiarizedSegment } from "./whisper";
 // `after`: restoring over a later edit would silently throw that edit away.
 
 export interface ItemFields {
+  title?: string;
+  description?: string;
+  notes?: string;
   transcript?: string;
   transcript_segments?: DiarizedSegment[];
   summary?: string;
@@ -17,12 +20,14 @@ export interface ItemFields {
 }
 
 export interface Snapshot {
-  meeting?: { report?: string; speaker_map?: SpeakerMap };
+  meeting?: { report?: string; speaker_map?: SpeakerMap; title?: string; meeting_date?: string; location?: string; description?: string };
+  attendees?: number[];
   items?: Record<string, ItemFields>;
   guests?: Record<string, { name: string }>;
 }
 
-const ITEM_COLUMNS = ["transcript", "transcript_segments", "summary", "action_items", "speaker_map"] as const;
+const ITEM_COLUMNS = ["title", "description", "notes", "transcript", "transcript_segments", "summary", "action_items", "speaker_map"] as const;
+const MEETING_TEXT = ["title", "meeting_date", "location", "description"] as const;
 const JSON_COLUMNS = new Set(["transcript_segments", "action_items", "speaker_map"]);
 
 // JSON with sorted keys: jsonb hands keys back in its own order.
@@ -38,7 +43,9 @@ function canonical(v: unknown): string {
 async function readFields(c: PoolClient, meetingId: number, shape: Snapshot): Promise<Snapshot> {
   const out: Snapshot = {};
   if (shape.meeting) {
-    const r = (await c.query("SELECT report, speaker_map FROM meetings WHERE id = $1", [meetingId])).rows[0] ?? {};
+    const r = (await c.query(
+      "SELECT report, speaker_map, title, meeting_date, location, description FROM meetings WHERE id = $1", [meetingId]
+    )).rows[0] ?? {};
     out.meeting = {};
     for (const k of Object.keys(shape.meeting) as Array<keyof NonNullable<Snapshot["meeting"]>>) {
       (out.meeting as any)[k] = r[k];
@@ -48,12 +55,17 @@ async function readFields(c: PoolClient, meetingId: number, shape: Snapshot): Pr
     out.items = {};
     for (const [id, fields] of Object.entries(shape.items)) {
       const r = (await c.query(
-        "SELECT transcript, transcript_segments, summary, action_items, speaker_map FROM agenda_items WHERE id = $1 AND meeting_id = $2",
+        `SELECT ${ITEM_COLUMNS.join(", ")} FROM agenda_items WHERE id = $1 AND meeting_id = $2`,
         [Number(id), meetingId]
       )).rows[0] ?? {};
       out.items[id] = {};
       for (const k of Object.keys(fields)) (out.items[id] as any)[k] = r[k];
     }
+  }
+  if (shape.attendees) {
+    out.attendees = (await c.query(
+      "SELECT person_id FROM meeting_attendees WHERE meeting_id = $1 ORDER BY person_id", [meetingId]
+    )).rows.map((r) => Number(r.person_id));
   }
   if (shape.guests) {
     out.guests = {};
@@ -74,6 +86,16 @@ export async function writeFields(c: PoolClient, meetingId: number, snap: Snapsh
         WHERE id = $1`,
       [meetingId, snap.meeting.report]
     );
+  }
+  for (const col of MEETING_TEXT) {
+    const v = snap.meeting?.[col];
+    if (v !== undefined) await c.query(`UPDATE meetings SET ${col} = $2, updated_at = now() WHERE id = $1`, [meetingId, v]);
+  }
+  if (snap.attendees !== undefined) {
+    await c.query("DELETE FROM meeting_attendees WHERE meeting_id = $1", [meetingId]);
+    for (const pid of snap.attendees) {
+      await c.query("INSERT INTO meeting_attendees (meeting_id, person_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", [meetingId, pid]);
+    }
   }
   if (snap.meeting?.speaker_map !== undefined) {
     await c.query("UPDATE meetings SET speaker_map = $2, updated_at = now() WHERE id = $1",
@@ -154,4 +176,24 @@ export async function listChanges(
   return r.rows.map((row) => ({
     id: Number(row.id), kind: row.kind, summary: row.summary, undone: !!row.undone_at, created_at: row.created_at,
   }));
+}
+
+// The current values of the fields `shape` names: taken before and after an
+// action, the pair is that action's change.
+export async function readSnapshot(pool: Pool, meetingId: number, shape: Snapshot): Promise<Snapshot> {
+  const c = await pool.connect();
+  try { return await readFields(c, meetingId, shape); } finally { c.release(); }
+}
+
+export function sameSnapshot(a: Snapshot, b: Snapshot): boolean {
+  return canonical(a) === canonical(b);
+}
+
+// Record an action done outside a transaction from its before/after snapshots.
+export async function recordSnapshotChange(
+  pool: Pool, meetingId: number, kind: string, summary: string, before: Snapshot, after: Snapshot, by = ""
+): Promise<number | null> {
+  if (sameSnapshot(before, after)) return null;
+  const c = await pool.connect();
+  try { return await recordChange(c, meetingId, kind, summary, before, after, by); } finally { c.release(); }
 }
