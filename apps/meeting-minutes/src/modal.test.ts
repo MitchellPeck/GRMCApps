@@ -696,3 +696,42 @@ test("after the report, renaming a topic's voice doesn't ask for a new summary",
   assert.equal(w.eval("state.items[0].summary"), "Speaker 1 said hi.");
   assert.ok(!calls.some((c: any) => c.path.endsWith("/summarize")), "no new summary requested");
 });
+
+// ── Edit lock ───────────────────────────────────────────────────────────────
+
+test("someone else's meeting is read-only, with their name, and play still works", { skip }, () => {
+  const { w, doc } = boot();
+  w.eval(`state.meeting.report = "### 1. Budget <!--t:m12:600.0-1200.0-->"; state.meeting.report_generated_at = "2026-04-14T10:00:00Z";
+    state.lock = { held: false, holder: { email: "ann@x", name: "Ann" } }; renderDetail();`);
+  const banner = doc.getElementById("lock-banner");
+  assert.ok(banner, "banner shown");
+  assert.match(banner.textContent, /Being edited by Ann/);
+  assert.equal(doc.getElementById("fix-from").disabled, true);
+  assert.equal(doc.getElementById("btn-report").disabled, true);
+  assert.equal(doc.querySelector("#report-box .sec-play").disabled, false);
+  assert.equal(doc.getElementById("btn-report-print").disabled, false);
+});
+
+test("your own meeting is editable", { skip }, () => {
+  const { w, doc } = boot();
+  w.eval(`state.lock = { held: true, holder: { email: "me@x", name: "Me" } }; renderDetail();`);
+  assert.equal(doc.getElementById("lock-banner"), null);
+  assert.equal(doc.getElementById("fix-from").disabled, false);
+});
+
+test("a write refused because someone else took the meeting turns the page read-only", { skip }, async () => {
+  const { w, doc } = boot();
+  w.eval("renderDetail()");
+  w.fetch = () => Promise.resolve({ ok: false, status: 423,
+    json: () => Promise.resolve({ ok: false, locked: true, holder: "Bob", error: "Bob is editing this meeting." }) });
+  await w.eval("saveItemField(state.items[0], { notes: 'x' })");
+  await flush();
+  assert.match(doc.getElementById("lock-banner").textContent, /Being edited by Bob/);
+  assert.equal(doc.getElementById("fix-from").disabled, true);
+});
+
+test("leaving a meeting lets go of its lock", { skip }, () => {
+  const { w, calls } = boot();
+  w.eval("state.lock = { held: true, holder: { email: '', name: '' } }; showList()");
+  assert.ok(calls.some((c: any) => c.method === "DELETE" && c.path === "/api/meetings/42/lock"));
+});

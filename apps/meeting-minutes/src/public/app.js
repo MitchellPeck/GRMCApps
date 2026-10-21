@@ -10,7 +10,10 @@ async function api(path, { method = 'GET', body } = {}) {
     headers: body ? { 'Content-Type': 'application/json' } : undefined,
     body: body ? JSON.stringify(body) : undefined,
   });
-  return normalizeApiResult(res);
+  const data = await normalizeApiResult(res);
+  // Someone else is editing this meeting: show it read-only from now on.
+  if (data && data.locked) lockedBy({ name: data.holder || '' });
+  return data;
 }
 async function normalizeApiResult(res){
   var data = null;
@@ -212,6 +215,64 @@ function renderMarkdown(md){
   return out.join('');
 }
 
+// ── Edit lock ───────────────────────────────────────────────────────────────
+// One editor per meeting. The page takes the lock when it opens a meeting,
+// keeps it alive every 30 seconds, and lets go when you leave. Anyone else sees
+// the meeting read-only; their own heartbeat takes the lock once it lapses.
+var LOCK_HEARTBEAT_MS=30000, lockTimer=null;
+function lockedBy(holder){
+  if(!state.meeting) return;
+  var was=state.lock && !state.lock.held;
+  state.lock={ held:false, holder: holder||{} };
+  if(!was) renderDetail();
+}
+function lockHeartbeat(){
+  if(!state.meeting) return;
+  var mid=state.meeting.id;
+  api('/api/meetings/'+mid+'/lock', { method:'POST' }).then(function(res){
+    if(!res.ok || !state.meeting || state.meeting.id!==mid) return;
+    var wasReadOnly=readOnly();
+    state.lock={ held: res.held, holder: res.holder };
+    if(wasReadOnly && res.held){ refreshMeeting(mid); state.lockNotice='You can edit now.'; }
+    else if(!wasReadOnly && !res.held) renderDetail();
+  });
+}
+function startLockHeartbeat(){
+  stopLockHeartbeat();
+  lockHeartbeat();
+  lockTimer=setInterval(lockHeartbeat, LOCK_HEARTBEAT_MS);
+}
+function stopLockHeartbeat(){ if(lockTimer){ clearInterval(lockTimer); lockTimer=null; } }
+function releaseMeetingLock(){
+  if(!state.meeting || !state.lock || !state.lock.held) return;
+  try { fetch('/api/meetings/'+state.meeting.id+'/lock', { method:'DELETE', keepalive:true }); } catch(e){}
+  state.lock=null;
+}
+window.addEventListener('pagehide', releaseMeetingLock);
+function readOnly(){ return !!(state.lock && !state.lock.held); }
+
+// While someone else edits: a banner, and every control disabled except
+// listening, printing and links.
+function applyReadOnly(){
+  var body=document.getElementById('detail-body'); if(!body) return;
+  var old=document.getElementById('lock-banner'); if(old) old.remove();
+  if(state.lockNotice && !readOnly()){
+    var ok=document.createElement('div'); ok.className='alert alert-ok'; ok.id='lock-notice';
+    ok.textContent=state.lockNotice; state.lockNotice='';
+    body.insertBefore(ok, body.firstChild);
+  }
+  body.classList.toggle('readonly', readOnly());
+  if(!readOnly()) return;
+  var h=state.lock.holder||{}, who=h.name||h.email||'Someone else';
+  var b=document.createElement('div'); b.className='alert alert-warn'; b.id='lock-banner';
+  b.textContent='Being edited by '+who+'. You can look, listen and export, but not change anything.';
+  body.insertBefore(b, body.firstChild);
+  body.querySelectorAll('input, textarea, select, button').forEach(function(el){
+    if(el.matches('.sec-play, .spk-play, #btn-report-print')) return;
+    el.disabled=true;
+  });
+}
+
 // ── App state ───────────────────────────────────────────────────────────────
 var state = { people: [], peopleById: {}, meeting: null, attendeeIds: [], items: [] };
 
@@ -231,6 +292,8 @@ document.querySelectorAll('.tab').forEach(function(t){
 function showList(){
   stopRecording();
   stopPolling();
+  stopLockHeartbeat();
+  releaseMeetingLock();
   // Summarize the item left open, so nothing is lost on the way out.
   if(state.openItemId && state.items){
     var open=state.items.filter(function(x){return x.id===state.openItemId;})[0];
@@ -414,7 +477,9 @@ function openMeeting(id){
     state.meetingSpeakerStats = det.meetingSpeakerStats || [];
     state.guests = det.guests || [];
     state.report = det.report || null;
+    state.lock = det.lock || null;
     renderDetail();
+    startLockHeartbeat();
     if(anyPendingWork()) startPolling();
   });
 }
@@ -1955,6 +2020,7 @@ function renderReportState(){
       : (has && r.status!=='pending' ? '<div class="hint report-current">Up to date with the agenda item summaries'
         +(r.generatedAt?' &middot; generated '+esc(fmtDate(r.generatedAt)):'')+'.</div>' : '');
   }
+  applyReadOnly();
 }
 
 // ── Boot ────────────────────────────────────────────────────────────────────
