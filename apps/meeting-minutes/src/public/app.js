@@ -593,10 +593,12 @@ function renderDetail(){
   h+='<section data-sec="recording" hidden>'
     +'<div class="card"><div class="ct">Meeting recording</div>'
     +'<div id="mrec-msg"></div>'
-    +'<div class="btn-row"><button class="btn btn-primary" id="btn-meeting-rec" data-default="● Record meeting">● Record meeting</button>'
+    +'<div class="btn-row rec-main"><button class="btn btn-primary rec-big" id="btn-meeting-rec" data-default="● Record meeting">● Record meeting</button>'
     +'<span class="rec-status" id="mrec-status"></span></div>'
-    +'<div class="hint">One recording for the whole meeting. Open each topic as you discuss it — that click files the audio under the right topic. Processing starts when you stop.</div>'
-    +'<div id="mrec-extra"></div></div></section>';
+    +'<div class="hint">One recording for the whole meeting. While it runs, tap each topic as it comes up and the audio is filed under it. Processing starts when you stop.</div>'
+    +'<div id="rec-topics"></div>'
+    +'<div id="mrec-extra"></div></div>'
+    +'<div class="card"><div class="ct">Recordings</div><div id="rec-history"></div></div></section>';
 
   // Meeting-wide speaker naming (populated once transcripts with meeting-wide
   // speaker labels exist; empty until then)
@@ -606,8 +608,8 @@ function renderDetail(){
   h+='<div class="card"><div class="ct">Fix a name or word</div>'
     +'<div class="hint">Corrects it in the transcripts, summaries, action items, speaker names, guests and the report, all at once.</div>'
     +'<div class="fix-row" id="fix-panel">'
-    +'<input id="fix-from" placeholder="Replace (e.g. John)">'
-    +'<input id="fix-to" placeholder="With (e.g. Jon)">'
+    +'<input type="text" id="fix-from" placeholder="Replace (e.g. John)">'
+    +'<input type="text" id="fix-to" placeholder="With (e.g. Jon)">'
     +'<select id="fix-scope"><option value="">Whole meeting</option>'
     +state.items.map(function(it, i){ return '<option value="'+it.id+'">'+(i+1)+'. '+esc(it.title)+'</option>'; }).join('')
     +'</select>'
@@ -625,12 +627,13 @@ function renderDetail(){
     +(m.agenda_file_name?'<div class="hint" style="margin-bottom:8px">Loaded from: '+esc(m.agenda_file_name)+'</div>':'')
     +'<div class="field"><label>Upload agenda (PDF, image, or text)</label>'
     +'<input type="file" id="agenda-file" accept="application/pdf,image/png,image/jpeg,image/webp,image/gif,text/plain,.txt,.md"></div>'
-    +'<div class="btn-row"><button class="btn btn-primary" id="btn-upload-agenda" data-default="Extract agenda items">Extract agenda items</button>'
-    +'<button class="btn btn-secondary" id="btn-add-item" data-default="Add item manually">Add item manually</button></div>'
+    +'<div class="btn-row"><button class="btn btn-primary" id="btn-upload-agenda" data-default="Extract agenda items">Extract agenda items</button></div>'
     +'<div class="hint" style="margin-top:6px">Uploading replaces the current agenda items.</div></div>';
 
   // Agenda items (the run-the-meeting flow)
-  h+='<div class="section-title">Run the meeting</div>';
+  h+='<div class="agenda-bar"><b id="agenda-count"></b><span style="flex:1"></span>'
+    +'<button class="btn-sm" id="btn-agenda-replace">Replace from file</button> '
+    +'<button class="btn-sm" id="btn-add-item" data-default="+ Add topic">+ Add topic</button></div>';
   h+='<div id="items-wrap"></div>';
   h+='</section>';
 
@@ -675,6 +678,9 @@ function renderDetail(){
   document.getElementById('btn-roll-clear').addEventListener('click', function(){ setAttendance([]); });
   document.getElementById('btn-upload-agenda').addEventListener('click', uploadAgenda);
   document.getElementById('btn-add-item').addEventListener('click', addItemManually);
+  document.getElementById('btn-agenda-replace').addEventListener('click', function(){
+    state.showAgendaUpload=!state.showAgendaUpload; applyTopicFocus();
+  });
   document.getElementById('btn-meeting-rec').addEventListener('click', toggleMeetingRecording);
   document.getElementById('btn-report').addEventListener('click', generateReport);
   document.getElementById('btn-fix-preview').addEventListener('click', function(){ runFix(true); });
@@ -926,6 +932,8 @@ function showSection(sec, topicId){
 function applyTopicFocus(){
   var up=document.getElementById('agenda-upload-card');
   if(up) up.hidden = !!(state.items && state.items.length) && !state.showAgendaUpload;
+  var n=(state.items||[]).length, c=document.getElementById('agenda-count');
+  if(c) c.textContent = n ? n+' topic'+(n===1?'':'s') : 'No topics yet';
 }
 document.addEventListener('click', function(e){
   var a=e.target && e.target.closest ? e.target.closest('#mtg-nav a') : null;
@@ -1310,9 +1318,11 @@ function itemHtml(it, idx){
     +'<div class="ihead" data-toggle-item="'+it.id+'">'
       +'<div class="itop"><div class="inum" id="inum-'+it.id+'">'+(idx+1)+'</div>'
       +'<div><div class="ititle">'+esc(it.title)+'</div>'
+      +'<div class="ipres" id="ipres-'+it.id+'">'+esc(presenterLine(it))+'</div>'
       +(it.description?'<div class="idesc">'+esc(it.description)+'</div>':'')
       +'</div></div>'
-      +'<span class="item-badge" id="badge-'+it.id+'">'+itemBadgeInner(it)+'</span>'
+      +'<span class="ihead-end"><span class="item-badge" id="badge-'+it.id+'">'+itemBadgeInner(it)+'</span>'
+      +'<span id="iplay-'+it.id+'">'+topicPlayHtml(it)+'</span></span>'
     +'</div>'
     +'<div class="ibody collapsed" id="ibody-'+it.id+'">'
       +'<div class="sublbl">Presented by</div>'
@@ -1352,6 +1362,29 @@ function itemHtml(it, idx){
 // since free text would be lost the next time it is re-rendered.
 function recordedTranscript(it){ return !!(it.transcript_segments && it.transcript_segments.length); }
 
+// Who presents a topic, for its row in the agenda.
+function presenterLine(it){
+  var names=(it.presenter_ids||[]).map(function(id){ var p=state.peopleById[id]; return p ? p.name : ''; })
+    .concat((it.guest_presenter_ids||[]).map(function(id){
+      var g=(state.guests||[]).filter(function(x){ return x.id===id; })[0]; return g ? g.name+' (guest)' : '';
+    })).filter(Boolean);
+  return names.join(', ');
+}
+// The ▶ for a topic's stretch of the recording, when it has one: the same
+// recording rules as the minutes (see minutesWork.reportInput).
+function topicPlayHtml(it){
+  var segs=it.transcript_segments||[];
+  if(!segs.length) return '';
+  var start=Infinity, end=-Infinity;
+  segs.forEach(function(x){ start=Math.min(start, x.start); end=Math.max(end, x.end); });
+  var src=it.transcript_source==='meeting' ? 'm' : 'i', rec=null;
+  if(it.transcript_recording_id!=null) rec=it.transcript_recording_id;
+  else if(src==='m'){ var mr=state.meetingRecordings||[]; rec=mr.length ? mr[mr.length-1].id : null; }
+  else if((it.recordings||[]).length===1) rec=it.recordings[0].id;
+  if(rec==null) return '';
+  return rangeParts('x <!--t:'+src+rec+':'+start.toFixed(1)+'-'+end.toFixed(1)+'-->').before;
+}
+
 // True when the item has content worth summarizing.
 function itemHasContent(it){ return !!((it.transcript && it.transcript.trim()) || (it.notes && it.notes.trim())); }
 
@@ -1374,6 +1407,7 @@ function itemBadgeInner(it){
 }
 function refreshBadge(it){
   var b=document.getElementById('badge-'+it.id); if(b) b.innerHTML=itemBadgeInner(it);
+  var pl=document.getElementById('iplay-'+it.id); if(pl && !pl.querySelector('.sec-play')) pl.innerHTML=topicPlayHtml(it);
   renderMeetingNav();
 }
 
@@ -1394,7 +1428,11 @@ function actionItemsHtml(items){
 }
 
 function wireItem(it){
-  document.querySelector('[data-toggle-item="'+it.id+'"]').addEventListener('click', function(){ toggleItemOpen(it); });
+  document.querySelector('[data-toggle-item="'+it.id+'"]').addEventListener('click', function(e){
+    // The ▶ plays the topic; it doesn't open it.
+    if(e.target && e.target.closest && e.target.closest('.sec-play')) return;
+    toggleItemOpen(it);
+  });
   renderPresenterChips(it);
   renderSpeakerMap(it);
   renderRecordings(it);
@@ -1617,15 +1655,20 @@ function renderMeetingSpeakerPanel(){
   var recs=state.meetingRecordings||[];
   var recId=recs.length ? recs[recs.length-1].id : null;
   var opts=speakerOptions;
+  // Voices still to name come first.
+  var ordered=stats.filter(function(st){ return !map[st.speaker]; }).concat(stats.filter(function(st){ return !!map[st.speaker]; }));
+  var mins=function(sec){ var m=Math.round(sec/60); return m<1 ? 'under a minute' : m+' min'; };
   el.innerHTML='<div class="card"><div class="ct">Who spoke in this meeting?</div>'
     +'<div id="mspk-msg"></div>'
-    +'<div class="spk-rows">'
-    + stats.map(function(st){
+    +'<div class="voice-cards">'
+    + ordered.map(function(st){
         var cur=map[st.speaker]||'';
         var pct=Math.round(st.share*100);
-        return '<div class="spk-row"><span class="spk-tag">'+esc(st.label)+'</span>'
-          +'<span class="spk-share">'+pct+'%</span>'
-          +'<select data-mspk="'+esc(st.speaker)+'">'+opts(cur)+'</select>'
+        return '<div class="voice-card spk-row'+(cur?'':' unnamed')+'">'
+          +'<div class="voice-head"><span class="spk-tag">'+esc(st.label)+'</span>'
+          +'<span class="voice-time">'+mins(st.seconds||0)+' · '+pct+'%</span>'
+          +(cur?'':'<span class="chip warn-chip">unnamed</span>')+'<span style="flex:1"></span>'
+          +'<select data-mspk="'+esc(st.speaker)+'">'+opts(cur)+'</select></div>'
           +(st.sample?'<div class="spk-sample">&ldquo;'+esc(st.sample)+'&rdquo;</div>':'')
           +speakerSamplesHtml(st, recId)
           +'</div>';
@@ -1740,6 +1783,7 @@ function renderPresenterChips(it){
       renderPresenterChips(it);
     });
   });
+  var hp=document.getElementById('ipres-'+it.id); if(hp) hp.textContent=presenterLine(it);
 }
 
 function saveItemField(it, fields){
@@ -2022,11 +2066,50 @@ function renderRecBanner(){
   document.getElementById('rb-stop').addEventListener('click', function(){ stopMeetingRecording(); });
 }
 
+// While recording: every topic as a big button. Tap the one being discussed and
+// the audio from here on is filed under it (the same marker as opening it).
+function renderRecTopics(){
+  var el=document.getElementById('rec-topics'); if(!el) return;
+  var here=meetingRec && state.meeting && meetingRec.meetingId===state.meeting.id;
+  if(!here || !(state.items||[]).length){ el.innerHTML=''; return; }
+  el.innerHTML='<div class="hint" style="margin:10px 0 6px">Tap the topic being discussed:</div><div class="rec-topic-grid">'
+    +state.items.map(function(it, i){
+      return '<button type="button" class="rec-topic'+(meetingRec.topicId===it.id?' on':'')+'" data-rec-topic="'+it.id+'">'
+        +'<span class="rec-topic-n">'+(i+1)+'</span> '+esc(it.title)+'</button>';
+    }).join('')+'</div>';
+  el.querySelectorAll('[data-rec-topic]').forEach(function(b){
+    b.addEventListener('click', function(){ postTopicMarker(Number(b.getAttribute('data-rec-topic'))); renderRecTopics(); });
+  });
+}
+// Every whole-meeting recording, with its length and the audio to download.
+function renderRecHistory(){
+  var el=document.getElementById('rec-history'); if(!el) return;
+  var recs=state.meetingRecordings||[];
+  if(!recs.length){ el.innerHTML='<div class="empty-hint">Nothing recorded yet.</div>'; return; }
+  var rs=(state.meeting||{}).recording_status;
+  el.innerHTML=recs.map(function(r, i){
+    var len = r.started_at && r.finished_at ? fmtSpanTime((new Date(r.finished_at)-new Date(r.started_at))/1000) : 'in progress';
+    var last=i===recs.length-1;
+    return '<div class="rec-hist-row"><span>'+esc(fmtDate(r.started_at))+'</span><span class="muted">'+esc(len)+'</span><span style="flex:1"></span>'
+      +'<a href="/api/meeting-recordings/'+r.id+'/download">Download</a>'
+      +(last && rs==='done' ? ' <button class="btn-sm" id="btn-mrec-reprocess">Reprocess…</button>' : '')+'</div>';
+  }).join('');
+  var rb=document.getElementById('btn-mrec-reprocess');
+  if(rb) rb.addEventListener('click', function(){
+    // Reprocessing rewrites every topic's transcript, speakers and summary from
+    // the stored audio; the audio itself is untouched.
+    if(!confirm('Reprocess the meeting recording? This replaces every topic\'s transcript, speaker names and summary. The recording itself is kept.')) return;
+    reprocessMeetingRecording();
+  });
+}
+
 function renderMeetingRecUi(){
   // Both of these must run even on the list view, where the meeting card below
   // does not exist: the recorder outlives the detail view.
   renderRecBanner();
   syncItemRecControls();
+  renderRecTopics();
+  renderRecHistory();
   var b=document.getElementById('btn-meeting-rec');
   var st=document.getElementById('mrec-status');
   var ex=document.getElementById('mrec-extra');
@@ -2073,17 +2156,6 @@ function renderMeetingRecUi(){
         var rb=document.getElementById('btn-mrec-retry');
         if(rb) rb.addEventListener('click', reprocessMeetingRecording);
       }
-      else if(rs==='done' && state.meetingRecordings && state.meetingRecordings.length){
-        var lastRec=state.meetingRecordings[state.meetingRecordings.length-1];
-        ex.innerHTML='<div class="hint">Processed. <a href="/api/meeting-recordings/'+lastRec.id+'/download">Download the recording</a></div>'
-          +'<button class="btn-sm" id="btn-mrec-reprocess">Reprocess recording</button>';
-        document.getElementById('btn-mrec-reprocess').addEventListener('click', function(){
-          // Reprocessing rewrites every topic's transcript, speakers and
-          // summary from the stored audio; the audio itself is untouched.
-          if(!confirm('Reprocess the meeting recording? This replaces every topic\'s transcript, speaker names and summary. The recording itself is kept.')) return;
-          reprocessMeetingRecording();
-        });
-      }
       else ex.innerHTML='';
     }
   }
@@ -2127,6 +2199,7 @@ function postTopicMarker(itemId){
   meetingRec.topic = it ? it.title : '';
   meetingRec.topicId = it ? it.id : null;
   renderRecBanner();
+  renderRecTopics();
   api('/api/meeting-recordings/'+meetingRec.recordingId+'/marker', {
     method:'POST', body:{ itemId: itemId, atSeconds: meetingElapsedSeconds() }
   })['catch'](function(){});

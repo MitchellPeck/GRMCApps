@@ -236,3 +236,74 @@ body.has-rec-banner .mtg-nav{top:64px}
   #detail-body section[data-sec="minutes"][hidden]{ display:block !important; }
 }
 .report-editor .rblock:focus-visible{outline:2px solid var(--navy,#1e3a5f);outline-offset:1px}
+
+/* ── Purpose-built sections ─────────────────────────────────────────────── */
+.mtg-head{margin:0 0 14px}
+.mtg-head h2{margin:0;font-family:var(--font-display);color:var(--navy)}
+.mtg-head .dmeta{color:var(--muted);margin-top:2px}
+.muted{color:var(--muted)}
+.empty-hint{color:var(--hint);font-size:13px;padding:6px 0}
+
+/* Details */
+.dcard-head{display:flex;align-items:center;margin-bottom:6px}
+.drow{display:flex;gap:12px;align-items:baseline;padding:8px 0;border-bottom:1px solid var(--rule)}
+.drow:last-child{border-bottom:none}
+.dlbl{flex:0 0 96px;color:var(--muted);font-size:12.5px}
+.dval{flex:1;min-width:0;overflow-wrap:anywhere}
+#details-form .drow{align-items:center}
+#details-form input,#details-form textarea,#details-form select{flex:1;min-width:0}
+.danger-link{color:var(--rej-fg);border-color:var(--danger-border)}
+.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:12px}
+.stat{background:var(--card);border:1px solid var(--rule);border-radius:var(--r);padding:10px 12px}
+.stat b{display:block;font-size:20px;color:var(--navy);font-variant-numeric:tabular-nums}
+.stat span{color:var(--muted);font-size:12.5px}
+
+/* People: roll call */
+.roll-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+.roll-count{color:var(--muted);font-size:13px}
+.roll-list{display:flex;flex-direction:column}
+.roll-row{display:flex;align-items:center;gap:10px;padding:8px 6px;border:none;border-bottom:1px solid var(--rule);
+  background:none;text-align:left;font:inherit;color:inherit;cursor:pointer;width:100%;flex-wrap:wrap}
+.roll-row:last-child{border-bottom:none}
+button.roll-row:hover{background:var(--paper)}
+.roll-check{flex:0 0 20px;height:20px;border:2px solid var(--navy);border-radius:4px;display:inline-flex;
+  align-items:center;justify-content:center;color:#fff;font-size:13px;line-height:1}
+.roll-row.on .roll-check{background:var(--navy)}
+.roll-name{font-weight:600}
+.roll-row:not(.on) .roll-name{color:var(--muted)}
+.roll-title{color:var(--muted);font-size:12.5px}
+.roll-absent{margin-left:auto;font-size:11.5px;color:var(--rej-fg);background:var(--rej-bg);border-radius:10px;padding:1px 8px}
+.guest-row{cursor:default}
+
+/* Agenda */
+.agenda-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:4px 0 10px}
+.ipres{color:var(--muted);font-size:12.5px}
+.ihead-end{display:inline-flex;align-items:center;gap:8px;flex:none}
+
+/* Recording */
+.rec-main{align-items:center;gap:14px}
+.rec-big{font-size:16px;padding:12px 20px;border-radius:999px}
+.rec-topic-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px}
+.rec-topic{text-align:left;padding:14px 12px;border:2px solid var(--rule);border-radius:var(--r-lg);background:var(--card);
+  font:inherit;font-weight:600;color:var(--ink);cursor:pointer;min-height:56px}
+.rec-topic:hover{border-color:var(--navy)}
+.rec-topic.on{border-color:var(--navy);background:var(--navy);color:#fff}
+.rec-topic-n{opacity:.7;margin-right:4px}
+.rec-hist-row{display:flex;gap:12px;align-items:center;padding:8px 0;border-bottom:1px solid var(--rule);flex-wrap:wrap}
+.rec-hist-row:last-child{border-bottom:none}
+
+/* Speakers */
+.voice-cards{display:flex;flex-direction:column;gap:10px}
+.voice-card{border:1px solid var(--rule);border-radius:var(--r-lg);padding:10px 12px;background:var(--card);display:block}
+.voice-card.unnamed{border-color:var(--gold);box-shadow:0 0 0 3px var(--gold-ring)}
+.voice-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.voice-time{color:var(--muted);font-size:12.5px;font-variant-numeric:tabular-nums}
+.warn-chip{background:var(--pending-bg);color:var(--pending-fg);border-color:transparent}
+@media (max-width:720px){
+  .dlbl{flex-basis:72px}
+  .stats{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .rec-topic-grid{grid-template-columns:1fr 1fr}
+}
+.voice-head select{min-width:190px;max-width:100%}
+.report-editor .rblock ul{margin:0;padding-left:22px}
+.report-editor .rblock li.todo{margin-left:-22px}

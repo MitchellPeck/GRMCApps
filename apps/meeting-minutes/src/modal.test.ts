@@ -1172,3 +1172,74 @@ test("guests show their role and what they presented", { skip }, () => {
     state.section = "people"; renderDetail();`);
   assert.match(doc.getElementById("guest-list").textContent, /Gina.*Architect.*Budget/);
 });
+
+test("Agenda: a toolbar with the count, Replace from file and Add topic; the upload card only on demand", { skip }, () => {
+  const { w, doc } = bootTwoTopics();
+  w.eval(`state.section = "agenda"; renderDetail();`);
+  assert.match(doc.getElementById("agenda-count").textContent, /2 topics/);
+  assert.equal(doc.getElementById("agenda-upload-card").hidden, true);
+  doc.getElementById("btn-agenda-replace").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  assert.equal(doc.getElementById("agenda-upload-card").hidden, false);
+  assert.ok(doc.getElementById("btn-add-item"));
+  w.eval(`state.items = []; renderDetail();`);
+  assert.equal(doc.getElementById("agenda-upload-card").hidden, false, "no topics yet: shown");
+});
+
+test("each topic row shows its presenters, status and a ▶ that doesn't open the topic", { skip }, () => {
+  const { w, doc } = boot();
+  w.eval(`state.people = [{ id: 7, name: "Linda", active: true }]; state.peopleById = { 7: state.people[0] };
+    state.attendeeIds = [7]; state.items[0].presenter_ids = [7]; state.items[0].summary = "Done.";
+    state.items[0].transcript = "Speaker 1: hi"; state.items[0].transcript_source = "meeting"; state.items[0].transcript_recording_id = 5;
+    state.items[0].transcript_segments = [{ text: "hi", speaker: "S0", start: 60, end: 125 }];
+    state.section = "agenda"; renderDetail();`);
+  const head = doc.querySelector("#item-1 .ihead");
+  assert.match(head.textContent, /Linda/);
+  assert.match(head.textContent, /Summary ready/);
+  const play = head.querySelector(".sec-play");
+  assert.ok(play);
+  assert.equal(play.getAttribute("data-src"), "m");
+  assert.equal(play.getAttribute("data-rec"), "5");
+  w.Audio = function () { return { src: "", play() { return Promise.resolve(); }, pause() {}, addEventListener() {}, removeAttribute() {}, load() {} }; };
+  play.dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  assert.ok(doc.getElementById("ibody-1").classList.contains("collapsed"), "playing didn't open the topic");
+});
+
+test("Recording: while recording, topics are big buttons that file the audio", { skip }, () => {
+  const { w, doc } = bootTwoTopics();
+  const calls = stubFetch(w, () => ({ ok: true }));
+  w.eval(`state.section = "recording"; renderDetail();
+    meetingRec = { meetingId: 42, recordingId: 7, title: "M", topic: "Budget", topicId: 1, t0: performance.now(),
+      mr: { state: "recording" }, stream: { getTracks(){ return []; } } };
+    renderMeetingRecUi();`);
+  const btns = doc.querySelectorAll("#rec-topics .rec-topic");
+  assert.equal(btns.length, 2);
+  assert.ok(btns[0].classList.contains("on"));
+  btns[1].dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  assert.ok(calls.some((c) => c.path === "/api/meeting-recordings/7/marker" && c.body.itemId === 2));
+  assert.ok(doc.querySelectorAll("#rec-topics .rec-topic")[1].classList.contains("on"));
+});
+
+test("Recording: past recordings with length, download and reprocess", { skip }, () => {
+  const { w, doc } = boot();
+  w.eval(`state.meeting.recording_status = "done";
+    state.meetingRecordings = [{ id: 7, started_at: "2026-04-14T19:00:00Z", finished_at: "2026-04-14T20:42:05Z" }];
+    state.section = "recording"; renderDetail();`);
+  const h = doc.getElementById("rec-history");
+  assert.match(h.textContent, /1:42:05/);
+  assert.ok(h.querySelector('a[href="/api/meeting-recordings/7/download"]'));
+  assert.ok(doc.getElementById("btn-mrec-reprocess"));
+});
+
+test("Speakers: one card per voice, unnamed first, with talk time", { skip }, () => {
+  const { w, doc } = boot();
+  w.eval(`state.meeting.speaker_map = { S0: "Linda" };
+    state.meetingSpeakerStats = [
+      { speaker: "S0", label: "Speaker 1", seconds: 2280, share: 0.8, sample: "giving is ahead", samples: [] },
+      { speaker: "S1", label: "Speaker 2", seconds: 240, share: 0.2, sample: "after the gutters?", samples: [] }];
+    state.section = "speakers"; renderDetail();`);
+  const cards = doc.querySelectorAll("#meeting-speakers .voice-card");
+  assert.equal(cards.length, 2);
+  assert.match(cards[0].textContent, /Speaker 2.*4 min.*after the gutters/);
+  assert.ok(cards[0].classList.contains("unnamed"));
+  assert.match(cards[1].textContent, /Speaker 1.*38 min/);
+});
