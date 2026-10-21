@@ -310,7 +310,7 @@ button.roll-row:hover{background:var(--paper)}
 
 /* ── Chat beside the minutes ────────────────────────────────────────────── */
 .chat-panel{position:sticky;top:calc(env(safe-area-inset-top,0px) + 12px);display:flex;flex-direction:column;gap:8px;
-  background:var(--card);border:1px solid var(--rule);border-radius:var(--r-lg);padding:12px;max-height:calc(100vh - 40px)}
+  background:var(--card);border:1px solid var(--rule);border-radius:var(--r-lg);padding:12px;height:calc(100vh - 220px);box-sizing:border-box}
 body.has-rec-banner .chat-panel{top:64px}
 .chat-head .hint{margin-top:2px}
 .chat-log{flex:1;min-height:160px;overflow-y:auto;display:flex;flex-direction:column;gap:8px;padding-right:2px}
@@ -327,7 +327,7 @@ body.has-rec-banner .chat-panel{top:64px}
 .chat-quote{display:block;font-style:italic}
 .chat-compose{display:flex;gap:8px;align-items:flex-end}
 .chat-compose textarea{flex:1;min-width:0;resize:vertical;font:inherit;padding:6px 8px}
-@media (max-width:720px){ .chat-panel{position:static;max-height:none} }
+@media (max-width:720px){ .chat-panel{position:static;height:auto} }
 /* The meeting page is wider than the list so the minutes and the chat fit side
    by side; the other sections keep a comfortable reading width. */
 #view-detail.layout{max-width:1220px}

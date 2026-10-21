@@ -1510,3 +1510,22 @@ test("Undo last edit takes back the most recent save of the minutes", { skip }, 
   assert.ok(calls.some((c) => c.method === "POST" && c.path === "/api/meetings/42/report/undo"));
   assert.match(doc.getElementById("report-editor").textContent, /Undone text\./);
 });
+
+test("the chat panel ends at the bottom of the window, above the mini player", { skip }, () => {
+  const { w, doc } = bootChat(() => ({ ok: true, messages: [] }));
+  const panel = doc.getElementById("chat-panel");
+  panel.getBoundingClientRect = () => ({ top: 200, left: 0, right: 0, bottom: 0, width: 0, height: 0 });
+  Object.defineProperty(w, "innerHeight", { value: 900, configurable: true });
+  Object.defineProperty(w, "innerWidth", { value: 1400, configurable: true });
+  w.eval("fitChatPanel()");
+  assert.equal(panel.style.height, "684px", "900 - 200 - 16");
+  fakeAudio(w);
+  const box = doc.createElement("div");
+  box.innerHTML = w.eval(`renderMarkdown("### 1. Budget <!--t:m12:600.0-1200.0-->")`);
+  doc.body.appendChild(box);
+  const mp = () => doc.getElementById("mini-player");
+  box.querySelector(".sec-play").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  mp().getBoundingClientRect = () => ({ top: 760, left: 0, right: 0, bottom: 884, width: 340, height: 124 });
+  w.eval("fitChatPanel()");
+  assert.equal(panel.style.height, "548px", "stops 12px above the player: 760 - 12 - 200");
+});

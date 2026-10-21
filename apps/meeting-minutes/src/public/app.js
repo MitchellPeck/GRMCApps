@@ -895,6 +895,29 @@ document.addEventListener('click', function(e){
 // Beside the minutes: tell it what to fix or ask about the meeting. It does
 // what the page does (same server actions) and shows a card for each change,
 // with Undo, and a ▶ for any part of the recording it points to.
+// The chat panel runs from where it starts down to the bottom of the window
+// (stopping above the mini player), so the message box is always in view; it
+// sticks as the page scrolls and grows into the space above.
+var CHAT_GAP=16;
+function fitChatPanel(){
+  var el=document.getElementById('chat-panel');
+  if(!el || el.hidden) return;
+  if(window.innerWidth<=720){ el.style.height=''; return; }
+  var top=el.getBoundingClientRect().top;
+  var bottom=window.innerHeight-CHAT_GAP;
+  var mpl=document.getElementById('mini-player');
+  if(mpl && !mpl.hidden) bottom=Math.min(bottom, mpl.getBoundingClientRect().top-12);
+  el.style.height=Math.max(260, Math.round(bottom-top))+'px';
+}
+var chatFitQueued=false;
+function queueFitChat(){
+  if(chatFitQueued) return;
+  chatFitQueued=true;
+  (window.requestAnimationFrame||setTimeout)(function(){ chatFitQueued=false; fitChatPanel(); });
+}
+window.addEventListener('scroll', queueFitChat, { passive:true });
+window.addEventListener('resize', queueFitChat);
+
 function renderChatPanel(){
   var el=document.getElementById('chat-panel'); if(!el || !state.meeting) return;
   el.hidden=false;
@@ -912,6 +935,7 @@ function renderChatPanel(){
   });
   document.getElementById('btn-chat-send').addEventListener('click', sendChat);
   document.getElementById('btn-chat-reset').addEventListener('click', resetChat);
+  queueFitChat();
   renderChatLog();
 }
 function chatCardHtml(c){
@@ -1113,6 +1137,7 @@ function showSection(sec, topicId){
     el.hidden = el.getAttribute('data-sec')!==sec;
   });
   applyTopicFocus();
+  queueFitChat();
   if(state.topicFocus){
     // A topic chosen in the menu: open it in the list and bring it into view.
     var it=(state.items||[]).filter(function(x){ return x.id===state.topicFocus; })[0];
@@ -1836,12 +1861,14 @@ function miniPlayerShow(audio, label, onStop, offset){
   el.hidden=false;
   document.body.classList.add('has-mini-player');
   miniPlayerUpdate();
+  queueFitChat();
 }
 function miniPlayerHide(audio){
   if(audio && mp.audio!==audio) return;
   var el=document.getElementById('mini-player'); if(el) el.hidden=true;
   document.body.classList.remove('has-mini-player');
   mp.audio=null; mp.onStop=null;
+  queueFitChat();
 }
 function miniPlayerUpdate(){
   var el=document.getElementById('mini-player'), au=mp.audio; if(!el || !au) return;
