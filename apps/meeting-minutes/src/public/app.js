@@ -678,6 +678,28 @@ function defaultSection(){
   if(state.meeting && state.meeting.report) return 'minutes';
   return state.items && state.items.length ? 'agenda' : 'details';
 }
+// Short status beside each menu entry.
+function navHints(){
+  var out={ topics:{} };
+  var present=(state.attendeeIds||[]).length+(state.guests||[]).length;
+  if(present) out.people=String(present);
+  var map=(state.meeting && state.meeting.speaker_map)||{};
+  var unnamed=(state.meetingSpeakerStats||[]).filter(function(st){ return !(map[st.speaker]||'').trim(); }).length;
+  if(unnamed) out.speakers=unnamed+' unnamed';
+  var r=state.report||{};
+  if(r.status==='pending') out.minutes='generating…';
+  else if(state.meeting && state.meeting.report && (r.changes||[]).length) out.minutes='out of date';
+  (state.items||[]).forEach(function(it){
+    var h = it.transcribe_status==='queued' ? 'queued'
+      : it.transcribe_status==='processing' ? 'transcribing…'
+      : it.transcribe_status==='error' ? 'failed'
+      : it.summarize_status==='processing' ? 'summarizing…'
+      : it.summarize_status==='error' ? 'summary failed' : '';
+    if(h) out.topics[it.id]=h;
+  });
+  return out;
+}
+
 function renderMeetingNav(){
   var nav=document.getElementById('mtg-nav'), sel=document.getElementById('mtg-nav-select');
   if(!nav || !sel) return;
@@ -790,6 +812,7 @@ function renderAttendeeChips(){
   var absent=state.people.filter(function(p){ return p.active && state.attendeeIds.indexOf(p.id)<0; });
   var al=document.getElementById('absent-line');
   if(al) al.textContent = absent.length ? 'Absent: '+absent.map(function(p){ return p.name; }).join(', ') : 'Everyone is present.';
+  renderMeetingNav();
 }
 
 // ── Guests ──────────────────────────────────────────────────────────────────
@@ -803,6 +826,7 @@ function renderGuests(){
   el.querySelectorAll('[data-gid]').forEach(function(b){
     b.addEventListener('click', function(){ removeGuest(Number(b.getAttribute('data-gid'))); });
   });
+  renderMeetingNav();
 }
 // Guests are speaker choices, so every speaker dropdown follows the list.
 function guestsChanged(){
@@ -1056,6 +1080,7 @@ function itemBadgeInner(it){
 }
 function refreshBadge(it){
   var b=document.getElementById('badge-'+it.id); if(b) b.innerHTML=itemBadgeInner(it);
+  renderMeetingNav();
 }
 
 // Rendered summary + action-item list for an item.
@@ -1349,6 +1374,7 @@ function renderMeetingSpeakerPanel(){
         });
       })['catch'](function(e){ savingMspk=false; setBtn('btn-save-mspk', false); msg('mspk-msg','err',e.message); });
   });
+  renderMeetingNav();
 }
 
 // Every recording ever attached to this item. They are kept for the life of
@@ -2172,6 +2198,7 @@ function renderReportState(){
       : (has && r.status!=='pending' ? '<div class="hint report-current">Up to date with the agenda item summaries'
         +(r.generatedAt?' &middot; generated '+esc(fmtDate(r.generatedAt)):'')+'.</div>' : '');
   }
+  renderMeetingNav();
   applyReadOnly();
 }
 

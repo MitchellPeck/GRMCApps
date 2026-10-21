@@ -887,3 +887,18 @@ test("the recording bar's Next topic opens the following topic", { skip }, () =>
   assert.ok(calls.some((c) => c.path === "/api/meeting-recordings/7/marker" && c.body.itemId === 2));
   assert.equal(doc.getElementById("rb-next"), null, "no Next on the last topic");
 });
+
+test("the menu shows how things stand", { skip }, () => {
+  const { w, doc } = boot();
+  w.eval(`state.attendeeIds = [1, 2]; state.guests = [{ id: 9, name: "Gina", title: "" }];
+    state.meetingSpeakerStats = [{ speaker: "S0" }, { speaker: "S1" }]; state.meeting.speaker_map = { S0: "Ann" };
+    state.meeting.report = "# M"; state.report = { status: "idle", error: "", changes: ["Attendance changed"] };
+    state.items[0].transcribe_status = "processing"; renderDetail();`);
+  const hint = (sel: string) => doc.querySelector(`#mtg-nav ${sel} .nav-hint`)?.textContent;
+  assert.equal(hint('[data-sec="people"]'), "3");
+  assert.equal(hint('[data-sec="speakers"]'), "1 unnamed");
+  assert.equal(hint('[data-sec="minutes"]'), "out of date");
+  assert.equal(hint('[data-topic="1"]'), "transcribing…");
+  w.eval(`state.report.status = "pending"; renderReportState();`);
+  assert.equal(hint('[data-sec="minutes"]'), "generating…");
+});
