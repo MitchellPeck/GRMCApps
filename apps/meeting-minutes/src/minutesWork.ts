@@ -4,6 +4,8 @@ import { generateReportBody, summarizeItem } from "./claude";
 import { listPeople, peopleNamedIn } from "./people";
 import { createQueue } from "./queue";
 import { transcriptForAi } from "./transcript";
+import { AudioRange, segmentsRange } from "./ranges";
+import { latestMeetingRecording, listRecordings } from "./recordings";
 import { chronologicalSpeakerOrder } from "./segmentation";
 import { buildReport, reportBodyInput, reportChanges, ReportInput, reportSources, ReportSources } from "./report";
 import {
@@ -178,6 +180,24 @@ export async function reportInput(dbPool: Pool, meeting: MeetingRow, items: Agen
   const attendeeIds = new Set(await getAttendeeIds(dbPool, meeting.id));
   const guests = await listGuests(dbPool, meeting.id);
   const guestNames = new Map(guests.map((g) => [g.id, g.name]));
+  const meetingRec = await latestMeetingRecording(dbPool, meeting.id);
+  const order = chronologicalSpeakerOrder(
+    items.filter((it) => it.transcript_source === "meeting").map((it) => it.transcript_segments)
+  );
+  const timing = await Promise.all(items.map(async (it) => {
+    const meetingSourced = it.transcript_source === "meeting";
+    let range: AudioRange | null = null;
+    if (meetingSourced) {
+      range = meetingRec ? segmentsRange(it.transcript_segments, "m", meetingRec.id) : null;
+    } else {
+      // With several recordings appended, the segment times no longer say
+      // which file they belong to.
+      const recs = await listRecordings(dbPool, it.id);
+      range = recs.length === 1 ? segmentsRange(it.transcript_segments, "i", recs[0].id) : null;
+    }
+    const timed = transcriptForAi(it, meetingSourced ? order : undefined);
+    return { range, timedTranscript: timed === it.transcript ? "" : timed };
+  }));
   return {
     title: meeting.title,
     meetingDate: meeting.meeting_date,
@@ -186,7 +206,7 @@ export async function reportInput(dbPool: Pool, meeting: MeetingRow, items: Agen
     // Everyone active in the library who was not marked present.
     absent: people.filter((p) => p.active && !attendeeIds.has(p.id)).map((p) => p.name),
     guests: guests.map((g) => ({ name: g.name, title: g.title })),
-    items: items.map((it) => ({
+    items: items.map((it, i) => ({
       id: it.id,
       title: it.title,
       description: it.description,
@@ -197,6 +217,7 @@ export async function reportInput(dbPool: Pool, meeting: MeetingRow, items: Agen
       transcript: it.transcript,
       actionItems: it.action_items,
       hasContent: itemHasContent(it),
+      ...timing[i],
     })),
   };
 }

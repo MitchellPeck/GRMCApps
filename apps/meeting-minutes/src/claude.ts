@@ -289,14 +289,20 @@ minutes of a meeting from its full record: for each agenda item, the
 transcript, typed notes, an earlier per-item summary, and extracted action
 items.
 
-Write minutes that are comprehensive and well organized, so that someone who
-was not there understands what was reported, what was discussed, what was
-decided, and what happens next. Prefer the transcript and notes for detail;
-the per-item summaries are a starting point, not a limit. Keep every concrete
-fact: names, figures, amounts, balances, dates, deadlines, counts, places,
-votes and motions (who moved, who seconded, the outcome). Group related points
-together rather than retelling the conversation in order, and leave out small
-talk, false starts and repetition.
+Minutes record what was reported, what was decided, and what happens next.
+They are a summary, not a retelling of the discussion. Use the transcript and
+notes for the facts; the per-item summaries are a starting point.
+
+Length: the whole body is at most about 2,500 words, so the finished minutes
+come to 5–7 pages at most. Each agenda item gets about 150–300 words (half to
+three-quarters of a page). Go longer only when an item genuinely needs it, such
+as a financial report that walks through several schedules, and even then keep
+each schedule to its key figures and comments.
+
+Keep the facts that matter: totals, balances, amounts approved, votes and
+motions (who moved, who seconded, the outcome), dates and deadlines, and who
+is doing what. Leave out figures that were only read through without comment,
+small talk, false starts and repetition. Group related points together.
 
 Write ONLY these sections, in this order, in Markdown:
 
@@ -311,13 +317,17 @@ belongs to in parentheses. Write "None recorded." if there were none.
 ## Agenda
 For each agenda item, in the order given, numbered as given:
 ### <n>. <title>
+(Nothing else on the heading line; times for the item are added separately.)
 **Presented by:** <the presenter text given, exactly> (omit the line when none is given)
 Then the item's minutes, organized to fit what was actually presented:
 - When the presenter went through several distinct reports, documents,
   statements or schedules (for example a financial report covering Schedule A,
   Schedule B and Schedule C, or reports from separate ministries), give each
   one its own "#### <name>" sub-heading in the order presented, with its own
-  figures, totals and comments under it. Name each one as the speaker did.
+  key figures and comments under it. Name each one as the speaker did. End
+  each "####" line with the stretch of the recording it covers, written
+  [mm:ss-mm:ss] and taken from the [mm:ss] stamps at the start of that item's
+  transcript turns; leave it off when the transcript has no stamps.
   Then put any discussion, decisions and follow-up that concern the item as a
   whole after them.
 - Otherwise, use whichever of these labelled groups have content, each label
@@ -342,7 +352,7 @@ separately.
 Base everything strictly on the material provided. Never invent people,
 facts, figures, or decisions; if a figure was unclear in the recording, leave
 it out rather than guess. Refer to people by the names used in the
-material.`;
+material. Never write a time anywhere except at the end of a "####" line.`;
 
 // The organization's own guidance, from Settings, added to the system prompt:
 // standing instructions, and a past report to take the pattern from.
@@ -393,7 +403,9 @@ export async function generateReportBody(pool: Pool, input: ReportBodyInput): Pr
       it.actionItems.forEach((a) => lines.push(`- ${a.task} (owner: ${a.owner})`));
     }
     if (it.notes) lines.push(`Typed notes:\n${it.notes}`);
-    if (it.transcript) lines.push(`Transcript (speakers labeled by name where known):\n${it.transcript}`);
+    if (it.transcript) {
+      lines.push(`Transcript (speakers labeled by name where known; each turn starts with its [mm:ss] time where known):\n${it.transcript}`);
+    }
   });
   const system = reportSystemPrompt(
     await getSetting(pool, "report_instructions"),

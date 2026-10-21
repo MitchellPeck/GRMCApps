@@ -1,14 +1,14 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import {
-  buildReport, consolidateActionItems, presentedBy, reportBodyInput, reportChanges, reportHtml,
-  ReportInput, ReportItemInput, reportSources,
+  attachRanges, buildReport, consolidateActionItems, estimatePages, presentedBy, reportBodyInput, reportChanges,
+  reportHtml, ReportInput, ReportItemInput, reportSources,
 } from "./report";
 
 function item(over: Partial<ReportItemInput> & Pick<ReportItemInput, "id" | "title">): ReportItemInput {
   return {
     description: "", presenters: [], guestPresenters: [], summary: "", notes: "", transcript: "",
-    actionItems: [], hasContent: false, ...over,
+    actionItems: [], hasContent: false, range: null, timedTranscript: "", ...over,
   };
 }
 
@@ -116,4 +116,63 @@ test("reportHtml renders headings, bold, checkboxes and escapes HTML", () => {
 
 test("reportHtml renders the per-schedule sub-headings", () => {
   assert.match(reportHtml("### 1. Treasurer\n#### Schedule A\n- **Balance:** $100", "T"), /<h3>1\. Treasurer<\/h3><h4>Schedule A<\/h4>/);
+});
+
+const R = { source: "m" as const, recordingId: 12, start: 600, end: 1200 };
+
+test("attachRanges marks topic headings by number and converts in-range sub-section cites", () => {
+  const items = [item({ id: 1, title: "Budget", range: R }), item({ id: 2, title: "Roof", range: null })];
+  const body = [
+    "### 1. Budget",
+    "#### Schedule A — Operating [10:30-12:00]",
+    "#### Schedule B [99:00-99:30]",
+    "#### Schedule C [soon]",
+    "- **Income:** $5 [10:31-10:40]",
+    "### 2. Roof",
+    "#### Gutters [10:30-12:00]",
+  ].join("\n");
+  assert.equal(attachRanges(body, items), [
+    "### 1. Budget <!--t:m12:600.0-1200.0-->",
+    "#### Schedule A — Operating <!--t:m12:630.0-720.0-->",
+    "#### Schedule B",
+    "#### Schedule C",
+    "- **Income:** $5 [10:31-10:40]",
+    "### 2. Roof",
+    "#### Gutters",
+  ].join("\n"));
+});
+
+test("buildReport attaches ranges to the body", () => {
+  const { markdown } = buildReport(input({ items: [item({ id: 1, title: "Budget", range: R })] }), "### 1. Budget");
+  assert.match(markdown, /### 1\. Budget <!--t:m12:600\.0-1200\.0-->/);
+});
+
+test("action items merge across topics and carry their time", () => {
+  const items = [
+    item({ id: 1, title: "Budget", range: R, actionItems: [{ task: "Send figures", owner: "Bob", start: 700, end: 720 }] }),
+    item({ id: 2, title: "Roof", range: null, actionItems: [{ task: "send figures", owner: "bob" }, { task: "Call roofer", owner: "Tom", start: 1, end: 2 }] }),
+  ];
+  assert.deepEqual(consolidateActionItems(items), [
+    "- [ ] Send figures — **Bob** (Budget) <!--t:m12:700.0-720.0-->",
+    "- [ ] Call roofer — **Tom** (Roof)",
+  ]);
+});
+
+test("estimatePages ignores markers", () => {
+  assert.equal(estimatePages("word ".repeat(800) + "<!--t:m1:0.0-1.0-->"), 2);
+  assert.equal(estimatePages("one two"), 0.5);
+  assert.equal(estimatePages(""), 0);
+});
+
+test("reportSources ignores range and timedTranscript", () => {
+  const a = reportSources(input());
+  const b = reportSources(input({ items: input().items.map((it) => ({ ...it, range: R, timedTranscript: "[0:01] x" })) }));
+  assert.deepEqual(a, b);
+});
+
+test("the report is written from the timed transcript when there is one", () => {
+  const body = reportBodyInput(input({ items: [item({ id: 1, title: "A", transcript: "Bob: hi", timedTranscript: "[0:01] Bob: hi" }),
+    item({ id: 2, title: "B", transcript: "Ann: edited" })] }));
+  assert.equal(body.items[0].transcript, "[0:01] Bob: hi");
+  assert.equal(body.items[1].transcript, "Ann: edited");
 });

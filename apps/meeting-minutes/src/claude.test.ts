@@ -177,3 +177,11 @@ test("the summary prompt asks only for real commitments", () => {
   assert.match(SUMMARIZE_SYSTEM, /agreed to do|was asked to/);
   assert.doesNotMatch(SUMMARIZE_SYSTEM, /extract every action item/i);
 });
+
+test("the report prompt sets a length budget and asks for cited times", () => {
+  const p = reportSystemPrompt("", "");
+  assert.match(p, /5[–-]7 pages/);
+  assert.match(p, /\[mm:ss-mm:ss\]/);
+  assert.doesNotMatch(p, /comprehensive/i);
+  assert.doesNotMatch(p, /Keep every concrete/);
+});

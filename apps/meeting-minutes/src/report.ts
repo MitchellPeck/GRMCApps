@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { ActionItem, ReportBodyInput } from "./claude";
+import { AudioRange, formatRangeMarker, parseClock, stripRangeMarkers } from "./ranges";
 
 // The minutes are written by Claude from every item's transcript, notes and
 // summary, so the write-up is organized across the whole meeting rather than
@@ -17,6 +18,8 @@ export interface ReportItemInput {
   transcript: string;
   actionItems: ActionItem[];
   hasContent: boolean; // a transcript or typed notes exist
+  range: AudioRange | null; // where the topic is in the recording, when known
+  timedTranscript: string; // the transcript with [mm:ss] stamps, "" when unavailable
 }
 
 export interface ReportGuest {
@@ -86,8 +89,9 @@ function attendanceLines(input: ReportInput): string[] {
   ];
 }
 
-// Every action item across the meeting, tagged with the item it came from.
-// The same task for the same owner raised under one item is listed once.
+// Every action item across the meeting, tagged with the item it came from and,
+// when known, where in the recording it was agreed. The same task for the
+// same owner is listed once, under the first item that raised it.
 export function consolidateActionItems(items: ReportItemInput[]): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
@@ -96,13 +100,49 @@ export function consolidateActionItems(items: ReportItemInput[]): string[] {
       const task = a.task.trim();
       if (!task) continue;
       const owner = a.owner.trim() || "Unassigned";
-      const key = `${it.id}|${task.toLowerCase()}|${owner.toLowerCase()}`;
+      const key = `${task.toLowerCase()}|${owner.toLowerCase()}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      out.push(`- [ ] ${task} — **${owner}** (${it.title})`);
+      const timed = it.range && a.start !== undefined && a.end !== undefined;
+      const marker = timed ? ` ${formatRangeMarker({ ...it.range!, start: a.start!, end: a.end! })}` : "";
+      out.push(`- [ ] ${task} — **${owner}** (${it.title})${marker}`);
     }
   }
   return out;
+}
+
+// Seconds of slack allowed around a topic's range for a section's citation.
+const CITE_SLACK_SECONDS = 5;
+
+// Turn Claude's body into the stored one: each "### n." heading gets its
+// topic's range, and a "####" heading's "[mm:ss-mm:ss]" citation becomes a
+// range when it reads and falls inside the topic. Anything else is dropped.
+export function attachRanges(body: string, items: ReportItemInput[]): string {
+  let cur: ReportItemInput | null = null;
+  return body.split(/\r?\n/).map((line) => {
+    const topic = /^###\s+(\d+)\./.exec(line);
+    if (topic) {
+      cur = items[Number(topic[1]) - 1] ?? null;
+      return cur?.range ? `${line.trimEnd()} ${formatRangeMarker(cur.range)}` : line;
+    }
+    if (/^#{1,3}\s/.test(line)) { cur = null; return line; }
+    const cite = /^(####\s.*?)\s*\[([^\]]*)\]\s*$/.exec(line);
+    if (!cite) return line;
+    const [a, b] = cite[2].split("-");
+    const start = parseClock(a ?? ""), end = parseClock(b ?? "");
+    const r: AudioRange | null = cur ? (cur as ReportItemInput).range : null;
+    const inside = r && start !== null && end !== null && end > start
+      && start >= r.start - CITE_SLACK_SECONDS && end <= r.end + CITE_SLACK_SECONDS;
+    return inside ? `${cite[1]} ${formatRangeMarker({ ...r!, start: start!, end: end! })}` : cite[1];
+  }).join("\n");
+}
+
+// Rough length of the report as printed, in pages (to the nearest half).
+const WORDS_PER_PAGE = 400;
+export function estimatePages(markdown: string): number {
+  const words = stripRangeMarkers(markdown).split(/\s+/).filter(Boolean).length;
+  if (!words) return 0;
+  return Math.max(0.5, Math.round((words / WORDS_PER_PAGE) * 2) / 2);
 }
 
 function hash(parts: string[]): string {
@@ -144,7 +184,7 @@ export function reportBodyInput(input: ReportInput): ReportBodyInput {
       summary: it.summary.trim(),
       actionItems: it.actionItems,
       notes: it.notes.trim(),
-      transcript: it.transcript.trim(),
+      transcript: (it.timedTranscript || it.transcript).trim(),
     })),
   };
 }
@@ -158,7 +198,7 @@ export function buildReport(input: ReportInput, body: string): BuiltReport {
     ...headerLines(input), "",
     ...attendanceLines(input), "",
     ...(guests.length ? [...guests, ""] : []),
-    body.trim(), "",
+    attachRanges(body.trim(), input.items), "",
     "## Action Items", ...(actions.length ? actions : ["None recorded."]),
   ];
   return { markdown: md.join("\n") + "\n", sources: reportSources(input) };
