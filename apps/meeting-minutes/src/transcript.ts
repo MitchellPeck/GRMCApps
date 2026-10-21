@@ -1,4 +1,5 @@
 import { DiarizedSegment } from "./whisper";
+import { formatClock } from "./ranges";
 
 export type SpeakerMap = Record<string, string>; // "SPEAKER_00" -> person name
 
@@ -36,24 +37,58 @@ export function renderTranscript(
   order?: string[]
 ): string {
   if (!segments.length) return "";
+  const t = turns(segments, map, order);
+  if (!t) return segments.map((s) => s.text).join(" ").trim();
+  return t.map((x) => `${x.name}: ${x.text}`).join("\n");
+}
+
+// The same transcript with each turn stamped "[mm:ss]" at its start, so the
+// AI can say where in the recording something was said.
+export function renderTimedTranscript(
+  segments: DiarizedSegment[],
+  map: SpeakerMap,
+  order?: string[]
+): string {
+  if (!segments.length) return "";
+  const t = turns(segments, map, order);
+  if (!t) return segments.map((s) => `[${formatClock(s.start)}] ${s.text.trim()}`).join("\n");
+  return t.map((x) => `[${formatClock(x.start)}] ${x.name}: ${x.text}`).join("\n");
+}
+
+// Consecutive segments under one display name, merged. Null when no segment
+// carries a speaker label.
+function turns(
+  segments: DiarizedSegment[],
+  map: SpeakerMap,
+  order?: string[]
+): Array<{ name: string; start: number; text: string }> | null {
   const ord = order && order.length ? order : distinctSpeakers(segments);
-  if (!ord.length) {
-    return segments.map((s) => s.text).join(" ").trim();
-  }
-  const lines: string[] = [];
-  let curName: string | null = null;
-  let buf: string[] = [];
+  if (!ord.length) return null;
+  const out: Array<{ name: string; start: number; text: string }> = [];
+  let cur: { name: string; start: number; parts: string[] } | null = null;
   const flush = () => {
-    if (curName === null || !buf.length) return;
-    lines.push(`${curName}: ${buf.join(" ").trim()}`);
-    buf = [];
+    if (cur && cur.parts.length) out.push({ name: cur.name, start: cur.start, text: cur.parts.join(" ").trim() });
   };
   for (const s of segments) {
     const spk = s.speaker || (ord[0] ?? "SPEAKER_00");
     const name = resolveSpeakerName(spk, map, ord);
-    if (name !== curName) { flush(); curName = name; }
-    buf.push(s.text);
+    if (!cur || name !== cur.name) { flush(); cur = { name, start: s.start, parts: [] }; }
+    cur.parts.push(s.text);
   }
   flush();
-  return lines.join("\n");
+  return out;
+}
+
+// What the AI is given for a topic's transcript: the timed rendering while the
+// stored text still matches the segments, otherwise the stored text as is. A
+// hand-edited transcript no longer lines up with the segment times.
+export function transcriptForAi(
+  item: { transcript: string; transcript_segments: DiarizedSegment[]; speaker_map: SpeakerMap },
+  order?: string[]
+): string {
+  const segs = item.transcript_segments ?? [];
+  if (segs.length && renderTranscript(segs, item.speaker_map, order) === item.transcript.trim()) {
+    return renderTimedTranscript(segs, item.speaker_map, order);
+  }
+  return item.transcript;
 }

@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { renderTranscript, distinctSpeakers, friendlyLabel, resolveSpeakerName } from "./transcript";
+import { renderTranscript, distinctSpeakers, friendlyLabel, resolveSpeakerName, renderTimedTranscript, transcriptForAi } from "./transcript";
 import { DiarizedSegment } from "./whisper";
 
 const seg = (text: string, speaker: string): DiarizedSegment => ({ text, speaker, start: 0, end: 0 });
@@ -73,4 +73,23 @@ test("renderTranscript numbers unmapped speakers from an explicit meeting-wide o
   assert.equal(renderTranscript(segs, {}, ["SPEAKER_00", "SPEAKER_03"]), "Speaker 2: Hi.");
   // Without the explicit order, local numbering applies.
   assert.equal(renderTranscript(segs, {}), "Speaker 1: Hi.");
+});
+
+test("renderTimedTranscript prefixes each turn with its start", () => {
+  const segs = [
+    { text: "Hello", speaker: "S0", start: 760, end: 762 },
+    { text: "all.", speaker: "S0", start: 762, end: 763 },
+    { text: "Hi.", speaker: "S1", start: 765, end: 766 },
+  ];
+  assert.equal(renderTimedTranscript(segs, { S0: "Linda" }), "[12:40] Linda: Hello all.\n[12:45] Speaker 2: Hi.");
+  assert.equal(renderTimedTranscript([], {}), "");
+});
+
+test("transcriptForAi falls back to the stored text once it has been edited", () => {
+  const segs = [{ text: "Jon spoke.", speaker: "S0", start: 5, end: 6 }];
+  const map = { S0: "Linda" };
+  assert.equal(transcriptForAi({ transcript: "Linda: Jon spoke.", transcript_segments: segs, speaker_map: map }), "[0:05] Linda: Jon spoke.");
+  assert.equal(transcriptForAi({ transcript: "Linda: John spoke.", transcript_segments: segs, speaker_map: map }), "Linda: John spoke.");
+  // Typed or pasted text with no segments is passed through as is.
+  assert.equal(transcriptForAi({ transcript: "Notes only", transcript_segments: [], speaker_map: {} }), "Notes only");
 });
