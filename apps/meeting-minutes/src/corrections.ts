@@ -1,0 +1,74 @@
+import { ActionItem } from "./claude";
+import { SpeakerMap, resolveSpeakerName } from "./transcript";
+import { DiarizedSegment } from "./whisper";
+
+// Correcting a misheard name or word. Matching is whole-word and case-aware:
+// "John" never matches inside "Johnson", and "john" is a different word.
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function wordPattern(from: string): RegExp {
+  return new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegex(from)}(?![\\p{L}\\p{N}])`, "gu");
+}
+
+export function replaceWords(text: string, from: string, to: string): { text: string; count: number } {
+  if (!from || !text) return { text, count: 0 };
+  let count = 0;
+  // A function replacer, so "$1" or "&" in the replacement is taken literally.
+  const out = text.replace(wordPattern(from), () => { count++; return to; });
+  return { text: out, count };
+}
+
+export function replaceInSegments(
+  segs: DiarizedSegment[],
+  from: string,
+  to: string
+): { segments: DiarizedSegment[]; count: number } {
+  let count = 0;
+  const segments = segs.map((s) => {
+    const r = replaceWords(s.text, from, to);
+    count += r.count;
+    return r.count ? { ...s, text: r.text } : s;
+  });
+  return { segments, count };
+}
+
+export function replaceInActionItems(
+  items: ActionItem[],
+  from: string,
+  to: string,
+  fields: Array<"task" | "owner"> = ["task", "owner"]
+): { items: ActionItem[]; count: number } {
+  let count = 0;
+  const out = items.map((a) => {
+    const next = { ...a };
+    for (const f of fields) {
+      const r = replaceWords(a[f], from, to);
+      count += r.count;
+      next[f] = r.text;
+    }
+    return next;
+  });
+  return { items: out, count };
+}
+
+// The display names a speaker-map change renames, as old → new. A name another
+// voice still goes by after the change is left alone: it still belongs in the
+// text.
+export function renamedVoices(
+  oldMap: SpeakerMap,
+  newMap: SpeakerMap,
+  order: string[]
+): Array<{ from: string; to: string }> {
+  const stillUsed = new Set(order.map((l) => resolveSpeakerName(l, newMap, order)));
+  const out: Array<{ from: string; to: string }> = [];
+  for (const label of order) {
+    const from = resolveSpeakerName(label, oldMap, order);
+    const to = resolveSpeakerName(label, newMap, order);
+    if (from === to || stillUsed.has(from)) continue;
+    if (!out.some((p) => p.from === from && p.to === to)) out.push({ from, to });
+  }
+  return out;
+}
