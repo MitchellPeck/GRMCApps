@@ -510,22 +510,35 @@ export async function saveReport(
 }
 
 // The minutes after editing. What they were generated from, and when, stay.
-export async function saveReportEdit(pool: Pool, meetingId: number, markdown: string): Promise<void> {
-  await pool.query(
+// Saving the text it already has changes nothing and returns false.
+export async function saveReportEdit(pool: Pool, meetingId: number, markdown: string): Promise<boolean> {
+  const r = await pool.query(
     // At least a millisecond after generation: times reach JS at millisecond
     // precision, and an edit must never compare equal to the generation.
     `UPDATE meetings
         SET report = $2, updated_at = now(),
             report_updated_at = GREATEST(clock_timestamp(), report_generated_at + interval '1 millisecond')
-      WHERE id = $1`,
+      WHERE id = $1 AND report IS DISTINCT FROM $2`,
     [meetingId, markdown]
   );
+  return (r.rowCount ?? 0) > 0;
 }
 
 // Whether the minutes have changed since they were generated.
 export function reportEdited(m: Pick<MeetingRow, "report_generated_at" | "report_updated_at">): boolean {
   if (!m.report_generated_at || !m.report_updated_at) return false;
   return new Date(m.report_updated_at).getTime() > new Date(m.report_generated_at).getTime();
+}
+
+// Give up on a report that is still being written, e.g. one stuck waiting on a
+// topic that never finishes. The queued job sees the status and stops. False
+// when nothing was being written.
+export async function cancelReport(pool: Pool, meetingId: number): Promise<boolean> {
+  const r = await pool.query(
+    "UPDATE meetings SET report_status = 'idle', report_error = '' WHERE id = $1 AND report_status = 'pending'",
+    [meetingId]
+  );
+  return (r.rowCount ?? 0) > 0;
 }
 
 // Any status other than `error` clears the stored error message.

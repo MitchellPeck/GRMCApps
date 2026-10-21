@@ -472,6 +472,7 @@ function renderDetail(){
     +'<div id="report-msg"></div>'
     +'<div id="report-stale"></div>'
     +'<div class="btn-row"><button class="btn btn-gold" id="btn-report" data-default="Generate report">Generate report</button>'
+    +' <button class="btn btn-secondary" id="btn-report-cancel" hidden>Cancel</button>'
     +'<span id="report-actions" style="display:none">'
     // A plain link in a new tab: the server sends it through Google consent
     // if needed, then on to the new Doc, with no popup blocker involved.
@@ -495,6 +496,7 @@ function renderDetail(){
   document.getElementById('btn-add-item').addEventListener('click', addItemManually);
   document.getElementById('btn-meeting-rec').addEventListener('click', toggleMeetingRecording);
   document.getElementById('btn-report').addEventListener('click', generateReport);
+  document.getElementById('btn-report-cancel').addEventListener('click', cancelReport);
   document.getElementById('btn-report-print').addEventListener('click', function(){ window.print(); });
   document.getElementById('btn-add-guest').addEventListener('click', addGuest);
   document.getElementById('g-name').addEventListener('keydown', function(e){ if(e.key==='Enter') addGuest(); });
@@ -1315,12 +1317,15 @@ var meetingRecStarting=false; // true only during the getUserMedia→POST /recor
 // One player for the play buttons in the minutes, separate from the speaker
 // samples; starting either stops the other. The server cuts the section as it
 // streams, so the button shows it is loading until audio actually plays.
-var sectionPlayer=null, sectionPlayingBtn=null, sectionUrl='';
+// The server cuts at most SECTION_PART_SECONDS at a time (MAX_SECTION_SECONDS
+// in chunking.ts); a longer section plays on through successive parts.
+var SECTION_PART_SECONDS=1800;
+var sectionPlayer=null, sectionPlayingBtn=null, sectionUrl='', sectionPart=null;
 function stopSection(){
   // Dropping the source (rather than src='', which raises an error event)
   // ends the download, so the server stops cutting.
   if(sectionPlayer){ try { sectionPlayer.pause(); sectionPlayer.removeAttribute('src'); sectionPlayer.load(); } catch(e){} }
-  sectionUrl='';
+  sectionUrl=''; sectionPart=null;
   if(sectionPlayingBtn){ sectionPlayingBtn.innerHTML='&#9654;'; sectionPlayingBtn.classList.remove('loading'); sectionPlayingBtn=null; }
 }
 // The audio element can't say why it failed; ask the server for its message.
@@ -1338,22 +1343,33 @@ document.addEventListener('click', function(e){
   stopSection(); stopSample();
   if(!sectionPlayer){
     sectionPlayer=new Audio();
-    sectionPlayer.addEventListener('ended', stopSection);
+    sectionPlayer.addEventListener('ended', function(){
+      if(sectionPart && sectionPart.to < sectionPart.end) playSectionPart(sectionPart.to);
+      else stopSection();
+    });
     sectionPlayer.addEventListener('playing', function(){
       if(sectionPlayingBtn){ sectionPlayingBtn.classList.remove('loading'); sectionPlayingBtn.innerHTML='&#9632;'; }
     });
     sectionPlayer.addEventListener('error', function(){ if(sectionPlayingBtn && sectionUrl) sectionFailed(sectionUrl); });
   }
-  var base=btn.getAttribute('data-src')==='i' ? '/api/recordings/' : '/api/meeting-recordings/';
-  var url=base+btn.getAttribute('data-rec')+'/section?start='+Number(btn.getAttribute('data-start')).toFixed(2)
-    +'&end='+Number(btn.getAttribute('data-end')).toFixed(2);
-  sectionPlayer.src=url; sectionUrl=url;
+  sectionPart={
+    base: (btn.getAttribute('data-src')==='i' ? '/api/recordings/' : '/api/meeting-recordings/')+btn.getAttribute('data-rec'),
+    end: Number(btn.getAttribute('data-end')), to: 0
+  };
   sectionPlayingBtn=btn;
+  playSectionPart(Number(btn.getAttribute('data-start')));
+});
+
+function playSectionPart(from){
+  var btn=sectionPlayingBtn, part=sectionPart;
+  part.to=Math.min(part.end, from+SECTION_PART_SECONDS);
+  var url=part.base+'/section?start='+from.toFixed(2)+'&end='+part.to.toFixed(2);
+  sectionPlayer.src=url; sectionUrl=url;
   btn.classList.add('loading');
   btn.innerHTML='&#8230;';
   var p=sectionPlayer.play();
   if(p && p['catch']) p['catch'](function(){ if(sectionPlayingBtn===btn) sectionFailed(url); });
-});
+}
 
 var meetingRecFinishing=false; // true from "Stop" until the server accepts the recording
 
@@ -1768,6 +1784,17 @@ function postReport(replaceEdits){
   });
 }
 
+// Give up on a report still being written (one stuck waiting on a topic).
+function cancelReport(){
+  var mid=state.meeting.id;
+  api('/api/meetings/'+mid+'/report/cancel', { method:'POST' }).then(function(res){
+    if(!state.meeting || state.meeting.id!==mid) return;
+    if(!res.ok){ msg('report-msg','err',res.error); return; }
+    state.report=res.report; renderReportState();
+    msg('report-msg','','');
+  });
+}
+
 function showReport(markdown){
   state.meeting.report=markdown;
   document.getElementById('report-box').innerHTML='<div class="report">'+renderMarkdown(markdown)+'</div>';
@@ -1800,6 +1827,7 @@ function renderReportState(){
   var pg=document.getElementById('report-pages');
   if(pg) pg.textContent = has && r.pages ? '≈ '+r.pages+' page'+(r.pages===1?'':'s') : '';
   btn.setAttribute('data-default', has ? 'Regenerate report' : 'Generate report');
+  var cancel=document.getElementById('btn-report-cancel'); if(cancel) cancel.hidden = r.status!=='pending';
   if(r.status==='pending'){
     setBtn('btn-report', true, 'Generating…');
     var waiting=state.items.filter(function(it){ return isTranscribing(it) || it.summarize_status==='queued' || it.summarize_status==='processing'; }).length;

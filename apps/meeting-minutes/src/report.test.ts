@@ -223,3 +223,28 @@ test("a meeting past the hour cites h:mm:ss", () => {
   const out = attachRanges("### 1. Finance\n#### Schedule A [1:10:30-1:12:00]", [item({ id: 1, title: "Finance", range: late })]);
   assert.match(out, /#### Schedule A <!--t:m12:4230\.0-4320\.0-->/);
 });
+
+test("topic headings numbered another way still find their topic, by title", () => {
+  const items = [item({ id: 1, title: "Treasurer's Report", range: R }),
+    item({ id: 2, title: "Building & Grounds", range: { ...R, start: 1300, end: 1500 } })];
+  const body = [
+    "### I. Treasurer's Report",
+    "#### Schedule A [10:30-12:00]",
+    "### 1.2 Building & Grounds",
+    "### Something the agenda never had",
+    "#### Stray [10:30-12:00]",
+  ].join("\n");
+  assert.equal(attachRanges(body, items), [
+    "### I. Treasurer's Report <!--t:m12:600.0-1200.0-->",
+    "#### Schedule A <!--t:m12:630.0-720.0-->",
+    "### 1.2 Building & Grounds <!--t:m12:1300.0-1500.0-->",
+    "### Something the agenda never had",
+    "#### Stray",
+  ].join("\n"));
+});
+
+test("a time the AI puts on a topic heading is removed", () => {
+  const out = attachRanges("### 1. Budget [10:00-20:00]", [item({ id: 1, title: "Budget", range: R })]);
+  assert.equal(out, "### 1. Budget <!--t:m12:600.0-1200.0-->");
+  assert.equal(attachRanges("### 1. Budget [10:00-20:00]", [item({ id: 1, title: "Budget", range: null })]), "### 1. Budget");
+});

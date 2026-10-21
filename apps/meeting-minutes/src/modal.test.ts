@@ -567,3 +567,41 @@ test("a section that can't play says why", { skip }, async () => {
   assert.equal(btn.innerHTML, "▶");
   assert.ok(!btn.classList.contains("loading"));
 });
+
+test("a section longer than one part plays on into the next part", { skip }, () => {
+  const { w, doc } = boot();
+  const players = fakeAudio(w);
+  const box = doc.createElement("div");
+  // 0:00–1:10:00, longer than the 30-minute parts the server cuts.
+  box.innerHTML = w.eval(`renderMarkdown("### 1. Finance <!--t:m12:0.0-4200.0-->")`);
+  doc.body.appendChild(box);
+  box.querySelector(".sec-play").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  assert.equal(players[0].src, "/api/meeting-recordings/12/section?start=0.00&end=1800.00");
+  players[0].fire("ended");
+  assert.equal(players[0].src, "/api/meeting-recordings/12/section?start=1800.00&end=3600.00");
+  players[0].fire("ended");
+  assert.equal(players[0].src, "/api/meeting-recordings/12/section?start=3600.00&end=4200.00");
+  players[0].fire("ended");
+  assert.equal(box.querySelector(".sec-play").innerHTML, "▶");
+});
+
+test("a report stuck generating offers Cancel", { skip }, async () => {
+  const { w, doc, sent } = bootWithReport([]);
+  const calls: string[] = [];
+  const orig = w.fetch;
+  w.fetch = (path: string, opts: any = {}) => {
+    calls.push(`${opts.method ?? "GET"} ${path}`);
+    if (path.endsWith("/report/cancel")) {
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({ ok: true, report: { status: "idle", error: "", changes: [] } }) });
+    }
+    return orig(path, opts);
+  };
+  w.eval(`state.report = { status: "pending", error: "", changes: [] }; renderReportState();`);
+  const cancel = doc.getElementById("btn-report-cancel");
+  assert.ok(cancel && !cancel.hidden, "Cancel shown while generating");
+  cancel.dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  await flush();
+  assert.ok(calls.includes("POST /api/meetings/42/report/cancel"));
+  assert.equal(doc.getElementById("btn-report-cancel").hidden, true);
+  assert.equal(sent.length, 0);
+});

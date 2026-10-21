@@ -8,7 +8,7 @@ import {
   listAgendaItems, getAgendaItem, updateAgendaItem, deleteAgendaItem, saveReport,
   setTranscribeStatus, listUnfinishedTranscriptions, listItemStatuses, reportFileName,
   setMeetingRecordingStatus, listUnfinishedMeetingProcessing, addTopicMarker,
-  listTopicMarkers, setMeetingSpeakerMap, rewriteMeetingSpeakerMap, saveReportEdit, reportEdited,
+  listTopicMarkers, setMeetingSpeakerMap, rewriteMeetingSpeakerMap, saveReportEdit, reportEdited, cancelReport, setReportStatus,
 } from "./meetings";
 import { appendMeetingChunk, getMeetingRecording } from "./recordings";
 
@@ -511,6 +511,61 @@ test("a topic's play range is on the recording its segments came from", { skip: 
     const input = await reportInput(pool, (await getMeeting(pool, m.id))!, await listAgendaItems(pool, m.id));
     assert.deepEqual(input.items.map((it) => it.range && it.range.recordingId), [first.id, second.id]);
     assert.deepEqual(input.items.map((it) => it.range && it.range.start), [100, 30]);
+  } finally {
+    await pool.end();
+  }
+});
+
+test("saving the same text again is not an edit", { skip: !url }, async () => {
+  const pool = new Pool({ connectionString: url });
+  await reset(pool);
+  try {
+    const m = await createMeeting(pool, { title: "Same", meetingDate: "", location: "", description: "", email: "", name: "" });
+    assert.ok(m.ok);
+    await saveReport(pool, m.id, "# A");
+    assert.equal(await saveReportEdit(pool, m.id, "# A"), false);
+    assert.equal(reportEdited((await getMeeting(pool, m.id))!), false);
+    assert.equal(await saveReportEdit(pool, m.id, "# B"), true);
+    assert.equal(reportEdited((await getMeeting(pool, m.id))!), true);
+  } finally {
+    await pool.end();
+  }
+});
+
+test("a report stuck generating can be cancelled, and only then", { skip: !url }, async () => {
+  const pool = new Pool({ connectionString: url });
+  await reset(pool);
+  try {
+    const m = await createMeeting(pool, { title: "Stuck", meetingDate: "", location: "", description: "", email: "", name: "" });
+    assert.ok(m.ok);
+    assert.equal(await cancelReport(pool, m.id), false, "nothing to cancel");
+    await setReportStatus(pool, m.id, "pending");
+    assert.equal(await cancelReport(pool, m.id), true);
+    assert.equal((await getMeeting(pool, m.id))!.report_status, "idle");
+  } finally {
+    await pool.end();
+  }
+});
+
+test("the status poll's report state skips play ranges", { skip: !url }, async () => {
+  const pool = new Pool({ connectionString: url });
+  await reset(pool);
+  try {
+    const { reportInput } = await import("./minutesWork");
+    const m = await createMeeting(pool, { title: "Poll", meetingDate: "", location: "", description: "", email: "", name: "" });
+    assert.ok(m.ok);
+    const a = await addAgendaItem(pool, m.id, "Topic", "");
+    assert.ok(a.ok);
+    await updateAgendaItem(pool, a.id, { transcriptSegments: [{ text: "x", speaker: "S0", start: 5, end: 9 }], transcriptRecordingId: 3 });
+    const meeting = (await getMeeting(pool, m.id))!;
+    const items = await listAgendaItems(pool, m.id);
+    const full = await reportInput(pool, meeting, items);
+    const quick = await reportInput(pool, meeting, items, { timing: false });
+    assert.ok(full.items[0].range);
+    assert.equal(quick.items[0].range, null);
+    assert.equal(quick.items[0].timedTranscript, "");
+    const { reportSources } = await import("./report");
+    assert.deepEqual(reportSources(quick), reportSources(full));
   } finally {
     await pool.end();
   }

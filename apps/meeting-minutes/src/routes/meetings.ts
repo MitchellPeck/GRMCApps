@@ -22,7 +22,7 @@ import {
   listAgendaItems, getAgendaItem, updateAgendaItem, deleteAgendaItem,
   setTranscribeStatus, listItemStatuses, reportFileName,
   setMeetingRecordingStatus, addTopicMarker, rewriteMeetingSpeakerMap,
-  listGuests, addGuest, removeGuest, reportEdited, saveReportEdit,
+  listGuests, addGuest, removeGuest, reportEdited, saveReportEdit, cancelReport,
 } from "../meetings";
 import { enqueueTranscription, enqueueStoredRecording, enqueueMeetingProcessing } from "../transcribeQueue";
 import {
@@ -551,6 +551,15 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
     };
   });
 
+  // Stop writing a report, e.g. one stuck waiting on a topic.
+  app.post("/api/meetings/:id/report/cancel", async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    const meeting = Number.isFinite(id) ? await getMeeting(pool, id) : null;
+    if (!meeting) { reply.code(404); return { ok: false, error: "Meeting not found." }; }
+    await cancelReport(pool, id);
+    return { ok: true, report: await reportState(pool, (await getMeeting(pool, id))!) };
+  });
+
   // Save the minutes after editing them on the page.
   app.put("/api/meetings/:id/report", async (req, reply) => {
     const id = Number((req.params as { id: string }).id);
@@ -559,7 +568,7 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
     const b = (req.body ?? {}) as { markdown?: unknown };
     if (typeof b.markdown !== "string") { reply.code(400); return { ok: false, error: "markdown must be text." }; }
     if (meeting.report_status === "pending") {
-      reply.code(409); return { ok: false, error: "The report is being written. Try again when it finishes." };
+      reply.code(409); return { ok: false, error: "The report is being written. Try again when it finishes, or cancel it." };
     }
     if (!meeting.report_generated_at) { reply.code(409); return { ok: false, error: "Generate the report first." }; }
     await saveReportEdit(pool, id, b.markdown);

@@ -174,7 +174,9 @@ export function reportReadiness(
   return { kind: "ready" };
 }
 
-export async function reportInput(dbPool: Pool, meeting: MeetingRow, items: AgendaItem[]): Promise<ReportInput> {
+export async function reportInput(
+  dbPool: Pool, meeting: MeetingRow, items: AgendaItem[], opts: { timing?: boolean } = {}
+): Promise<ReportInput> {
   const people = await listPeople(dbPool, true);
   const names = new Map(people.map((p) => [p.id, p.name]));
   const attendeeIds = new Set(await getAttendeeIds(dbPool, meeting.id));
@@ -184,7 +186,9 @@ export async function reportInput(dbPool: Pool, meeting: MeetingRow, items: Agen
   const order = chronologicalSpeakerOrder(
     items.filter((it) => it.transcript_source === "meeting").map((it) => it.transcript_segments)
   );
-  const timing = await Promise.all(items.map(async (it) => {
+  // Play ranges and timed transcripts are only for writing the report; the
+  // out-of-date check on every status poll doesn't use them.
+  const timing = opts.timing === false ? items.map(() => ({ range: null, timedTranscript: "" })) : await Promise.all(items.map(async (it) => {
     const meetingSourced = it.transcript_source === "meeting";
     let range: AudioRange | null = null;
     if (it.transcript_recording_id !== null) {
@@ -227,7 +231,7 @@ export async function reportInput(dbPool: Pool, meeting: MeetingRow, items: Agen
 
 async function currentSources(dbPool: Pool, meeting: MeetingRow): Promise<{ sources: ReportSources; items: AgendaItem[] }> {
   const items = await listAgendaItems(dbPool, meeting.id);
-  return { sources: reportSources(await reportInput(dbPool, meeting, items)), items };
+  return { sources: reportSources(await reportInput(dbPool, meeting, items, { timing: false })), items };
 }
 
 const writing = new Set<number>();

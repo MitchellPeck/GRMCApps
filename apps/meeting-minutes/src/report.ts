@@ -119,18 +119,34 @@ export function consolidateActionItems(items: ReportItemInput[]): string[] {
 export function attachRanges(body: string, items: ReportItemInput[]): string {
   let cur: ReportItemInput | null = null;
   return body.split(/\r?\n/).map((line) => {
-    const topic = /^###\s+(\d+)\./.exec(line);
-    if (topic) {
-      cur = items[Number(topic[1]) - 1] ?? null;
-      return cur?.range ? `${line.trimEnd()} ${formatRangeMarker(cur.range)}` : line;
+    if (/^###\s/.test(line)) {
+      // Times go on topics from the recording, never from the AI.
+      const heading = line.replace(/\s*\[[\d:\s\-–—]+\]\s*$/, "").trimEnd();
+      cur = topicFor(heading, items);
+      return cur?.range ? `${heading} ${formatRangeMarker(cur.range)}` : heading;
     }
-    if (/^#{1,3}\s/.test(line)) { cur = null; return line; }
+    if (/^#{1,2}\s/.test(line)) { cur = null; return line; }
     const cite = /^(####\s.*?)\s*\[([\d:\s\-–—]+)\]\s*$/.exec(line);
     if (!cite) return line;
     const t = parseClockRange(cite[2]);
     const r: AudioRange | null = cur ? (cur as ReportItemInput).range : null;
     return t && withinRange(r, t.start, t.end) ? `${cite[1]} ${formatRangeMarker({ ...r!, ...t })}` : cite[1];
   }).join("\n");
+}
+
+const normTitle = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+
+// The agenda item a "###" heading writes up: "### 3. Title" by its number,
+// otherwise by title, for an organization whose example numbers topics its own
+// way ("### I. Title", "### 1.2 Title"). Null when it matches no item.
+function topicFor(heading: string, items: ReportItemInput[]): ReportItemInput | null {
+  const n = /^###\s+(\d+)\.\s/.exec(heading);
+  if (n) return items[Number(n[1]) - 1] ?? null;
+  const text = normTitle(heading.replace(/^###\s+(?:(?:\d+(?:\.\d+)*|[ivxlcdm]+|[a-z])[.)]?\s+)?/i, ""));
+  if (!text) return null;
+  return items.find((it) => normTitle(it.title) === text)
+    ?? items.find((it) => normTitle(it.title) && text.includes(normTitle(it.title)))
+    ?? null;
 }
 
 // Rough length of the report as printed, in pages (to the nearest half).
