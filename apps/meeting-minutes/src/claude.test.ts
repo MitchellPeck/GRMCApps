@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { parseItems, stripJsonFences, isSupportedAgendaType, parseSummary, parseSpeakerMap, reportSystemPrompt } from "./claude";
+import { parseItems, stripJsonFences, isSupportedAgendaType, parseSummary, parseSpeakerMap, reportSystemPrompt, SUMMARIZE_SYSTEM } from "./claude";
 
 test("stripJsonFences removes code fences", () => {
   assert.equal(stripJsonFences('```json\n[]\n```'), "[]");
@@ -153,4 +153,27 @@ test("reportSystemPrompt adds standing instructions and the example only when se
   const onlyExample = reportSystemPrompt(" ", "x");
   assert.doesNotMatch(onlyExample, /<instructions>/);
   assert.match(onlyExample, /<example_report>/);
+});
+
+test("parseSummary reads an action item's time range", () => {
+  const r = parseSummary(JSON.stringify({ summary: "s", actionItems: [
+    { task: "Send figures", owner: "Bob", at: "12:40-13:05" },
+    { task: "Book hall", owner: "Ann", at: "soon" },
+    { task: "Call roofer", owner: "Tom", at: "13:05-12:40" },
+  ] }));
+  assert.deepEqual(r.actionItems, [
+    { task: "Send figures", owner: "Bob", start: 760, end: 785 },
+    { task: "Book hall", owner: "Ann" },
+    { task: "Call roofer", owner: "Tom" },
+  ]);
+});
+
+test("a salvaged summary keeps action item times", () => {
+  const raw = '{"summary": "s", "actionItems": [{"task": "Send figures", "owner": "Bob", "at": "0:10-0:20"}, {"task": "cut';
+  assert.deepEqual(parseSummary(raw).actionItems, [{ task: "Send figures", owner: "Bob", start: 10, end: 20 }]);
+});
+
+test("the summary prompt asks only for real commitments", () => {
+  assert.match(SUMMARIZE_SYSTEM, /agreed to do|was asked to/);
+  assert.doesNotMatch(SUMMARIZE_SYSTEM, /extract every action item/i);
 });

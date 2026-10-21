@@ -1,6 +1,7 @@
 import { Pool } from "pg";
 import { getSetting } from "./settings";
 import { SpeakerMap } from "./transcript";
+import { parseClock } from "./ranges";
 
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 const MODEL = "claude-sonnet-4-6";
@@ -147,6 +148,9 @@ export function parseItems(raw: string): ExtractedItem[] {
 export interface ActionItem {
   task: string;
   owner: string;
+  // Where it was agreed, in seconds on the topic's recording; both or neither.
+  start?: number;
+  end?: number;
 }
 
 export interface SummarizeInput {
@@ -163,28 +167,39 @@ export interface SummarizeResult {
   actionItems: ActionItem[];
 }
 
-const SUMMARIZE_SYSTEM = `You are a meeting-minutes assistant. From the transcript
-and typed notes for ONE agenda item, produce concise minutes AND extract every
-action item.
+export const SUMMARIZE_SYSTEM = `You are a meeting-minutes assistant. From the transcript
+and typed notes for ONE agenda item, produce concise minutes and list its
+action items.
 
-An "action item" is any commitment, task, follow-up, decision-to-do, or to-do —
-INCLUDING ones phrased in natural, conversational language. Treat phrasings like
-"we need to X", "we have to X", "someone should X", "let's X", "I'll take care of
-X", "I can handle X", "can you follow up on X", "make sure to X", "the next step
-is X", "we should look into X", or a deadline like "by next week" as action
-items. Do NOT limit yourself to sentences that literally say "action item".
+An "action item" is a specific task that a named person agreed to do, or was
+asked to do (or that was assigned to a named group, such as "the trustees").
+Natural phrasing counts: "I'll take care of X", "can you follow up on X",
+"Bob will get quotes by next week". These are NOT action items: suggestions,
+ideas, "we should look into X", "let's think about X", "it would be good to X",
+or general aims that nobody took on. List each task once, merging restatements
+of the same task.
 
-For each action item, identify the owner — the person who committed to it or was
-asked to do it. The transcript labels speakers by name ("Alice: ..."); use that
-to attribute ownership. Use a real name when it is clear, otherwise "Unassigned".
+For each action item, give the owner: the person who agreed to it or was asked
+to do it. The transcript labels speakers by name ("Alice: ..."); use that to
+attribute ownership. Use a real name when it is clear, otherwise "Unassigned".
+Give "at", the stretch of the recording where it was agreed, as "mm:ss-mm:ss"
+taken from the [mm:ss] stamps at the start of transcript turns; use "" when the
+transcript has no stamps.
 
 Respond with ONLY a JSON object, no prose around it:
 {
-  "summary": "a few sentences and/or short bullet lines covering the discussion and any decisions (plain text, no markdown headings)",
-  "actionItems": [ { "task": "clear imperative description", "owner": "Name or Unassigned" } ]
+  "summary": "a few sentences and/or short bullet lines covering what was reported and decided (plain text, no markdown headings)",
+  "actionItems": [ { "task": "clear imperative description", "owner": "Name or Unassigned", "at": "mm:ss-mm:ss" } ]
 }
-Use an empty array when there are genuinely no action items. Base everything
-strictly on the provided text; never invent tasks, owners, or decisions.`;
+Use an empty array when there are no action items. Base everything strictly on
+the provided text; never invent tasks, owners, or decisions.`;
+
+// "mm:ss-mm:ss" to a range; nothing when either end is unreadable or reversed.
+function actionTimes(at: unknown): { start: number; end: number } | {} {
+  const [a, b] = String(at ?? "").split("-");
+  const start = parseClock(a ?? ""), end = parseClock(b ?? "");
+  return start !== null && end !== null && end > start ? { start, end } : {};
+}
 
 // Best-effort recovery from a JSON reply that does not parse (e.g. cut off
 // mid-array): the summary string, and every action item that is complete.
@@ -194,11 +209,15 @@ function salvageSummary(raw: string): SummarizeResult | null {
   let summary: string;
   try { summary = JSON.parse(m[1]); } catch { return null; }
   const actionItems: ActionItem[] = [];
-  const re = /\{\s*"task"\s*:\s*("(?:[^"\\]|\\.)*")\s*,\s*"owner"\s*:\s*("(?:[^"\\]|\\.)*")\s*\}/g;
+  const re = /\{\s*"task"\s*:\s*("(?:[^"\\]|\\.)*")\s*,\s*"owner"\s*:\s*("(?:[^"\\]|\\.)*")\s*(?:,\s*"at"\s*:\s*("(?:[^"\\]|\\.)*")\s*)?\}/g;
   for (let a; (a = re.exec(raw)); ) {
     try {
       const task = String(JSON.parse(a[1])).trim();
-      if (task) actionItems.push({ task, owner: String(JSON.parse(a[2])).trim() || "Unassigned" });
+      if (task) {
+        actionItems.push({
+          task, owner: String(JSON.parse(a[2])).trim() || "Unassigned", ...actionTimes(a[3] ? JSON.parse(a[3]) : ""),
+        });
+      }
     } catch { /* skip a malformed item */ }
   }
   return { summary: summary.trim(), actionItems };
@@ -215,7 +234,9 @@ export function parseSummary(raw: string): SummarizeResult {
   }
   const actionItems: ActionItem[] = Array.isArray(data?.actionItems)
     ? data.actionItems
-        .map((a: any) => ({ task: String(a?.task ?? "").trim(), owner: String(a?.owner ?? "").trim() || "Unassigned" }))
+        .map((a: any) => ({
+          task: String(a?.task ?? "").trim(), owner: String(a?.owner ?? "").trim() || "Unassigned", ...actionTimes(a?.at),
+        }))
         .filter((a: ActionItem) => a.task.length > 0)
     : [];
   return { summary: String(data?.summary ?? "").trim(), actionItems };
@@ -230,7 +251,9 @@ export async function summarizeItem(pool: Pool, input: SummarizeInput): Promise<
     input.itemDescription ? `Item details: ${input.itemDescription}` : "",
     `Presented by: ${presenters}`,
     "",
-    input.transcript ? `Transcript (speakers labeled by name where known):\n${input.transcript}` : "Transcript: (none)",
+    input.transcript
+      ? `Transcript (speakers labeled by name where known; each turn starts with its [mm:ss] time where known):\n${input.transcript}`
+      : "Transcript: (none)",
     "",
     input.notes ? `Typed notes:\n${input.notes}` : "Typed notes: (none)",
   ].filter(Boolean);

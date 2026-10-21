@@ -3,6 +3,8 @@ import { pool } from "./db";
 import { generateReportBody, summarizeItem } from "./claude";
 import { listPeople, peopleNamedIn } from "./people";
 import { createQueue } from "./queue";
+import { transcriptForAi } from "./transcript";
+import { chronologicalSpeakerOrder } from "./segmentation";
 import { buildReport, reportBodyInput, reportChanges, ReportInput, reportSources, ReportSources } from "./report";
 import {
   AgendaItem, MeetingRow, getAgendaItem, getAttendeeIds, getMeeting, itemPresenterNames, listAgendaItems, listGuests,
@@ -100,7 +102,7 @@ async function summarizeNow(itemId: number): Promise<void> {
     itemDescription: item.description,
     presenters: itemPresenterNames(item, names, guestNames),
     notes: item.notes,
-    transcript: item.transcript,
+    transcript: transcriptForAi(item, await speakerOrderFor(item)),
   });
   // An empty summary would leave the item "unsummarized" and a waiting report
   // asking for it again forever.
@@ -135,6 +137,14 @@ async function summarizeNow(itemId: number): Promise<void> {
     [itemId]
   );
   await advanceReport(item.meeting_id);
+}
+
+// The "Speaker N" numbering a topic's transcript was rendered with: meeting-wide
+// for whole-meeting topics, the topic's own otherwise (undefined).
+async function speakerOrderFor(item: AgendaItem): Promise<string[] | undefined> {
+  if (item.transcript_source !== "meeting") return undefined;
+  const items = await listAgendaItems(pool, item.meeting_id);
+  return chronologicalSpeakerOrder(items.filter((it) => it.transcript_source === "meeting").map((it) => it.transcript_segments));
 }
 
 // ── Report ──────────────────────────────────────────────────────────────────
