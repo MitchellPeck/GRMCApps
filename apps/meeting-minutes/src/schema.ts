@@ -164,6 +164,16 @@ CREATE TABLE IF NOT EXISTS meeting_changes (
 );
 CREATE INDEX IF NOT EXISTS meeting_changes_meeting_idx ON meeting_changes (meeting_id, id);
 
+-- Who is editing a meeting right now (see locks.ts). One row per meeting.
+CREATE TABLE IF NOT EXISTS meeting_locks (
+  meeting_id   bigint PRIMARY KEY REFERENCES meetings(id) ON DELETE CASCADE,
+  email        text NOT NULL,
+  name         text NOT NULL DEFAULT '',
+  acquired_at  timestamptz NOT NULL DEFAULT now(),
+  heartbeat_at timestamptz NOT NULL DEFAULT now(),
+  edited_at    timestamptz NOT NULL DEFAULT now()
+);
+
 -- People at one meeting who are not in the library: visitors, speakers.
 -- Guests are present by definition.
 CREATE TABLE IF NOT EXISTS meeting_guests (
