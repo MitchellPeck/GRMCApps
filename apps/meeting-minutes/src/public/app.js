@@ -168,6 +168,25 @@ function openModal(opts){
 }
 
 // Minimal, safe Markdown → HTML (headings, bullets, bold, paragraphs).
+// A report line may end with a time-range marker (see ranges.ts):
+// "<!--t:m12:742.0-1450.5-->". It becomes a play button and the time range.
+// "12:40", or "1:02:05" past the hour, as ranges.ts formats them.
+function fmtSpanTime(s){
+  var t=Math.max(0, Math.floor(s)), h=Math.floor(t/3600), m=Math.floor((t%3600)/60), r=t%60;
+  var ss=(r<10?'0':'')+r;
+  return h ? h+':'+(m<10?'0':'')+m+':'+ss : m+':'+ss;
+}
+var RANGE_MARKER=/\s*<!--t:([mi])(\d+):(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)-->\s*$/;
+function rangeParts(ln){
+  var m=ln.match(RANGE_MARKER);
+  if(!m) return { text: ln, before: '', after: '' };
+  var start=Number(m[3]), end=Number(m[4]), span=fmtSpanTime(start)+'–'+fmtSpanTime(end);
+  return {
+    text: ln.slice(0, m.index),
+    before: '<button type="button" class="sec-play" data-src="'+m[1]+'" data-rec="'+m[2]+'" data-start="'+m[3]+'" data-end="'+m[4]+'" title="Play '+span+'">&#9654;</button> ',
+    after: ' <span class="sec-time">'+span+'</span>'
+  };
+}
 function renderMarkdown(md){
   var lines = String(md||'').split(/\r?\n/), out=[], inList=false;
   function closeList(){ if(inList){ out.push('</ul>'); inList=false; } }
@@ -176,14 +195,14 @@ function renderMarkdown(md){
                  .replace(/`(.+?)`/g,'<code>$1</code>');
   }
   for(var i=0;i<lines.length;i++){
-    var ln=lines[i];
+    var rp=rangeParts(lines[i]), ln=rp.text;
     var h=ln.match(/^(#{1,4})\s+(.*)$/);
-    if(h){ closeList(); out.push('<h'+h[1].length+'>'+inline(h[2])+'</h'+h[1].length+'>'); continue; }
+    if(h){ closeList(); out.push('<h'+h[1].length+'>'+rp.before+inline(h[2])+rp.after+'</h'+h[1].length+'>'); continue; }
     var b=ln.match(/^\s*[-*]\s+(.*)$/);
     if(b){
       if(!inList){ out.push('<ul>'); inList=true; }
       var box=b[1].match(/^\[ \]\s+(.*)$/);
-      out.push(box ? '<li class="todo">&#9744; '+inline(box[1])+'</li>' : '<li>'+inline(b[1])+'</li>');
+      out.push(box ? '<li class="todo">'+rp.before+'&#9744; '+inline(box[1])+rp.after+'</li>' : '<li>'+rp.before+inline(b[1])+rp.after+'</li>');
       continue;
     }
     if(ln.trim()===''){ closeList(); continue; }
@@ -458,6 +477,7 @@ function renderDetail(){
     // if needed, then on to the new Doc, with no popup blocker involved.
     +'<a class="btn btn-secondary" id="btn-report-gdoc" href="/api/meetings/'+m.id+'/google-doc" target="_blank" rel="noopener">Open in Google Docs</a> '
     +'<button class="btn btn-secondary" id="btn-report-print">Print PDF</button>'
+    +' <span class="hint" id="report-pages"></span>'
     +'</span></div>'
     +'<div class="hint" id="report-hint">The report waits for any transcription and summaries still in progress, then writes itself. You can close this page meanwhile.</div>'
     +'<div id="report-box" style="margin-top:14px">'+(m.report?'<div class="report">'+renderMarkdown(m.report)+'</div>':'')+'</div>';
@@ -1005,7 +1025,7 @@ document.addEventListener('click', function(e){
   if(!btn) return;
   e.preventDefault();
   if(samplePlayingBtn===btn){ stopSample(); return; }
-  stopSample();
+  stopSample(); stopSection();
   if(!samplePlayer){
     samplePlayer=new Audio();
     samplePlayer.addEventListener('ended', stopSample);
@@ -1292,6 +1312,32 @@ function uploadAudio(it, input){
 // not the meeting. Topic clicks lay down markers; processing segments by them.
 var meetingRec=null; // {meetingId, recordingId, title, topic, mr, stream, t0, chain, failedChunk, timer}
 var meetingRecStarting=false; // true only during the getUserMedia→POST /recording/start window
+// One player for the play buttons in the minutes, separate from the speaker
+// samples; starting either stops the other.
+var sectionPlayer=null, sectionPlayingBtn=null;
+function stopSection(){
+  if(sectionPlayer){ try { sectionPlayer.pause(); } catch(e){} }
+  if(sectionPlayingBtn){ sectionPlayingBtn.innerHTML='&#9654;'; sectionPlayingBtn=null; }
+}
+document.addEventListener('click', function(e){
+  var btn=e.target && e.target.closest ? e.target.closest('.sec-play') : null;
+  if(!btn) return;
+  e.preventDefault();
+  if(sectionPlayingBtn===btn){ stopSection(); return; }
+  stopSection(); stopSample();
+  if(!sectionPlayer){
+    sectionPlayer=new Audio();
+    sectionPlayer.addEventListener('ended', stopSection);
+  }
+  var base=btn.getAttribute('data-src')==='i' ? '/api/recordings/' : '/api/meeting-recordings/';
+  sectionPlayer.src=base+btn.getAttribute('data-rec')+'/section?start='+Number(btn.getAttribute('data-start')).toFixed(2)
+    +'&end='+Number(btn.getAttribute('data-end')).toFixed(2);
+  sectionPlayingBtn=btn;
+  btn.innerHTML='&#9632;';
+  var p=sectionPlayer.play();
+  if(p && p['catch']) p['catch'](function(){ if(sectionPlayingBtn===btn) stopSection(); });
+});
+
 var meetingRecFinishing=false; // true from "Stop" until the server accepts the recording
 
 function meetingElapsedSeconds(){ return meetingRec ? (performance.now()-meetingRec.t0)/1000 : 0; }
@@ -1683,10 +1729,20 @@ function afterPollRound(){
 // summarize any pending items, then write the report.
 function generateReport(){
   if(state.openItemId){ var open=state.items.filter(function(x){return x.id===state.openItemId;})[0]; if(open) collapseItem(open); }
+  postReport(false);
+}
+
+// The server refuses to replace edited minutes unless asked to; ask first.
+function postReport(replaceEdits){
   setBtn('btn-report', true, 'Starting…');
   var mid=state.meeting.id;
-  api('/api/meetings/'+mid+'/report', { method:'POST' }).then(function(res){
+  api('/api/meetings/'+mid+'/report', { method:'POST', body: replaceEdits ? { replaceEdits:true } : undefined }).then(function(res){
     if(!state.meeting || state.meeting.id!==mid) return;
+    if(!res.ok && res.edited && !replaceEdits){
+      setBtn('btn-report', false);
+      if(confirm("Regenerating replaces the edits you've made to these minutes. Regenerate anyway?")) postReport(true);
+      return;
+    }
     if(!res.ok){ setBtn('btn-report', false); msg('report-msg','err',res.error); return; }
     state.report=res.report;
     if(typeof res.markdown==='string'){ showReport(res.markdown); msg('report-msg','ok','Report generated.'); }
@@ -1724,6 +1780,8 @@ function renderReportState(){
   var r=state.report||{ status:'idle', error:'', changes:[] };
   var has=!!state.meeting.report;
   var ra=document.getElementById('report-actions'); if(ra) ra.style.display = has ? '' : 'none';
+  var pg=document.getElementById('report-pages');
+  if(pg) pg.textContent = has && r.pages ? '≈ '+r.pages+' page'+(r.pages===1?'':'s') : '';
   btn.setAttribute('data-default', has ? 'Regenerate report' : 'Generate report');
   if(r.status==='pending'){
     setBtn('btn-report', true, 'Generating…');

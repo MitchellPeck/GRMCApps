@@ -441,3 +441,85 @@ test("meeting speaker rows offer playable samples", { skip }, () => {
   assert.equal(play.getAttribute("data-rec"), "7");
   assert.equal(play.getAttribute("data-start"), "3");
 });
+
+// ── Report view: playing sections, regenerating edited minutes ─────────────
+
+test("report lines with a time range get a play button; plain lines don't", { skip }, () => {
+  const { w } = boot();
+  const html: string = w.eval(`renderMarkdown(${JSON.stringify(
+    "### 1. Budget <!--t:m12:600.0-1200.0-->\n### 2. Roof\n- [ ] Send — **Bob** <!--t:i4:5.0-9.0-->"
+  )})`);
+  assert.equal((html.match(/class="sec-play"/g) || []).length, 2);
+  assert.match(html, /data-src="m" data-rec="12" data-start="600.0" data-end="1200.0"/);
+  assert.match(html, /data-src="i" data-rec="4" data-start="5.0" data-end="9.0"/);
+  assert.match(html, /<span class="sec-time">10:00–20:00<\/span>/);
+  assert.doesNotMatch(html, /<!--t:/);
+  assert.match(html, /<h3>2\. Roof<\/h3>/);
+});
+
+test("a report without ranges renders as before", { skip }, () => {
+  const { w } = boot();
+  const html: string = w.eval(`renderMarkdown("### 1. Budget\\n- [ ] Send — **Bob**")`);
+  assert.equal(html, '<h3>1. Budget</h3><ul><li class="todo">&#9744; Send — <strong>Bob</strong></li></ul>');
+});
+
+test("pressing play on a section loads that stretch of the right recording", { skip }, () => {
+  const { w, doc } = boot();
+  const played: string[] = [];
+  w.Audio = function () { return { src: "", play() { played.push(this.src); return Promise.resolve(); }, pause() {}, addEventListener() {} }; };
+  const box = doc.createElement("div");
+  box.innerHTML = w.eval(`renderMarkdown("### 1. Budget <!--t:m12:600.0-1200.0-->\\n- [ ] Send <!--t:i4:5.0-9.0-->")`);
+  doc.body.appendChild(box);
+  const btns = box.querySelectorAll(".sec-play");
+  btns[0].dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  btns[1].dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  assert.deepEqual(played, [
+    "/api/meeting-recordings/12/section?start=600.00&end=1200.00",
+    "/api/recordings/4/section?start=5.00&end=9.00",
+  ]);
+});
+
+function bootWithReport(answers: any[]) {
+  const b = boot();
+  const sent: any[] = [];
+  b.w.fetch = (path: string, opts: { method?: string; body?: string } = {}) => {
+    if (path.endsWith("/report") && opts.method === "POST") {
+      sent.push(opts.body ? JSON.parse(opts.body) : {});
+      const a = answers.shift() ?? { ok: true, report: { status: "pending", changes: [] } };
+      return Promise.resolve({ ok: !a.status, status: a.status ?? 200, json: () => Promise.resolve(a.body ?? a) });
+    }
+    return Promise.resolve({ ok: true, json: () => Promise.resolve({ ok: true }) });
+  };
+  b.w.eval(`state.meeting.report = "# Minutes"; state.meeting.report_generated_at = "2026-04-14T10:00:00Z"; renderDetail();`);
+  return { ...b, sent };
+}
+
+const flush = () => new Promise((r) => setTimeout(r, 20));
+
+test("regenerating edited minutes asks first and sends replaceEdits", { skip }, async () => {
+  const edited = { status: 409, body: { ok: false, edited: true, error: "Regenerating replaces the edits you've made to these minutes." } };
+  const { w, doc, sent } = bootWithReport([edited]);
+  let asked = "";
+  w.confirm = (q: string) => { asked = q; return true; };
+  doc.getElementById("btn-report").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  await flush();
+  assert.match(asked, /replaces the edits/);
+  assert.equal(sent.length, 2);
+  assert.equal(sent[1].replaceEdits, true);
+});
+
+test("declining keeps the edited minutes", { skip }, async () => {
+  const edited = { status: 409, body: { ok: false, edited: true, error: "Regenerating replaces the edits you've made to these minutes." } };
+  const { w, doc, sent } = bootWithReport([edited]);
+  w.confirm = () => false;
+  doc.getElementById("btn-report").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  await flush();
+  assert.equal(sent.length, 1);
+  assert.equal(doc.getElementById("btn-report").disabled, false);
+});
+
+test("the report shows its approximate length", { skip }, () => {
+  const { w, doc } = bootWithReport([]);
+  w.eval(`state.report = { status: "idle", error: "", changes: [], pages: 5.5 }; renderReportState();`);
+  assert.match(doc.getElementById("report-pages").textContent, /≈ 5\.5 pages/);
+});
