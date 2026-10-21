@@ -9,6 +9,8 @@ import { reportHtml } from "../report";
 import { stripRangeMarkers } from "../ranges";
 import { patchItem, saveMeetingSpeakers } from "../actions";
 import { lockGuard } from "../lockGuard";
+import { anthropicChatModel, chatDisplay, chatTurn } from "../chat";
+import { getSetting } from "../settings";
 import { acquireLock, getLock, releaseLock } from "../locks";
 import { fixWords, listChanges, renameTopicSpeakers, undoChange } from "../fixes";
 import {
@@ -591,6 +593,25 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
     const r = await undoChange(pool, id, cid);
     if (!r.ok) reply.code(r.status);
     return r;
+  });
+
+  // The chat beside the minutes: its conversation so far, and a new message.
+  app.get("/api/meetings/:id/chat", async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    if (!Number.isFinite(id) || !(await getMeeting(pool, id))) { reply.code(404); return { ok: false, error: "Meeting not found." }; }
+    return { ok: true, messages: await chatDisplay(pool, id) };
+  });
+
+  app.post("/api/meetings/:id/chat", async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    if (!Number.isFinite(id) || !(await getMeeting(pool, id))) { reply.code(404); return { ok: false, error: "Meeting not found." }; }
+    const b = (req.body ?? {}) as { message?: unknown };
+    const message = typeof b.message === "string" ? b.message.trim() : "";
+    if (!message) { reply.code(400); return { ok: false, error: "Type a message first." }; }
+    const key = await getSetting(pool, "anthropic_api_key");
+    if (!key) { reply.code(503); return { ok: false, error: "Add an Anthropic API key in Settings to use the chat." }; }
+    const r = await chatTurn(pool, id, message, getIdentity(req), anthropicChatModel(key));
+    return { ok: true, ...r };
   });
 
   // Stop writing a report, e.g. one stuck waiting on a topic.

@@ -117,3 +117,18 @@ test("uploading a topic's recorded audio is never refused by the lock", { skip: 
   const r = await app.inject({ method: "POST", url: `/api/items/${item}/transcribe`, headers: B, payload: "" });
   assert.notEqual(r.statusCode, 423);
 });
+
+test("chat routes: empty messages and a missing API key are refused clearly; history is readable", { skip: !url }, async () => {
+  await setup();
+  const { id } = await meetingWithItem();
+  await pool.query("DELETE FROM settings WHERE key = 'anthropic_api_key'");
+  const empty = await app.inject({ method: "POST", url: `/api/meetings/${id}/chat`, headers: A, payload: { message: "  " } });
+  assert.equal(empty.statusCode, 400);
+  const nokey = await app.inject({ method: "POST", url: `/api/meetings/${id}/chat`, headers: A, payload: { message: "Hi" } });
+  assert.equal(nokey.statusCode, 503);
+  assert.match(JSON.parse(nokey.body).error, /API key/);
+  const other = await app.inject({ method: "POST", url: `/api/meetings/${id}/chat`, headers: B, payload: { message: "Hi" } });
+  assert.equal(other.statusCode, 423, "the chat edits as the person using it, so it needs the lock");
+  const h = JSON.parse((await app.inject({ url: `/api/meetings/${id}/chat`, headers: B })).body);
+  assert.deepEqual(h, { ok: true, messages: [] });
+});
