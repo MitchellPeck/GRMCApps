@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import {
-  attachRanges, buildReport, consolidateActionItems, estimatePages, presentedBy, reportBodyInput, reportChanges,
+  attachRanges, buildReport, joinReportLines, replaceLine, reportLines, consolidateActionItems, estimatePages, presentedBy, reportBodyInput, reportChanges,
   reportHtml, ReportInput, ReportItemInput, reportSources,
 } from "./report";
 
@@ -247,4 +247,16 @@ test("a time the AI puts on a topic heading is removed", () => {
   const out = attachRanges("### 1. Budget [10:00-20:00]", [item({ id: 1, title: "Budget", range: R })]);
   assert.equal(out, "### 1. Budget <!--t:m12:600.0-1200.0-->");
   assert.equal(attachRanges("### 1. Budget [10:00-20:00]", [item({ id: 1, title: "Budget", range: null })]), "### 1. Budget");
+});
+
+const EDIT_REPORT = "# Board\n\n## Summary\nThe board met.\n\n### 1. Budget <!--t:m12:600.0-1200.0-->\n- **Income:** $5";
+
+test("report lines on the server work like the page editor's", () => {
+  const lines = reportLines(EDIT_REPORT);
+  assert.equal(lines.length, 5);
+  assert.deepEqual(lines[3], { text: "### 1. Budget", marker: "<!--t:m12:600.0-1200.0-->" });
+  assert.equal(joinReportLines(lines), EDIT_REPORT);
+  assert.match(joinReportLines(replaceLine(lines, 3, "### 1. Budget and Finance")), /### 1\. Budget and Finance <!--t:m12:600\.0-1200\.0-->/);
+  assert.doesNotMatch(joinReportLines(replaceLine(lines, 2, " ")), /The board met/);
+  assert.match(joinReportLines(replaceLine(lines, 2, "One.\n\nTwo.")), /## Summary\nOne\.\nTwo\./);
 });

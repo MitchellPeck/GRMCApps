@@ -189,6 +189,36 @@ function topicByTitle<T extends { title: string }>(heading: string, items: T[]):
     ?? null;
 }
 
+// ── The report as lines ──────────────────────────────────────────────────────
+// The same model the page's editor uses (app.js reportLines/joinReportLines/
+// replaceLine): non-blank lines, each with its time-range marker kept aside.
+
+export interface ReportLine { text: string; marker: string }
+
+const TRAILING_MARKER = /\s*<!--t:[mi]\d+:\d+(?:\.\d+)?-\d+(?:\.\d+)?-->\s*$/;
+
+export function reportLines(md: string): ReportLine[] {
+  return String(md ?? "").split(/\r?\n/).filter((l) => l.trim()).map((l) => {
+    const m = TRAILING_MARKER.exec(l);
+    return m ? { text: l.slice(0, m.index), marker: m[0].trim() } : { text: l, marker: "" };
+  });
+}
+
+export function joinReportLines(lines: ReportLine[]): string {
+  return lines.map((l, i) => (i > 0 && /^#/.test(l.text) ? "\n" : "") + l.text + (l.marker ? " " + l.marker : "")).join("\n");
+}
+
+// Replace line `index` with `newText`: several lines if it has several, none if
+// it is blank. The first keeps the line's marker.
+export function replaceLine(lines: ReportLine[], index: number, newText: string): ReportLine[] {
+  const pieces = String(newText ?? "").split(/\r?\n/).map((x) => x.replace(/\s+$/, "")).filter((x) => x.trim());
+  return [
+    ...lines.slice(0, index),
+    ...pieces.map((text, i) => ({ text, marker: i === 0 ? lines[index].marker : "" })),
+    ...lines.slice(index + 1),
+  ];
+}
+
 // Rough length of the report as printed, in pages (to the nearest half).
 const WORDS_PER_PAGE = 400;
 export function estimatePages(markdown: string): number {

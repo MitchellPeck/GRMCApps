@@ -174,6 +174,19 @@ CREATE TABLE IF NOT EXISTS meeting_locks (
   edited_at    timestamptz NOT NULL DEFAULT now()
 );
 
+-- The chat with a meeting (chatStore.ts). content is json, not jsonb, so it
+-- replays exactly as the API returned it.
+CREATE TABLE IF NOT EXISTS chat_messages (
+  id          bigserial PRIMARY KEY,
+  meeting_id  bigint NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+  role        text NOT NULL,
+  content     json NOT NULL,
+  cards       json NOT NULL DEFAULT '[]',
+  created_by  text NOT NULL DEFAULT '',
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS chat_messages_meeting_idx ON chat_messages (meeting_id, id);
+
 -- People at one meeting who are not in the library: visitors, speakers.
 -- Guests are present by definition.
 CREATE TABLE IF NOT EXISTS meeting_guests (
