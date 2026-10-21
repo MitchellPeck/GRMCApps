@@ -403,7 +403,8 @@ function openMeeting(id){
   document.getElementById('detail-body').innerHTML='<div class="empty">Loading&hellip;</div>';
   Promise.all([ api('/api/people?all=1'), api('/api/meetings/'+id) ]).then(function(r){
     var peopleRes=r[0], det=r[1];
-    if(!det.ok){ document.getElementById('detail-body').innerHTML='<div class="alert alert-err">'+esc(det.error)+'</div>'; return; }
+    if(!det.ok || !det.meeting){ document.getElementById('detail-body').innerHTML='<div class="alert alert-err">'+esc(det.error||'Could not load the meeting.')+'</div>'; return; }
+    if(!state.meeting || state.meeting.id!==det.meeting.id) state.lastFix=null;
     state.people = (peopleRes.ok?peopleRes.people:[]);
     state.peopleById = {}; state.people.forEach(function(p){ state.peopleById[p.id]=p; });
     state.meeting = det.meeting;
@@ -415,6 +416,18 @@ function openMeeting(id){
     state.report = det.report || null;
     renderDetail();
     if(anyPendingWork()) startPolling();
+  });
+}
+
+// Reload the open meeting's data and redraw it, without openMeeting's reset:
+// a recording in progress keeps going.
+function refreshMeeting(mid){
+  api('/api/meetings/'+mid).then(function(det){
+    if(!det.ok || !det.meeting || !state.meeting || state.meeting.id!==mid) return;
+    state.meeting=det.meeting; state.attendeeIds=det.attendeeIds; state.items=det.items;
+    state.meetingRecordings=det.meetingRecordings||[]; state.meetingSpeakerStats=det.meetingSpeakerStats||[];
+    state.guests=det.guests||[]; state.report=det.report||null;
+    renderDetail();
   });
 }
 
@@ -467,6 +480,19 @@ function renderDetail(){
   h+='<div class="section-title">Run the meeting</div>';
   h+='<div id="items-wrap"></div>';
 
+  // Fix a misheard name or word everywhere at once.
+  h+='<hr class="hr"><div class="section-title">Fix a name or word</div>'
+    +'<div class="hint">Corrects it in the transcripts, summaries, action items, speaker names, guests and the report, all at once.</div>'
+    +'<div class="fix-row" id="fix-panel">'
+    +'<input id="fix-from" placeholder="Replace (e.g. John)">'
+    +'<input id="fix-to" placeholder="With (e.g. Jon)">'
+    +'<select id="fix-scope"><option value="">Whole meeting</option>'
+    +state.items.map(function(it, i){ return '<option value="'+it.id+'">'+(i+1)+'. '+esc(it.title)+'</option>'; }).join('')
+    +'</select>'
+    +'<button class="btn btn-secondary btn-sm" id="btn-fix-preview">Check</button>'
+    +'<button class="btn btn-primary btn-sm" id="btn-fix-apply">Fix</button>'
+    +'</div><div id="fix-msg"></div><div id="fix-result">'+(state.lastFix ? fixResultHtml(state.lastFix) : '')+'</div>';
+
   // Report
   h+='<hr class="hr"><div class="section-title">Report</div>'
     +'<div id="report-msg"></div>'
@@ -496,6 +522,8 @@ function renderDetail(){
   document.getElementById('btn-add-item').addEventListener('click', addItemManually);
   document.getElementById('btn-meeting-rec').addEventListener('click', toggleMeetingRecording);
   document.getElementById('btn-report').addEventListener('click', generateReport);
+  document.getElementById('btn-fix-preview').addEventListener('click', function(){ runFix(true); });
+  document.getElementById('btn-fix-apply').addEventListener('click', function(){ runFix(false); });
   document.getElementById('btn-report-cancel').addEventListener('click', cancelReport);
   document.getElementById('btn-report-print').addEventListener('click', function(){ window.print(); });
   document.getElementById('btn-add-guest').addEventListener('click', addGuest);
@@ -784,7 +812,10 @@ function itemHtml(it, idx){
       +'</div>'
       +'<div class="speakers" id="spk-'+it.id+'"></div>'
       +'<div class="recordings" id="rec-'+it.id+'"></div>'
-      +'<textarea id="tx-'+it.id+'" placeholder="Record or upload audio to transcribe. Speakers are labeled once you record; you can also edit this text." style="margin-top:6px">'+esc(it.transcript)+'</textarea>'
+      +(recordedTranscript(it)
+        ? '<textarea id="tx-'+it.id+'" readonly style="margin-top:6px">'+esc(it.transcript)+'</textarea>'
+          +'<div class="hint">From the recording. Use “Fix a name or word” to correct it.</div>'
+        : '<textarea id="tx-'+it.id+'" placeholder="Record or upload audio to transcribe. Speakers are labeled once you record; you can also edit this text." style="margin-top:6px">'+esc(it.transcript)+'</textarea>')
       +'<div class="sublbl">Notes (typed)</div>'
       +'<textarea id="nt-'+it.id+'" placeholder="Optional manual notes">'+esc(it.notes)+'</textarea>'
       +'<div class="hint" style="margin-top:8px">The summary is written on the server when you close this item, or a couple of minutes after your last edit &mdash; even if you leave the page.</div>'
@@ -797,6 +828,10 @@ function itemHtml(it, idx){
     +'</div>'
   +'</div>';
 }
+
+// A transcript rendered from recorded segments: edited only through word fixes,
+// since free text would be lost the next time it is re-rendered.
+function recordedTranscript(it){ return !!(it.transcript_segments && it.transcript_segments.length); }
 
 // True when the item has content worth summarizing.
 function itemHasContent(it){ return !!((it.transcript && it.transcript.trim()) || (it.notes && it.notes.trim())); }
@@ -846,7 +881,7 @@ function wireItem(it){
   var tx=document.getElementById('tx-'+it.id);
   var nt=document.getElementById('nt-'+it.id);
   tx.addEventListener('blur', function(){
-    if(tx.value===it.transcript) return;
+    if(tx.readOnly || tx.value===it.transcript) return;
     it.transcript=tx.value; saveItemField(it, { transcript: tx.value }); invalidateSummary(it);
   });
   nt.addEventListener('blur', function(){
@@ -1794,6 +1829,58 @@ function cancelReport(){
     msg('report-msg','','');
   });
 }
+
+// ── Fix a name or word ──────────────────────────────────────────────────────
+var FIX_AREAS=[['transcripts','in transcripts'],['summaries','in summaries'],['actionItems','in action items'],
+  ['report','in the report'],['speakers','in speaker names'],['guests','in guests']];
+function fixCountsText(res){
+  var parts=FIX_AREAS.filter(function(a){ return res.counts && res.counts[a[0]]; })
+    .map(function(a){ return res.counts[a[0]]+' '+a[1]; });
+  return res.total+' place'+(res.total===1?'':'s')+(parts.length ? ': '+parts.join(', ') : '');
+}
+function libraryFlagHtml(res){
+  return (res.libraryMatches||[]).map(function(p){
+    return '<div class="hint">The People list still spells this “'+esc(p.name)+'”. Change it in People if it’s wrong there too.</div>';
+  }).join('');
+}
+function fixResultHtml(f){
+  if(f.undone) return '<div class="alert alert-ok">Undone.</div>';
+  return '<div class="alert alert-ok">Changed '+esc(fixCountsText(f))+'. '
+    +'<button class="btn-sm fix-undo" data-change="'+f.changeId+'">Undo</button></div>'+libraryFlagHtml(f);
+}
+function runFix(dryRun){
+  var from=v('fix-from'), to=v('fix-to'), scope=document.getElementById('fix-scope').value;
+  if(!from || !to){ msg('fix-msg','err','Say what to replace and what with.'); return; }
+  var body={ from: from, to: to }; if(scope) body.itemId=Number(scope); if(dryRun) body.dryRun=true;
+  var mid=state.meeting.id;
+  msg('fix-msg','','');
+  api('/api/meetings/'+mid+'/fix', { method:'POST', body: body }).then(function(res){
+    if(!state.meeting || state.meeting.id!==mid) return;
+    var out=document.getElementById('fix-result');
+    if(!res.ok){ msg('fix-msg','err',res.error); return; }
+    if(dryRun){
+      out.innerHTML = res.total
+        ? '<div class="alert alert-info">Will change '+esc(fixCountsText(res))+'.</div>'+libraryFlagHtml(res)
+        : '<div class="alert alert-info">“'+esc(from)+'” isn’t in this meeting.</div>';
+      return;
+    }
+    state.lastFix=res;
+    out.innerHTML=fixResultHtml(res);
+    refreshMeeting(mid);
+  });
+}
+document.addEventListener('click', function(e){
+  var btn=e.target && e.target.closest ? e.target.closest('.fix-undo') : null;
+  if(!btn || !state.meeting) return;
+  var mid=state.meeting.id;
+  btn.disabled=true;
+  api('/api/meetings/'+mid+'/changes/'+btn.getAttribute('data-change')+'/undo', { method:'POST' }).then(function(res){
+    if(!res.ok){ btn.disabled=false; msg('fix-msg','err',res.error); return; }
+    if(state.lastFix) state.lastFix.undone=true;
+    var out=document.getElementById('fix-result'); if(out && state.lastFix) out.innerHTML=fixResultHtml(state.lastFix);
+    refreshMeeting(mid);
+  });
+});
 
 function showReport(markdown){
   state.meeting.report=markdown;

@@ -605,3 +605,78 @@ test("a report stuck generating offers Cancel", { skip }, async () => {
   assert.equal(doc.getElementById("btn-report-cancel").hidden, true);
   assert.equal(sent.length, 0);
 });
+
+// ── Fix a name or word ──────────────────────────────────────────────────────
+
+function bootFix(answers: Record<string, any>) {
+  const b = boot();
+  const posts: Array<{ path: string; body: any }> = [];
+  b.w.fetch = (path: string, opts: { method?: string; body?: string } = {}) => {
+    const body = opts.body ? JSON.parse(opts.body) : undefined;
+    if (opts.method === "POST") posts.push({ path, body });
+    const key = Object.keys(answers).find((k) => path.endsWith(k) && (k !== "/fix" || !!body?.dryRun === answers[k].dry));
+    const a = key ? answers[key] : { ok: true };
+    return Promise.resolve({ ok: true, json: () => Promise.resolve(a) });
+  };
+  b.w.eval("renderDetail()");
+  return { ...b, posts };
+}
+
+const counts = { transcripts: 3, summaries: 1, actionItems: 0, report: 2, speakers: 0, guests: 0 };
+
+test("checking a fix shows how many places would change", { skip }, async () => {
+  const { w, doc, posts } = bootFix({ "/fix": { ok: true, dry: true, counts, total: 6, changeId: null, libraryMatches: [] } });
+  doc.getElementById("fix-from").value = "John";
+  doc.getElementById("fix-to").value = "Jon";
+  doc.getElementById("btn-fix-preview").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  await flush();
+  assert.deepEqual(posts[0], { path: "/api/meetings/42/fix", body: { from: "John", to: "Jon", dryRun: true } });
+  assert.match(doc.getElementById("fix-result").textContent, /Will change 6 places: 3 in transcripts, 1 in summaries, 2 in the report/);
+});
+
+test("applying a fix offers Undo, and Undo sends the change back", { skip }, async () => {
+  const { w, doc, posts } = bootFix({
+    "/fix": { ok: true, dry: false, counts, total: 6, changeId: 9, libraryMatches: [{ id: 3, name: "John Hale" }] },
+  });
+  doc.getElementById("fix-from").value = "John";
+  doc.getElementById("fix-to").value = "Jon";
+  doc.getElementById("btn-fix-apply").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  await flush();
+  assert.match(doc.getElementById("fix-result").textContent, /Changed 6 places/);
+  assert.match(doc.getElementById("fix-result").textContent, /People list still spells this “John Hale”/);
+  doc.querySelector(".fix-undo").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  await flush();
+  assert.equal(posts[1].path, "/api/meetings/42/changes/9/undo");
+});
+
+test("a fix can be limited to one topic", { skip }, async () => {
+  const { w, doc, posts } = bootFix({ "/fix": { ok: true, dry: true, counts, total: 6, changeId: null, libraryMatches: [] } });
+  doc.getElementById("fix-from").value = "John";
+  doc.getElementById("fix-to").value = "Jon";
+  doc.getElementById("fix-scope").value = "1";
+  doc.getElementById("btn-fix-preview").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  await flush();
+  assert.equal(posts[0].body.itemId, 1);
+});
+
+test("a transcript from the recording is read-only and never saved on blur", { skip }, () => {
+  const { w, doc, calls } = boot();
+  w.eval(`state.items[0].transcript = "Speaker 1: hi"; state.items[0].transcript_segments = [{ text: "hi", speaker: "S0", start: 0, end: 1 }]; renderDetail();`);
+  const tx = doc.getElementById("tx-1");
+  assert.equal(tx.readOnly, true);
+  tx.value = "edited";
+  tx.dispatchEvent(new w.Event("blur"));
+  assert.ok(!calls.some((c: any) => c.method === "PATCH"));
+});
+
+test("a fix doesn't stop a recording in progress", { skip }, async () => {
+  const { w, doc } = bootFix({ "/fix": { ok: true, dry: false, counts, total: 6, changeId: 9, libraryMatches: [] } });
+  let stopped = false;
+  w.eval("var __stop = stopRecording;");
+  w.stopRecording = () => { stopped = true; };
+  doc.getElementById("fix-from").value = "John";
+  doc.getElementById("fix-to").value = "Jon";
+  doc.getElementById("btn-fix-apply").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  await flush();
+  assert.equal(stopped, false);
+});
