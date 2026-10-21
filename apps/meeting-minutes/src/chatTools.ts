@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { randomBytes } from "node:crypto";
 import { Pool } from "pg";
 import { patchItem, saveMeetingSpeakers } from "./actions";
 import { Snapshot, readSnapshot, recordSnapshotChange, writeFields } from "./changes";
@@ -25,7 +26,7 @@ export type ChatCard =
   // Something that can't easily be undone: the page shows a Confirm button,
   // and only the person pressing it makes it happen (through the page's own
   // route). The model can't do it on its own.
-  | { kind: "confirm"; action: "remove_topic" | "regenerate_report" | "reprocess_recording"; itemId?: number; recordingId?: number; label: string }
+  | { kind: "confirm"; id: string; action: "remove_topic" | "regenerate_report" | "reprocess_recording"; itemId?: number; recordingId?: number; label: string; done?: boolean }
   | { kind: "clip"; source: "m" | "i"; recordingId: number; start: number; end: number; quote: string; topic: string };
 
 export interface ToolOutcome { content: string; isError?: boolean; card?: ChatCard }
@@ -81,6 +82,7 @@ export const CHAT_TOOLS: Anthropic.Tool[] = [
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 class ToolError extends Error {}
+const cardId = () => randomBytes(6).toString("hex");
 const fail = (msg: string): never => { throw new ToolError(msg); };
 const ok = (data: unknown, card?: ChatCard): ToolOutcome => ({ content: JSON.stringify(data), card });
 
@@ -277,7 +279,7 @@ export async function runChatTool(
         // The summary and action items too: new notes clear them for rewriting,
         // and Undo should put them back with the notes.
         const card = await changed(pool, meetingId,
-          { items: { [it.id]: { title: "", description: "", notes: "", transcript: "", summary: "", action_items: [] } } },
+          { items: { [it.id]: { title: "", description: "", notes: "", transcript: "", summary: "", action_items: [], presenter_ids: [], guest_presenter_ids: [] } } },
           `Topic updated: ${(body.title as string | undefined) ?? it.title}`, by, async () => {
             const r = await patchItem(pool, it.id, body, by);
             if (r.status !== 200) fail(String(r.body.error));
@@ -306,7 +308,7 @@ export async function runChatTool(
       case "remove_topic": {
         const it = await itemOf(pool, meetingId, input.item_id);
         return ok({ shown: "A Confirm button. Nothing happens unless they press it." },
-          { kind: "confirm", action: "remove_topic", itemId: it.id, label: `Remove the topic “${it.title}” and what was recorded under it` });
+          { kind: "confirm", id: cardId(), action: "remove_topic", itemId: it.id, label: `Remove the topic “${it.title}” and what was recorded under it` });
       }
       case "resummarize_topic": {
         const it = await itemOf(pool, meetingId, input.item_id);
@@ -317,7 +319,7 @@ export async function runChatTool(
       case "regenerate_report": {
         if (!(await listAgendaItems(pool, meetingId)).length) fail("Add agenda topics before generating minutes.");
         return ok({ shown: "A Confirm button. Nothing happens unless they press it." },
-          { kind: "confirm", action: "regenerate_report", label: "Write the minutes again from scratch, replacing every edit made to them" });
+          { kind: "confirm", id: cardId(), action: "regenerate_report", label: "Write the minutes again from scratch, replacing every edit made to them" });
       }
       case "reprocess_recording": {
         const rec = need(await latestMeetingRecording(pool, meetingId), "This meeting has no whole-meeting recording.");
@@ -325,7 +327,7 @@ export async function runChatTool(
           fail("The recording is still being made or processed; it can be reprocessed once that's finished.");
         }
         return ok({ shown: "A Confirm button. Nothing happens unless they press it." },
-          { kind: "confirm", action: "reprocess_recording", recordingId: rec.id,
+          { kind: "confirm", id: cardId(), action: "reprocess_recording", recordingId: rec.id,
             label: "Transcribe the recording again, replacing every topic's transcript, speaker names and summary" });
       }
       case "fix_words": {

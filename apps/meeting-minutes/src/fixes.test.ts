@@ -259,3 +259,60 @@ test("saving the same speaker names again records nothing", { skip: !url }, asyn
     assert.deepEqual(await listChanges(pool, mid), []);
   } finally { await pool.end(); }
 });
+
+test("a fix is re-applied when the topic is transcribed again", { skip: !url }, async () => {
+  const pool = new Pool({ connectionString: url });
+  try {
+    const { mid, a, b } = await setup(pool);
+    await fixWords(pool, mid, "John", "Jon");
+    const { applyActiveFixes } = await import("./fixes");
+    const segs = [{ text: "John again", speaker: "S0", start: 0, end: 1 }];
+    assert.deepEqual((await applyActiveFixes(pool, mid, a, segs)).map((s: any) => s.text), ["Jon again"]);
+    const topicOnly = await fixWords(pool, mid, "again", "once more", { itemId: b });
+    void topicOnly;
+    assert.deepEqual((await applyActiveFixes(pool, mid, a, segs)).map((s: any) => s.text), ["Jon again"], "another topic's fix doesn't apply");
+    const [latest] = await listChanges(pool, mid);
+    await undoChange(pool, mid, latest.id);
+    const first = (await listChanges(pool, mid)).find((c: any) => c.summary.startsWith("“John”"))!;
+    await undoChange(pool, mid, first.id);
+    assert.deepEqual((await applyActiveFixes(pool, mid, a, segs)).map((s: any) => s.text), ["John again"], "undone fixes don't");
+  } finally { await pool.end(); }
+});
+
+test("re-transcribing a topic keeps earlier fixes", { skip: !url }, async () => {
+  const pool = new Pool({ connectionString: url });
+  try {
+    const { mid, b } = await setup(pool);
+    await fixWords(pool, mid, "John", "Jon");
+    const { saveTranscriptionResult } = await import("./transcribeQueue");
+    await saveTranscriptionResult(b, [{ text: "John spoke", speaker: "S0", start: 0, end: 1 }], {}, 3, pool);
+    assert.equal((await getAgendaItem(pool, b))!.transcript_segments[0].text, "Jon spoke");
+  } finally { await pool.end(); }
+});
+
+test("a topic-only fix keeps the report's line endings", { skip: !url }, async () => {
+  const pool = new Pool({ connectionString: url });
+  try {
+    const { mid, b } = await setup(pool);
+    await saveReport(pool, mid, "### 1. Budget\r\nJohn.\r\n### 2. Roof\r\nAsk John.");
+    await fixWords(pool, mid, "John", "Jon", { itemId: b });
+    assert.equal((await getMeeting(pool, mid))!.report, "### 1. Budget\r\nJohn.\r\n### 2. Roof\r\nAsk Jon.");
+  } finally { await pool.end(); }
+});
+
+test("a summary is saved only if the transcript is still what it was written from", { skip: !url }, async () => {
+  const pool = new Pool({ connectionString: url });
+  try {
+    const { a } = await setup(pool);
+    const { saveSummaryIfUnchanged } = await import("./meetings");
+    const it = (await getAgendaItem(pool, a))!;
+    assert.equal(await saveSummaryIfUnchanged(pool, a, { transcript: it.transcript + " (changed)", notes: it.notes },
+      { summary: "Stale.", actionItems: [] }), false);
+    assert.notEqual((await getAgendaItem(pool, a))!.summary, "Stale.");
+    assert.equal(await saveSummaryIfUnchanged(pool, a, { transcript: it.transcript, notes: it.notes },
+      { summary: "Fresh.", actionItems: [{ task: "T", owner: "O" }] }), true);
+    const after = (await getAgendaItem(pool, a))!;
+    assert.equal(after.summary, "Fresh.");
+    assert.equal(after.status, "done");
+  } finally { await pool.end(); }
+});

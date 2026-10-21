@@ -415,7 +415,37 @@ export async function generateReportBody(pool: Pool, input: ReportBodyInput): Pr
   );
   const body = (await callClaude(pool, system, lines.join("\n"), 16000, REPORT_TIMEOUT_MS)).trim();
   if (!body) throw new Error("Claude returned an empty report. Try again.");
-  return body;
+  return condenseIfLong(body, (sys, content) => callClaude(pool, sys, content, 16000, REPORT_TIMEOUT_MS));
+}
+
+// Words above which the written body is shortened once (the prompt asks for
+// about 2,500; header, attendance and action items come on top).
+const CONDENSE_OVER_WORDS = 2800;
+
+const CONDENSE_SYSTEM = `You shorten church meeting minutes that came out too long. Rewrite the
+Markdown you are given to at most 2,500 words, so the finished minutes come to
+5-7 pages. Keep every section and heading in the same order and form,
+including any "[mm:ss-mm:ss]" at the end of "####" lines, exactly as written.
+Keep decisions, votes (mover, seconder, outcome), totals, balances, amounts
+approved, dates, deadlines and who is doing what. Cut retelling, repetition,
+figures read through without comment, and detail beyond about half to
+three-quarters of a page per agenda item (longer only for an item that walks
+through several schedules). Add nothing new. Reply with the Markdown only.`;
+
+// One shortening pass when the minutes come out over budget. If it fails or
+// comes back empty, the original stands.
+export async function condenseIfLong(
+  body: string,
+  call: (system: string, content: string) => Promise<string>
+): Promise<string> {
+  const words = body.split(/\s+/).filter(Boolean).length;
+  if (words <= CONDENSE_OVER_WORDS) return body;
+  try {
+    const shorter = (await call(CONDENSE_SYSTEM, body)).trim();
+    return shorter || body;
+  } catch {
+    return body;
+  }
 }
 
 export interface ReconcileInput {

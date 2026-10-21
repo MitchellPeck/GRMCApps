@@ -17,6 +17,8 @@ export interface ItemFields {
   summary?: string;
   action_items?: ActionItem[];
   speaker_map?: SpeakerMap;
+  presenter_ids?: number[];
+  guest_presenter_ids?: number[];
 }
 
 export interface Snapshot {
@@ -39,12 +41,14 @@ function canonical(v: unknown): string {
   );
 }
 
-// The current values of exactly the fields `shape` names.
-async function readFields(c: PoolClient, meetingId: number, shape: Snapshot): Promise<Snapshot> {
+// The current values of exactly the fields `shape` names. `lock` holds those
+// rows until the transaction ends (Undo checks, then writes).
+async function readFields(c: PoolClient, meetingId: number, shape: Snapshot, lock = false): Promise<Snapshot> {
+  const fu = lock ? " FOR UPDATE" : "";
   const out: Snapshot = {};
   if (shape.meeting) {
     const r = (await c.query(
-      "SELECT report, speaker_map, title, meeting_date, location, description FROM meetings WHERE id = $1", [meetingId]
+      "SELECT report, speaker_map, title, meeting_date, location, description FROM meetings WHERE id = $1" + fu, [meetingId]
     )).rows[0] ?? {};
     out.meeting = {};
     for (const k of Object.keys(shape.meeting) as Array<keyof NonNullable<Snapshot["meeting"]>>) {
@@ -55,11 +59,19 @@ async function readFields(c: PoolClient, meetingId: number, shape: Snapshot): Pr
     out.items = {};
     for (const [id, fields] of Object.entries(shape.items)) {
       const r = (await c.query(
-        `SELECT ${ITEM_COLUMNS.join(", ")} FROM agenda_items WHERE id = $1 AND meeting_id = $2`,
+        `SELECT ${ITEM_COLUMNS.join(", ")} FROM agenda_items WHERE id = $1 AND meeting_id = $2` + fu,
         [Number(id), meetingId]
       )).rows[0] ?? {};
       out.items[id] = {};
-      for (const k of Object.keys(fields)) (out.items[id] as any)[k] = r[k];
+      for (const k of Object.keys(fields)) {
+        if (k === "presenter_ids") {
+          (out.items[id] as any)[k] = (await c.query("SELECT person_id FROM agenda_item_presenters WHERE item_id = $1 ORDER BY person_id", [Number(id)]))
+            .rows.map((x) => Number(x.person_id));
+        } else if (k === "guest_presenter_ids") {
+          (out.items[id] as any)[k] = (await c.query("SELECT guest_id FROM agenda_item_guest_presenters WHERE item_id = $1 ORDER BY guest_id", [Number(id)]))
+            .rows.map((x) => Number(x.guest_id));
+        } else (out.items[id] as any)[k] = r[k];
+      }
     }
   }
   if (shape.attendees) {
@@ -70,7 +82,7 @@ async function readFields(c: PoolClient, meetingId: number, shape: Snapshot): Pr
   if (shape.guests) {
     out.guests = {};
     for (const id of Object.keys(shape.guests)) {
-      const r = (await c.query("SELECT name FROM meeting_guests WHERE id = $1 AND meeting_id = $2", [Number(id), meetingId])).rows[0];
+      const r = (await c.query("SELECT name FROM meeting_guests WHERE id = $1 AND meeting_id = $2" + fu, [Number(id), meetingId])).rows[0];
       out.guests[id] = { name: r?.name };
     }
   }
@@ -110,6 +122,18 @@ export async function writeFields(c: PoolClient, meetingId: number, snap: Snapsh
       sets.push(`${col} = $${vals.length}`);
     }
     if (sets.length) await c.query(`UPDATE agenda_items SET ${sets.join(", ")} WHERE id = $1 AND meeting_id = $2`, vals);
+    if (fields.presenter_ids !== undefined) {
+      await c.query("DELETE FROM agenda_item_presenters WHERE item_id = $1", [Number(id)]);
+      for (const pid of fields.presenter_ids) {
+        await c.query("INSERT INTO agenda_item_presenters (item_id, person_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", [Number(id), pid]);
+      }
+    }
+    if (fields.guest_presenter_ids !== undefined) {
+      await c.query("DELETE FROM agenda_item_guest_presenters WHERE item_id = $1", [Number(id)]);
+      for (const gid of fields.guest_presenter_ids) {
+        await c.query("INSERT INTO agenda_item_guest_presenters (item_id, guest_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", [Number(id), gid]);
+      }
+    }
   }
   for (const [id, g] of Object.entries(snap.guests ?? {})) {
     await c.query("UPDATE meeting_guests SET name = $3 WHERE id = $1 AND meeting_id = $2", [Number(id), meetingId, g.name]);
@@ -123,12 +147,13 @@ export async function recordChange(
   summary: string,
   before: Snapshot,
   after: Snapshot,
-  by = ""
+  by = "",
+  params: Record<string, unknown> = {}
 ): Promise<number> {
   const r = await c.query(
-    `INSERT INTO meeting_changes (meeting_id, kind, summary, before, after, created_by)
-     VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-    [meetingId, kind, summary, JSON.stringify(before), JSON.stringify(after), by]
+    `INSERT INTO meeting_changes (meeting_id, kind, summary, before, after, created_by, params)
+     VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+    [meetingId, kind, summary, JSON.stringify(before), JSON.stringify(after), by, JSON.stringify(params)]
   );
   return Number(r.rows[0].id);
 }
@@ -148,7 +173,7 @@ export async function undoChange(
     if (!row) { await c.query("ROLLBACK"); return { ok: false, status: 404, error: "That change wasn't found." }; }
     if (row.undone_at) { await c.query("ROLLBACK"); return { ok: false, status: 409, error: "Already undone." }; }
     const after = row.after as Snapshot;
-    if (canonical(await readFields(c, meetingId, after)) !== canonical(after)) {
+    if (canonical(await readFields(c, meetingId, after, true)) !== canonical(after)) {
       await c.query("ROLLBACK");
       return { ok: false, status: 409, error: "Something changed these since; undo it by hand." };
     }

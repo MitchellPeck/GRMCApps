@@ -86,7 +86,9 @@ test("removing a topic or regenerating only offers a Confirm button; nothing hap
   const { mid, item } = await setup();
   const r1 = await run(mid, "remove_topic", { item_id: item });
   assert.ok(!r1.isError, r1.content);
-  assert.deepEqual(r1.card, { kind: "confirm", action: "remove_topic", itemId: item, label: "Remove the topic “Budget” and what was recorded under it" });
+  const { id: cardId, ...card } = r1.card;
+  assert.match(cardId, /^[0-9a-f]{12}$/);
+  assert.deepEqual(card, { kind: "confirm", action: "remove_topic", itemId: item, label: "Remove the topic “Budget” and what was recorded under it" });
   assert.ok(await m.getAgendaItem(pool, item), "still there");
   const r2 = await run(mid, "regenerate_report", {});
   assert.equal(r2.card.kind, "confirm");
@@ -186,4 +188,30 @@ test("details and attendance changes are undoable", { skip: !url }, async () => 
   const after = await m.getMeeting(pool, mid);
   assert.equal(after.title, "Board");
   assert.equal(after.location, "");
+});
+
+test("Undo of a chat presenter change puts the presenters back", { skip: !url }, async () => {
+  const { mid, item } = await setup();
+  const p1 = Number((await pool.query("INSERT INTO people (name) VALUES ('Ann') RETURNING id")).rows[0].id);
+  const p2 = Number((await pool.query("INSERT INTO people (name) VALUES ('Bob') RETURNING id")).rows[0].id);
+  await m.updateAgendaItem(pool, item, { presenterIds: [p1] });
+  const r = await run(mid, "update_topic", { item_id: item, title: null, description: null, notes: null, transcript: null,
+    presenter_person_ids: [p2], presenter_guest_ids: null });
+  assert.ok(r.card.changeId, "presenters alone are an undoable change");
+  const { undoChange } = await import("./changes");
+  assert.deepEqual(await undoChange(pool, mid, r.card.changeId), { ok: true });
+  assert.deepEqual((await m.getAgendaItem(pool, item)).presenter_ids, [p1]);
+});
+
+test("a Confirm card has an id, and once done it stays done", { skip: !url }, async () => {
+  const { mid, item } = await setup();
+  const r = await run(mid, "remove_topic", { item_id: item });
+  assert.match(r.card.id, /^[0-9a-f]{12}$/);
+  const store = await import("./chatStore");
+  await store.appendChat(pool, mid, "user", [{ type: "tool_result", tool_use_id: "t", content: "{}" }], [r.card]);
+  assert.equal(await store.markCardDone(pool, mid, r.card.id), true);
+  const { chatDisplay } = await import("./chat");
+  const d = await chatDisplay(pool, mid);
+  assert.equal((d[0].cards[0] as any).done, true);
+  assert.equal(await store.markCardDone(pool, mid, "nope"), false);
 });

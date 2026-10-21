@@ -42,6 +42,24 @@ export async function loadChatHistory(pool: Pool, meetingId: number): Promise<Ch
   }));
 }
 
+// A Confirm card the person pressed: remembered, so it shows as done later.
+// Cards are display data (never sent to the model), so marking one is safe.
+export async function markCardDone(pool: Pool, meetingId: number, cardId: string): Promise<boolean> {
+  const rows = (await pool.query(
+    "SELECT id, cards::text AS cards FROM chat_messages WHERE meeting_id = $1 AND cards::text LIKE $2",
+    [meetingId, `%${cardId.replace(/[%_\\]/g, "")}%`]
+  )).rows;
+  for (const row of rows) {
+    const cards = JSON.parse(row.cards) as any[];
+    const card = cards.find((c) => c.id === cardId);
+    if (!card) continue;
+    card.done = true;
+    await pool.query("UPDATE chat_messages SET cards = $2::json WHERE id = $1", [row.id, JSON.stringify(cards)]);
+    return true;
+  }
+  return false;
+}
+
 // "Start over": the conversation so far is set aside (kept, not shown or sent).
 export async function archiveChat(pool: Pool, meetingId: number): Promise<void> {
   await pool.query("UPDATE chat_messages SET archived_at = now() WHERE meeting_id = $1 AND archived_at IS NULL", [meetingId]);

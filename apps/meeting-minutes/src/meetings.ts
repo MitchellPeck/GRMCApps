@@ -510,6 +510,32 @@ export async function saveReport(
   );
 }
 
+// Save a topic's summary only if its transcript and notes are still the ones it
+// was written from, checked and written under one row lock: a name fix or an
+// edit that lands while Claude was writing wins, and this summary is dropped.
+export async function saveSummaryIfUnchanged(
+  pool: Pool,
+  itemId: number,
+  from: { transcript: string; notes: string },
+  fields: { summary: string; actionItems: ActionItem[] }
+): Promise<boolean> {
+  const c = await pool.connect();
+  try {
+    await c.query("BEGIN");
+    const r = (await c.query("SELECT transcript, notes FROM agenda_items WHERE id = $1 FOR UPDATE", [itemId])).rows[0];
+    if (!r || r.transcript !== from.transcript || r.notes !== from.notes) { await c.query("ROLLBACK"); return false; }
+    await c.query("UPDATE agenda_items SET summary = $2, action_items = $3, status = 'done' WHERE id = $1",
+      [itemId, fields.summary, JSON.stringify(fields.actionItems)]);
+    await c.query("COMMIT");
+    return true;
+  } catch (e) {
+    await c.query("ROLLBACK");
+    throw e;
+  } finally {
+    c.release();
+  }
+}
+
 // The minutes after editing. What they were generated from, and when, stay.
 // Saving the text it already has changes nothing and returns false.
 export async function saveReportEdit(pool: Pool, meetingId: number, markdown: string): Promise<boolean> {

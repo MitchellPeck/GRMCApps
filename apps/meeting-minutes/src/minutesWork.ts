@@ -10,7 +10,7 @@ import { chronologicalSpeakerOrder } from "./segmentation";
 import { buildReport, estimatePages, reportBodyInput, reportChanges, ReportInput, reportSources, ReportSources } from "./report";
 import {
   AgendaItem, MeetingRow, getAgendaItem, getAttendeeIds, getMeeting, itemPresenterNames, listAgendaItems, listGuests,
-  listPendingReports, listUnfinishedSummaries, reportEdited, saveReport, setAttendees, setReportStatus,
+  listPendingReports, listUnfinishedSummaries, reportEdited, saveReport, saveSummaryIfUnchanged, setAttendees, setReportStatus,
   setSummarizeStatus, updateAgendaItem,
 } from "./meetings";
 
@@ -133,9 +133,14 @@ async function summarizeNow(itemId: number): Promise<void> {
     presenterIds = [...new Set([...presenterIds, ...named])];
   }
 
-  await updateAgendaItem(pool, itemId, {
-    summary: result.summary, actionItems: result.actionItems, status: "done", presenterIds,
-  });
+  // Saved only if nothing changed the text since the check above (a name fix
+  // can land in between); otherwise this run is dropped like a stale one.
+  if (!(await saveSummaryIfUnchanged(pool, itemId, { transcript: item.transcript, notes: item.notes },
+      { summary: result.summary, actionItems: result.actionItems }))) {
+    await abandonStaleSummary(pool, itemId);
+    return;
+  }
+  if (presenterIds !== fresh.presenter_ids) await updateAgendaItem(pool, itemId, { presenterIds });
   // Only clear our own "processing": a request that arrived meanwhile left
   // "queued", and that run is still to come.
   await pool.query(

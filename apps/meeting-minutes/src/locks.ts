@@ -45,6 +45,25 @@ export async function acquireLock(
   pool: Pool,
   meetingId: number,
   who: { email: string; name: string },
+  opts: { edit?: boolean; now?: Date; tab?: string } = {}
+): Promise<LockResult> {
+  const r = await acquire(pool, meetingId, who, opts);
+  // Remember which tab is keeping it, so closing one of two tabs doesn't let
+  // go while the other is still open.
+  if (r.held && opts.tab) {
+    await pool.query(
+      `INSERT INTO meeting_lock_tabs (meeting_id, tab, email, seen_at) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (meeting_id, tab) DO UPDATE SET email = $3, seen_at = $4`,
+      [meetingId, opts.tab, who.email, opts.now ?? new Date()]
+    );
+  }
+  return r;
+}
+
+async function acquire(
+  pool: Pool,
+  meetingId: number,
+  who: { email: string; name: string },
   opts: { edit?: boolean; now?: Date } = {}
 ): Promise<LockResult> {
   const now = opts.now ?? new Date();
@@ -67,7 +86,7 @@ export async function acquireLock(
       // Released between the insert and the select: it's free, so try again.
       await c.query("ROLLBACK");
       c.release(); released = true;
-      return acquireLock(pool, meetingId, who, opts);
+      return acquire(pool, meetingId, who, opts);
     }
     const current = rowToLock(r.rows[0]);
     const mine = current.email === who.email;
@@ -94,8 +113,20 @@ export async function acquireLock(
   }
 }
 
-export async function releaseLock(pool: Pool, meetingId: number, email: string): Promise<void> {
+// Let go of your own lock — unless another of your tabs still has the meeting
+// open (seen within the heartbeat lapse).
+export async function releaseLock(pool: Pool, meetingId: number, email: string, tab?: string): Promise<void> {
+  if (tab) {
+    await pool.query("DELETE FROM meeting_lock_tabs WHERE meeting_id = $1 AND tab = $2", [meetingId, tab]);
+    const others = await pool.query(
+      `SELECT 1 FROM meeting_lock_tabs WHERE meeting_id = $1 AND email = $2
+          AND seen_at > now() - make_interval(secs => $3) LIMIT 1`,
+      [meetingId, email, HEARTBEAT_LAPSE_MS / 1000]
+    );
+    if (others.rows[0]) return;
+  }
   await pool.query("DELETE FROM meeting_locks WHERE meeting_id = $1 AND email = $2", [meetingId, email]);
+  await pool.query("DELETE FROM meeting_lock_tabs WHERE meeting_id = $1 AND email = $2", [meetingId, email]);
 }
 
 export async function getLock(pool: Pool, meetingId: number, now = new Date()): Promise<{ lock: Lock; live: boolean } | null> {

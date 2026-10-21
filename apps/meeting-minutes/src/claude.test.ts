@@ -199,3 +199,16 @@ test("parseSummary reads an en-dash action-item time", () => {
   const r = parseSummary(JSON.stringify({ summary: "s", actionItems: [{ task: "T", owner: "O", at: "1:10:03–1:10:40" }] }));
   assert.deepEqual(r.actionItems, [{ task: "T", owner: "O", start: 4203, end: 4240 }]);
 });
+
+test("minutes over the length limit get one shortening pass", async () => {
+  const { condenseIfLong } = await import("./claude");
+  const long = "word ".repeat(3200);
+  const asked: string[] = [];
+  const shorter = await condenseIfLong(long, async (system: string, content: string) => { asked.push(system + content); return "## Summary\nShort."; });
+  assert.equal(shorter, "## Summary\nShort.");
+  assert.match(asked[0], /2,500 words/);
+  const ok = await condenseIfLong("word ".repeat(1000), async () => { throw new Error("not called"); });
+  assert.equal(ok, "word ".repeat(1000));
+  const failed = await condenseIfLong(long, async () => { throw new Error("down"); });
+  assert.equal(failed, long, "if shortening fails, the long version stands");
+});

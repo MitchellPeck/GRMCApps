@@ -15,6 +15,7 @@ async function setup() {
   const Fastify = (await import("fastify")).default;
   const { meetingsRoutes } = await import("./routes/meetings");
   app = Fastify();
+  await app.register((await import("@fastify/multipart")).default, { limits: { fileSize: 50 * 1024 * 1024 } });
   await app.register(meetingsRoutes);
 }
 after(async () => { if (app) await app.close(); if (pool) await pool.end(); });
@@ -135,4 +136,39 @@ test("chat routes: empty messages and a missing API key are refused clearly; his
   const reset = await app.inject({ method: "POST", url: `/api/meetings/${id}/chat/reset`, headers: A });
   assert.equal(reset.statusCode, 200);
   assert.deepEqual(JSON.parse((await app.inject({ url: `/api/meetings/${id}/chat`, headers: A })).body).messages, []);
+});
+
+test("a real recording chunk from someone without the lock is accepted and saved", { skip: !url }, async () => {
+  await setup();
+  const { id, rec } = await meetingWithItem();
+  const { mkdtempSync, readFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { tmpdir } = await import("node:os");
+  const path = join(mkdtempSync(join(tmpdir(), "chunk-")), "r.webm");
+  await pool.query("UPDATE meeting_recordings SET storage_path = $2 WHERE id = $1", [rec, path]);
+  await app.inject({ method: "POST", url: `/api/meetings/${id}/lock`, headers: A });
+  const boundary = "----chunk" + Date.now();
+  const body = Buffer.concat([
+    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="chunk"; filename="c.webm"\r\nContent-Type: audio/webm\r\n\r\n`),
+    Buffer.from("AUDIODATA"), Buffer.from(`\r\n--${boundary}--\r\n`),
+  ]);
+  const r = await app.inject({ method: "POST", url: `/api/meeting-recordings/${rec}/chunk`, headers: { ...B, "content-type": `multipart/form-data; boundary=${boundary}` }, payload: body });
+  assert.equal(r.statusCode, 200, r.body);
+  assert.equal(readFileSync(path, "utf8"), "AUDIODATA");
+});
+
+test("saving hand edits to the minutes can be undone, one save at a time", { skip: !url }, async () => {
+  await setup();
+  const { id } = await meetingWithItem();
+  await pool.query("UPDATE meetings SET report = '# A', report_generated_at = now(), report_updated_at = now() WHERE id = $1", [id]);
+  const put = async (md: string) => JSON.parse((await app.inject({ method: "PUT", url: `/api/meetings/${id}/report`, headers: A, payload: { markdown: md } })).body);
+  const r1 = await put("# B");
+  assert.ok(r1.changeId);
+  await put("# C");
+  const undo = await app.inject({ method: "POST", url: `/api/meetings/${id}/report/undo`, headers: A });
+  assert.equal(JSON.parse(undo.body).report, "# B");
+  await app.inject({ method: "POST", url: `/api/meetings/${id}/report/undo`, headers: A });
+  assert.equal((await pool.query("SELECT report FROM meetings WHERE id = $1", [id])).rows[0].report, "# A");
+  const none = await app.inject({ method: "POST", url: `/api/meetings/${id}/report/undo`, headers: A });
+  assert.equal(none.statusCode, 409);
 });

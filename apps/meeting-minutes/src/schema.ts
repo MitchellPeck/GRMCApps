@@ -163,6 +163,17 @@ CREATE TABLE IF NOT EXISTS meeting_changes (
   created_at  timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS meeting_changes_meeting_idx ON meeting_changes (meeting_id, id);
+-- What a change was asked to do (for a fix: from, to, itemId), so it can be
+-- applied again to a fresh transcription.
+ALTER TABLE meeting_changes ADD COLUMN IF NOT EXISTS params jsonb NOT NULL DEFAULT '{}';
+-- The tabs a lock holder has the meeting open in (see locks.ts).
+CREATE TABLE IF NOT EXISTS meeting_lock_tabs (
+  meeting_id  bigint NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+  tab         text NOT NULL,
+  email       text NOT NULL,
+  seen_at     timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (meeting_id, tab)
+);
 
 -- Who is editing a meeting right now (see locks.ts). One row per meeting.
 CREATE TABLE IF NOT EXISTS meeting_locks (

@@ -10,7 +10,8 @@ import { stripRangeMarkers } from "../ranges";
 import { patchItem, saveMeetingSpeakers } from "../actions";
 import { lockGuard } from "../lockGuard";
 import { anthropicChatModel, chatDisplay, chatWorking, startChatTurn } from "../chat";
-import { archiveChat } from "../chatStore";
+import { archiveChat, markCardDone } from "../chatStore";
+import { recordSnapshotChange } from "../changes";
 import { getSetting } from "../settings";
 import { acquireLock, getLock, releaseLock } from "../locks";
 import { fixWords, listChanges, renameTopicSpeakers, undoChange } from "../fixes";
@@ -128,15 +129,18 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
     if (!Number.isFinite(id) || !(await getMeeting(pool, id))) { reply.code(404); return { ok: false, error: "Meeting not found." }; }
     // Typing (not yet saved) or a recording running on the page counts as
     // activity, so the lock doesn't lapse for idleness under the person using it.
-    const b = (req.body ?? {}) as { active?: unknown; recording?: unknown };
-    const r = await acquireLock(pool, id, getIdentity(req), { edit: b.active === true || b.recording === true });
+    const b = (req.body ?? {}) as { active?: unknown; recording?: unknown; tab?: unknown };
+    const r = await acquireLock(pool, id, getIdentity(req), {
+      edit: b.active === true || b.recording === true, tab: typeof b.tab === "string" ? b.tab.slice(0, 64) : undefined,
+    });
     return { ok: true, held: r.held, holder: { email: r.lock.email, name: r.lock.name } };
   });
 
   app.delete("/api/meetings/:id/lock", async (req, reply) => {
     const id = Number((req.params as { id: string }).id);
     if (!Number.isFinite(id)) { reply.code(404); return { ok: false, error: "Meeting not found." }; }
-    await releaseLock(pool, id, getIdentity(req).email);
+    const tab = (req.query as { tab?: string }).tab;
+    await releaseLock(pool, id, getIdentity(req).email, typeof tab === "string" ? tab.slice(0, 64) : undefined);
     return { ok: true };
   });
 
@@ -649,9 +653,38 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
       reply.code(409); return { ok: false, error: "The report is being written. Try again when it finishes, or cancel it." };
     }
     if (!meeting.report_generated_at) { reply.code(409); return { ok: false, error: "Generate the report first." }; }
-    await saveReportEdit(pool, id, b.markdown);
+    const before = meeting.report;
+    let changeId: number | null = null;
+    if (await saveReportEdit(pool, id, b.markdown)) {
+      // Each save is a step "Undo last edit" can take back.
+      changeId = await recordSnapshotChange(pool, id, "edit", "Minutes edited by hand",
+        { meeting: { report: before } }, { meeting: { report: b.markdown } }, getIdentity(req).email);
+    }
     const after = await getMeeting(pool, id);
-    return { ok: true, report: await reportState(pool, after!) };
+    return { ok: true, changeId, report: await reportState(pool, after!) };
+  });
+
+  // Take back the most recent hand edit of the minutes still in force.
+  app.post("/api/meetings/:id/report/undo", async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    if (!Number.isFinite(id) || !(await getMeeting(pool, id))) { reply.code(404); return { ok: false, error: "Meeting not found." }; }
+    const last = (await pool.query(
+      "SELECT id FROM meeting_changes WHERE meeting_id = $1 AND kind = 'edit' AND undone_at IS NULL ORDER BY id DESC LIMIT 1", [id]
+    )).rows[0];
+    if (!last) { reply.code(409); return { ok: false, error: "Nothing to undo." }; }
+    const r = await undoChange(pool, id, Number(last.id));
+    if (!r.ok) { reply.code(r.status); return r; }
+    const after = (await getMeeting(pool, id))!;
+    return { ok: true, report: after.report, state: await reportState(pool, after) };
+  });
+
+  // A Confirm card in the chat that the person pressed.
+  app.post("/api/meetings/:id/chat/cards/:cardId/done", async (req, reply) => {
+    const p = req.params as { id: string; cardId: string };
+    const id = Number(p.id);
+    if (!Number.isFinite(id) || !/^[0-9a-f]{12}$/.test(p.cardId)) { reply.code(404); return { ok: false, error: "Card not found." }; }
+    if (!(await markCardDone(pool, id, p.cardId))) { reply.code(404); return { ok: false, error: "Card not found." }; }
+    return { ok: true };
   });
 
   // "Open in Google Docs": opened in its own tab. Sends the user through

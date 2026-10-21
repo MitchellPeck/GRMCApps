@@ -103,3 +103,16 @@ test("a lock released mid-acquire is simply taken", { skip: !url }, async () => 
     assert.ok(r.lock, "no crash");
   } finally { await pool.end(); }
 });
+
+test("with the meeting open in two tabs, closing one keeps the lock", { skip: !url }, async () => {
+  const pool = new Pool({ connectionString: url });
+  try {
+    const id = await fresh(pool);
+    await acquireLock(pool, id, A, { tab: "tab1" });
+    await acquireLock(pool, id, A, { tab: "tab2" });
+    await releaseLock(pool, id, "a@x", "tab1");
+    assert.equal((await acquireLock(pool, id, B)).held, false, "tab 2 still has it");
+    await releaseLock(pool, id, "a@x", "tab2");
+    assert.equal((await acquireLock(pool, id, B)).held, true, "last tab closed: free");
+  } finally { await pool.end(); }
+});

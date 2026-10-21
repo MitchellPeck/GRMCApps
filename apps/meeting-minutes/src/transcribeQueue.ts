@@ -1,5 +1,6 @@
 import { Pool } from "pg";
 import { pool } from "./db";
+import { applyActiveFixes } from "./fixes";
 import { DiarizedSegment, TranscriptionResult, transcribeAudio } from "./whisper";
 import { SpeakerMap, distinctSpeakers, renderTranscript } from "./transcript";
 import { absorbMicroTurns, assignPresenterToDominant } from "./speakers";
@@ -258,8 +259,10 @@ export async function saveTranscriptionResult(
   dbPool: Pool = pool
 ): Promise<void> {
   const withPresenter = await withPresenterAssignment(itemId, segments, map, dbPool);
+  const item = await getAgendaItem(dbPool, itemId);
+  const fixed = item ? await applyActiveFixes(dbPool, item.meeting_id, itemId, segments) : segments;
   await updateAgendaItem(dbPool, itemId, {
-    transcriptSegments: segments,
+    transcriptSegments: fixed,
     transcriptRecordingId: recordingId,
     speakerMap: withPresenter,
     summary: "",
@@ -377,8 +380,10 @@ async function saveMeetingItem(
   order: string[],
   recordingId: number
 ): Promise<void> {
+  const item = await getAgendaItem(pool, itemId);
+  const fixed = item ? await applyActiveFixes(pool, item.meeting_id, itemId, segments) : segments;
   await updateAgendaItem(pool, itemId, {
-    transcriptSegments: segments,
+    transcriptSegments: fixed,
     transcriptRecordingId: recordingId,
     speakerMap: map,
     summary: "",

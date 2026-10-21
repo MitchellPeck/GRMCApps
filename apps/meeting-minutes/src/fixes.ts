@@ -10,6 +10,26 @@ import { DiarizedSegment } from "./whisper";
 
 export { listChanges, undoChange } from "./changes";
 
+// The fixes still in force (not undone) for a topic, applied to freshly
+// transcribed segments, so transcribing again doesn't bring a misheard name
+// back. Whole-meeting fixes and the topic's own, in the order they were made.
+export async function applyActiveFixes(
+  pool: Pool, meetingId: number, itemId: number, segments: DiarizedSegment[]
+): Promise<DiarizedSegment[]> {
+  const r = await pool.query(
+    `SELECT params FROM meeting_changes
+      WHERE meeting_id = $1 AND kind = 'fix' AND undone_at IS NULL ORDER BY id`,
+    [meetingId]
+  );
+  let segs = segments;
+  for (const { params } of r.rows) {
+    if (!params?.from || !params?.to) continue;
+    if (params.itemId !== null && params.itemId !== undefined && Number(params.itemId) !== itemId) continue;
+    segs = replaceInSegments(segs, params.from, params.to).segments;
+  }
+  return segs;
+}
+
 // "Fix a name or word": a misheard name corrected in one step across the
 // meeting — transcripts (at the segment level, so a re-render keeps it),
 // summaries, action items, the report, speaker names and guests. It never
@@ -39,6 +59,7 @@ function editTopicInReport<T extends { title: string }>(
   index: number,
   edit: (text: string) => { text: string; count: number }
 ): { text: string; count: number } {
+  const eol = report.includes("\r\n") ? "\r\n" : "\n";
   const lines = report.split(/\r?\n/);
   let count = 0;
   const bounds = index >= 0 ? topicSectionLines(report, items, index) : null;
@@ -51,7 +72,7 @@ function editTopicInReport<T extends { title: string }>(
     count += r.count;
     return r.text;
   });
-  return { text: out.join("\n"), count };
+  return { text: out.join(eol), count };
 }
 
 // The report with `edit` applied to the minutes proper, leaving the header,
@@ -182,7 +203,8 @@ export async function fixWords(
     }
     await writeFields(c, meetingId, after);
     const changeId = await recordChange(c, meetingId, "fix",
-      `“${from}” → “${to}”: ${total} place${total === 1 ? "" : "s"}`, before, after, opts.by ?? "");
+      `“${from}” → “${to}”: ${total} place${total === 1 ? "" : "s"}`, before, after, opts.by ?? "",
+      { from, to, itemId: opts.itemId ?? null });
     await c.query("COMMIT");
     return { counts, total, changeId, libraryMatches };
   } catch (e) {
