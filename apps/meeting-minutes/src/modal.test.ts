@@ -729,7 +729,7 @@ test("leaving a meeting lets go of its lock", { skip }, async () => {
   const { w, calls } = boot();
   w.eval("state.lock = { held: true, holder: { email: '', name: '' } }; lockMeetingId = 42; showList()");
   await flush();
-  assert.ok(calls.some((c: any) => c.method === "DELETE" && c.path === "/api/meetings/42/lock"));
+  assert.ok(calls.some((c: any) => c.method === "DELETE" && c.path.startsWith("/api/meetings/42/lock?tab=")));
 });
 
 // ── Edit lock: losing it never loses work ───────────────────────────────────
@@ -766,7 +766,7 @@ test("the heartbeat says when you've been typing or are recording", { skip }, as
   doc.getElementById("nt-1").dispatchEvent(new w.Event("input", { bubbles: true }));
   w.eval("lockHeartbeat()");
   await flush();
-  const beats = calls.filter((c) => c.path.endsWith("/lock")).map((c) => c.body);
+  const beats = calls.filter((c) => c.path.endsWith("/lock")).map((c) => ({ active: c.body.active, recording: c.body.recording }));
   assert.deepEqual(beats, [{ active: false, recording: false }, { active: true, recording: false }]);
 });
 
@@ -1444,4 +1444,69 @@ test("a topic's ▶ labels the player with the topic, not its badges", { skip },
     state.section = "agenda"; renderDetail();`);
   doc.querySelector("#item-1 .ihead .sec-play").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
   assert.equal(doc.getElementById("mp-label").textContent, "1. Budget");
+});
+
+// ── Open items ──────────────────────────────────────────────────────────────
+
+test("pressing Confirm marks the card done on the server too", { skip }, async () => {
+  const { w, doc, calls } = bootChat((p) => p.endsWith("/chat") ? { ok: true, working: false, messages: [
+    { role: "assistant", text: "Remove it?", cards: [{ kind: "confirm", id: "abc123abc123", action: "remove_topic", itemId: 1, label: "Remove “Budget”" }] }] } : { ok: true });
+  w.eval("loadChat()");
+  await flush();
+  doc.querySelector("#chat-log .chat-confirm").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  await flush();
+  assert.ok(calls.some((c) => c.method === "POST" && c.path === "/api/meetings/42/chat/cards/abc123abc123/done"));
+});
+
+test("the side menu isn't rebuilt when nothing in it changed", { skip }, () => {
+  const { w, doc } = boot();
+  w.eval("state.section = 'agenda'; renderDetail()");
+  const link = doc.querySelector('#mtg-nav [data-sec="people"]');
+  w.eval("renderMeetingNav(); refreshBadge(state.items[0]);");
+  assert.equal(doc.querySelector('#mtg-nav [data-sec="people"]'), link, "same element: focus and an open picker survive");
+});
+
+test("the lock heartbeat names this tab, and leaving releases only this tab", { skip }, async () => {
+  const { w } = boot();
+  const calls = stubFetch(w, (p) => p.endsWith("/lock") ? { ok: true, held: true, holder: {} } : { ok: true });
+  w.eval("state.lock = { held: true, holder: {} }; lockMeetingId = 42; lockHeartbeat();");
+  await flush();
+  const beat = calls.find((c) => c.path === "/api/meetings/42/lock" && c.method === "POST")!;
+  assert.match(beat.body.tab, /^[0-9a-z]{8,}$/);
+  w.eval("showList()");
+  await flush();
+  assert.ok(calls.some((c) => c.method === "DELETE" && c.path === `/api/meetings/42/lock?tab=${beat.body.tab}`));
+});
+
+test("a transcript that arrives while its box is open turns the box read-only", { skip }, () => {
+  const { w, doc } = boot();
+  w.eval("renderDetail()");
+  assert.equal(doc.getElementById("tx-1").readOnly, false);
+  w.eval(`syncItems([Object.assign({}, state.items[0], { transcript: "Speaker 1: hi", transcribe_status: "done",
+    transcript_segments: [{ text: "hi", speaker: "S0", start: 0, end: 1 }] })]);`);
+  assert.equal(doc.getElementById("tx-1").readOnly, true);
+});
+
+test("a topic edit the server refuses says why", { skip }, async () => {
+  const { w, doc } = boot();
+  w.eval("renderDetail()");
+  stubFetch(w, () => ({ ok: false, status: 409, error: "This transcript comes from the recording; fix words with “Fix a name or word”." }));
+  const nt = doc.getElementById("nt-1");
+  nt.value = "notes"; nt.dispatchEvent(new w.Event("blur"));
+  await flush();
+  assert.match(doc.getElementById("imsg-1").textContent, /comes from the recording/);
+});
+
+test("Undo last edit takes back the most recent save of the minutes", { skip }, async () => {
+  const { w, doc, calls } = bootMinutes((p, o) => p.endsWith("/report/undo")
+    ? { ok: true, report: "# Board\n\n## Summary\nUndone text.", state: { status: "idle", changes: [], pages: 1 } }
+    : o.method === "PUT" ? { ok: true, changeId: 5, report: { status: "idle", changes: [] } } : { ok: true });
+  editLine(w, doc, 2, "Edited.");
+  await new Promise((r) => setTimeout(r, 950));
+  const btn = doc.getElementById("btn-report-undo");
+  assert.equal(btn.disabled, false);
+  btn.dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  await flush();
+  assert.ok(calls.some((c) => c.method === "POST" && c.path === "/api/meetings/42/report/undo"));
+  assert.match(doc.getElementById("report-editor").textContent, /Undone text\./);
 });

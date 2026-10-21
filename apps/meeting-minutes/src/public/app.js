@@ -220,6 +220,8 @@ function renderMarkdown(md){
 // the meeting read-only; their own heartbeat takes the lock once it lapses.
 var LOCK_HEARTBEAT_MS=30000, lockTimer=null;
 var lockMeetingId=null;   // the meeting whose lock this page holds or wants
+// This tab, so two tabs of the same person don't release each other's lock.
+var TAB_ID=Math.random().toString(36).slice(2, 12)+Date.now().toString(36);
 var lockActivity=false;   // typed something since the last heartbeat
 document.addEventListener('input', function(e){
   if(e.target && e.target.closest && e.target.closest('#detail-body')) lockActivity=true;
@@ -263,7 +265,7 @@ function restoreDrafts(d){
 function lockHeartbeat(){
   var mid=lockMeetingId!=null ? lockMeetingId : (state.meeting && state.meeting.id);
   if(mid==null) return;
-  var body={ active: lockActivity, recording: pageRecording() };
+  var body={ active: lockActivity, recording: pageRecording(), tab: TAB_ID };
   lockActivity=false;
   api('/api/meetings/'+mid+'/lock', { method:'POST', body: body }).then(function(res){
     if(!res.ok || !state.meeting || state.meeting.id!==mid) return;
@@ -282,7 +284,7 @@ function startLockHeartbeat(){
 function stopLockHeartbeat(){ if(lockTimer){ clearInterval(lockTimer); lockTimer=null; } }
 function releaseMeetingLock(){
   if(lockMeetingId==null || !state.lock || !state.lock.held) return;
-  try { fetch('/api/meetings/'+lockMeetingId+'/lock', { method:'DELETE', keepalive:true }); } catch(e){}
+  try { fetch('/api/meetings/'+lockMeetingId+'/lock?tab='+TAB_ID, { method:'DELETE', keepalive:true }); } catch(e){}
   state.lock=null; lockMeetingId=null;
 }
 window.addEventListener('pagehide', function(){
@@ -653,7 +655,8 @@ function renderDetail(){
     // A plain link in a new tab: the server sends it through Google consent
     // if needed, then on to the new Doc, with no popup blocker involved.
     +'<a class="btn btn-secondary" id="btn-report-gdoc" href="/api/meetings/'+m.id+'/google-doc" target="_blank" rel="noopener">Open in Google Docs</a> '
-    +'<button class="btn btn-secondary" id="btn-report-print">Print PDF</button>'
+    +'<button class="btn btn-secondary" id="btn-report-print">Print PDF</button> '
+    +'<button class="btn btn-secondary" id="btn-report-undo" title="Take back the last saved change to the minutes">Undo last edit</button>'
     +' <span class="hint" id="report-pages"></span>'
     +' <span class="hint report-save" id="report-save"></span>'
     +'</span></div>'
@@ -699,6 +702,7 @@ function renderDetail(){
   syncFixApply();
   document.getElementById('btn-report-cancel').addEventListener('click', cancelReport);
   document.getElementById('btn-report-print').addEventListener('click', function(){ window.print(); });
+  document.getElementById('btn-report-undo').addEventListener('click', undoLastEdit);
   document.getElementById('btn-add-guest').addEventListener('click', addGuest);
   document.getElementById('g-name').addEventListener('keydown', function(e){ if(e.key==='Enter') addGuest(); });
   document.getElementById('g-title').addEventListener('keydown', function(e){ if(e.key==='Enter') addGuest(); });
@@ -840,6 +844,7 @@ function saveReportNow(keepalive){
       if(!state.meeting || state.meeting.id!==mid) return false;
       if(!res.ok){ reportSaveStatus(res.error||'Could not save.', 'err'); return false; }
       if(state.meeting.report===md) reportDirty=false;
+      if(res.changeId) state.reportUndoable=true;
       if(res.report){ state.report=res.report; renderReportState(); }
       reportSaveStatus(reportDirty ? 'Saving…' : 'Saved');
       return !reportDirty;
@@ -854,6 +859,22 @@ function saveReportNow(keepalive){
   return chain;
 }
 function flushReportSave(){ return saveReportNow(); }
+// "Undo last edit": the most recent saved hand edit of the minutes, one step at
+// a time.
+function undoLastEdit(){
+  if(!state.meeting || readOnly()) return;
+  var mid=state.meeting.id;
+  flushReportSave().then(function(){
+    return api('/api/meetings/'+mid+'/report/undo', { method:'POST' });
+  }).then(function(res){
+    if(!state.meeting || state.meeting.id!==mid) return;
+    if(!res.ok){ reportSaveStatus(res.error||'Could not undo.', 'err'); if(res.error==='Nothing to undo.') state.reportUndoable=false; renderReportState(); return; }
+    state.meeting.report=res.report; reportDirty=false;
+    if(res.state) state.report=res.state;
+    reportSaveStatus('Undone');
+    renderReportEditor(); renderReportState();
+  });
+}
 // Server data for the open meeting, keeping minutes that aren't saved yet.
 function adoptMeeting(m){
   if(reportDirty && state.meeting && m && state.meeting.id===m.id) m.report=state.meeting.report;
@@ -904,7 +925,7 @@ function chatCardHtml(c){
   if(c.kind==='confirm'){
     return '<div class="chat-card confirm'+(c.done?' undone':'')+'"><span>'+esc(c.label)+'</span>'
       +(c.done ? '<span class="hint">Done</span>'
-        : '<button type="button" class="btn-sm chat-confirm" data-action="'+esc(c.action)+'"'
+        : '<button type="button" class="btn-sm chat-confirm" data-action="'+esc(c.action)+'"'+(c.id?' data-card="'+esc(c.id)+'"':'')
           +(c.itemId!=null?' data-item="'+esc(c.itemId)+'"':'')+(c.recordingId!=null?' data-rec="'+esc(c.recordingId)+'"':'')+'>Confirm</button>')
       +'</div>';
   }
@@ -1004,6 +1025,8 @@ document.addEventListener('click', function(e){
     : Promise.resolve({ ok:false, error:'Unknown action.' });
   go.then(function(res){
     if(!res.ok){ btn.disabled=false; msg('report-msg','err',res.error||'That didn’t work.'); return; }
+    var cid=btn.getAttribute('data-card');
+    if(cid) api('/api/meetings/'+mid+'/chat/cards/'+cid+'/done', { method:'POST' });
     (state.chat||[]).forEach(function(m){ (m.cards||[]).forEach(function(c){
       var same=function(a, b){ return (a==null?'':String(a))===(b==null?'':String(b)); };
       if(c.kind==='confirm' && c.action===action && same(c.itemId, item) && same(c.recordingId, rec)) c.done=true;
@@ -1062,21 +1085,26 @@ function renderMeetingNav(){
     return '<a href="#" class="nav-topic'+(state.section==='agenda' && state.topicFocus===it.id?' active':'')+'" data-topic="'+it.id+'">'
       +(i+1)+'. '+esc(it.title)+(hint?' <span class="nav-hint">'+esc(hint)+'</span>':'')+'</a>';
   }).join('');
-  nav.innerHTML=SECTIONS.map(function(s){
+  var navHtml=SECTIONS.map(function(s){
     var hint=hints[s[0]];
     var active=state.section===s[0] && !(s[0]==='agenda' && state.topicFocus);
     return '<a href="#" data-sec="'+s[0]+'"'+(active?' class="active"':'')+'>'+s[1]
       +(hint?' <span class="nav-hint">'+esc(hint)+'</span>':'')+'</a>'
       +(s[0]==='agenda' && topics ? '<div class="nav-topics">'+topics+'</div>' : '');
   }).join('');
-  sel.innerHTML=SECTIONS.map(function(s){
+  // Only when something in it changed: rebuilding on every status check would
+  // drop keyboard focus and close an open phone picker.
+  if(nav._html!==navHtml){ nav.innerHTML=navHtml; nav._html=navHtml; }
+  var selHtml=SECTIONS.map(function(s){
     var opt='<option value="'+s[0]+'">'+s[1]+'</option>';
     if(s[0]!=='agenda') return opt;
     return opt+(state.items||[]).map(function(it, i){
       return '<option value="topic:'+it.id+'">&nbsp;&nbsp;'+(i+1)+'. '+esc(it.title)+'</option>';
     }).join('');
   }).join('');
-  sel.value = state.section==='agenda' && state.topicFocus ? 'topic:'+state.topicFocus : (state.section||'');
+  if(sel._html!==selHtml){ sel.innerHTML=selHtml; sel._html=selHtml; }
+  var want = state.section==='agenda' && state.topicFocus ? 'topic:'+state.topicFocus : (state.section||'');
+  if(sel.value!==want) sel.value=want;
 }
 function showSection(sec, topicId){
   state.section=sec;
@@ -1434,6 +1462,8 @@ function syncItems(fresh){
     if(!nt || document.activeElement!==nt) it.notes=f.notes;
     it.summary=f.summary; it.action_items=f.action_items;
     it.summarize_status=f.summarize_status; it.summarize_error=f.summarize_error;
+    // Once it comes from a recording, it is corrected with word fixes only.
+    if(tx && recordedTranscript(it) && !tx.readOnly){ tx.readOnly=true; if(document.activeElement===tx) tx.blur(); }
     refreshItemView(it);
     renderPresenterChips(it);
   });
@@ -2004,7 +2034,12 @@ function renderPresenterChips(it){
 }
 
 function saveItemField(it, fields){
-  return api('/api/items/'+it.id, { method:'PATCH', body:fields });
+  return api('/api/items/'+it.id, { method:'PATCH', body:fields }).then(function(res){
+    // A refusal (other than "someone else is editing", which has its banner)
+    // is shown on the topic rather than lost.
+    if(res && !res.ok && !res.locked) msg('imsg-'+it.id, 'err', res.error||'Could not save.');
+    return res;
+  });
 }
 
 function removeItem(it){
@@ -2801,6 +2836,8 @@ function renderReportState(){
     : r.status==='pending' ? 'The report is being written; editing opens again when it’s done.'
     : 'Click any line to change it. Changes save as you go.';
   var ed=document.getElementById('report-editor'); if(ed) ed.classList.toggle('editable', reportEditable());
+  var ub=document.getElementById('btn-report-undo');
+  if(ub) ub.disabled = !(state.reportUndoable || (r && r.edited)) || r.status==='pending';
   renderMeetingNav();
   applyReadOnly();
 }
