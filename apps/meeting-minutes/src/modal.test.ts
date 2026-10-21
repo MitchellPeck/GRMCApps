@@ -680,3 +680,19 @@ test("a fix doesn't stop a recording in progress", { skip }, async () => {
   await flush();
   assert.equal(stopped, false);
 });
+
+test("after the report, renaming a topic's voice doesn't ask for a new summary", { skip }, async () => {
+  const { w, doc, calls } = boot();
+  w.eval(`state.meeting.report = "# M"; state.meeting.report_generated_at = "2026-04-14T10:00:00Z";
+    state.items[0].transcript_segments = [{ text: "hi", speaker: "S0", start: 0, end: 1 }];
+    state.items[0].transcript = "Speaker 1: hi"; state.items[0].summary = "Speaker 1 said hi.";
+    state.items[0].speaker_stats = [{ speaker: "S0", seconds: 1, samples: [] }];
+    state.attendeeIds = []; state.guests = [{ id: 5, name: "Linda", title: "" }]; renderDetail();`);
+  const sel = doc.querySelector('[data-spk="S0"]');
+  assert.ok(sel, "speaker dropdown rendered");
+  sel.value = "Linda";
+  sel.dispatchEvent(new w.Event("change"));
+  await new Promise((r) => setTimeout(r, 1700));
+  assert.equal(w.eval("state.items[0].summary"), "Speaker 1 said hi.");
+  assert.ok(!calls.some((c: any) => c.path.endsWith("/summarize")), "no new summary requested");
+});

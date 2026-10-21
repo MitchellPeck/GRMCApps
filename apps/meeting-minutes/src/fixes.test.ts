@@ -116,6 +116,7 @@ test("a speaker name is one change, not one per topic, and relabels the transcri
     const map = JSON.stringify({ S0: "Tom Smyth" });
     await pool.query("UPDATE meetings SET speaker_map = $2 WHERE id = $1", [mid, map]);
     await pool.query("UPDATE agenda_items SET speaker_map = $2 WHERE id = ANY($1)", [[a, b], map]);
+    await pool.query("UPDATE agenda_items SET transcript = 'Tom Smyth: John said hello' WHERE id = $1", [a]);
     const r = await fixWords(pool, mid, "Smyth", "Smith");
     assert.equal(r.counts.speakers, 1);
     assert.equal((await getAgendaItem(pool, a))!.transcript, "Tom Smith: John said hello");
@@ -173,5 +174,88 @@ test("a topic's own speaker rename after the report changes only that topic", { 
     assert.equal(it.summary, "Tom said the roof leaks.");
     assert.deepEqual(it.speaker_map, { R0: "Tom" });
     assert.equal((await getMeeting(pool, mid))!.report, "### 1. Budget\nSpeaker 1 spoke.\n### 2. Roof\nTom said the roof leaks.");
+  } finally { await pool.end(); }
+});
+
+// ── Review fixes ─────────────────────────────────────────────────────────────
+
+test("a summary thrown away because a fix changed the transcript is not left processing", { skip: !url }, async () => {
+  const pool = new Pool({ connectionString: url });
+  try {
+    const { abandonStaleSummary } = await import("./minutesWork");
+    const { a } = await setup(pool);
+    await pool.query("UPDATE agenda_items SET summary = '', summarize_status = 'processing' WHERE id = $1", [a]);
+    const requeued: number[] = [];
+    await abandonStaleSummary(pool, a, async (id: number) => { requeued.push(id); }, async () => {});
+    const row = (await pool.query("SELECT summarize_status FROM agenda_items WHERE id = $1", [a])).rows[0];
+    assert.notEqual(row.summarize_status, "processing");
+    assert.deepEqual(requeued, [a], "still has no summary, so it is asked for again");
+  } finally { await pool.end(); }
+});
+
+test("a fix keeps earlier hand edits to a recorded transcript", { skip: !url }, async () => {
+  const pool = new Pool({ connectionString: url });
+  try {
+    const { mid, a } = await setup(pool);
+    await pool.query("UPDATE agenda_items SET transcript = 'Linda: John said hello (corrected by hand)' WHERE id = $1", [a]);
+    await fixWords(pool, mid, "John", "Jon");
+    assert.equal((await getAgendaItem(pool, a))!.transcript, "Linda: Jon said hello (corrected by hand)");
+  } finally { await pool.end(); }
+});
+
+test("a topic-only fix also corrects that topic's lines in the action item list", { skip: !url }, async () => {
+  const pool = new Pool({ connectionString: url });
+  try {
+    const { mid, b } = await setup(pool);
+    await saveReport(pool, mid, "### 1. Budget\nAsk John.\n### 2. Roof\nAsk John.\n## Action Items\n- [ ] Call John — **John** (Budget)\n- [ ] Fix gutter — **John** (Roof) <!--t:m1:1.0-2.0-->");
+    const r = await fixWords(pool, mid, "John", "Jon", { itemId: b });
+    assert.equal(r.counts.report, 2);
+    assert.equal((await getMeeting(pool, mid))!.report,
+      "### 1. Budget\nAsk John.\n### 2. Roof\nAsk Jon.\n## Action Items\n- [ ] Call John — **John** (Budget)\n- [ ] Fix gutter — **Jon** (Roof) <!--t:m1:1.0-2.0-->");
+  } finally { await pool.end(); }
+});
+
+test("a topic-only fix finds the topic by title after the agenda is reordered", { skip: !url }, async () => {
+  const pool = new Pool({ connectionString: url });
+  try {
+    const { mid, a, b } = await setup(pool);
+    await pool.query("UPDATE agenda_items SET position = CASE WHEN id = $1 THEN 1 ELSE 0 END WHERE id IN ($1, $2)", [a, b]);
+    await fixWords(pool, mid, "John", "Jon", { itemId: b }); // Roof, now first on the agenda
+    assert.match((await getMeeting(pool, mid))!.report, /### 1\. Budget\nJohn reported\.\n### 2\. Roof\nAsk Jon\./);
+  } finally { await pool.end(); }
+});
+
+test("a topic-only fix leaves whole-meeting speaker names to the whole meeting", { skip: !url }, async () => {
+  const pool = new Pool({ connectionString: url });
+  try {
+    const { mid, a } = await setup(pool);
+    const map = JSON.stringify({ S0: "Tom Smyth" });
+    await pool.query("UPDATE meetings SET speaker_map = $2 WHERE id = $1", [mid, map]);
+    await pool.query("UPDATE agenda_items SET speaker_map = $2 WHERE id = $1", [a, map]);
+    const r = await fixWords(pool, mid, "Smyth", "Smith", { itemId: a });
+    assert.equal(r.counts.speakers, 0);
+    assert.deepEqual((await getAgendaItem(pool, a))!.speaker_map, { S0: "Tom Smyth" });
+  } finally { await pool.end(); }
+});
+
+test("a rename after the report leaves attendance and guests alone", { skip: !url }, async () => {
+  const pool = new Pool({ connectionString: url });
+  try {
+    const { mid, a } = await setup(pool);
+    await pool.query("UPDATE meetings SET speaker_map = $2 WHERE id = $1", [mid, JSON.stringify({ S0: "John Hale" })]);
+    await updateAgendaItem(pool, a, { speakerMap: { S0: "John Hale" }, speakerOrder: ["S0"] });
+    await saveReport(pool, mid, "# Fixes\n\n## Attendance\n**Present:** John Hale, Ann\n### Guests\n- **John Hale**\n\n## Summary\nJohn Hale reported.");
+    await rewriteMeetingSpeakerMap(pool, mid, { S0: "Tom" });
+    assert.equal((await getMeeting(pool, mid))!.report,
+      "# Fixes\n\n## Attendance\n**Present:** John Hale, Ann\n### Guests\n- **John Hale**\n\n## Summary\nTom reported.");
+  } finally { await pool.end(); }
+});
+
+test("saving the same speaker names again records nothing", { skip: !url }, async () => {
+  const pool = new Pool({ connectionString: url });
+  try {
+    const { mid } = await setup(pool);
+    await rewriteMeetingSpeakerMap(pool, mid, {});
+    assert.deepEqual(await listChanges(pool, mid), []);
   } finally { await pool.end(); }
 });

@@ -9,8 +9,14 @@ function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+// A straight and a curly apostrophe are the same letter here: "O'Brien" typed
+// in the box should find "O’Brien" in the transcript.
+function namePattern(from: string): string {
+  return escapeRegex(from).replace(/['’]/g, "['’]");
+}
+
 function wordPattern(from: string): RegExp {
-  return new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegex(from)}(?![\\p{L}\\p{N}])`, "gu");
+  return new RegExp(`(?<![\\p{L}\\p{N}])${namePattern(from)}(?![\\p{L}\\p{N}])`, "gu");
 }
 
 export function replaceWords(text: string, from: string, to: string): { text: string; count: number } {
@@ -78,9 +84,10 @@ export function renamedVoices(
 export function replaceMany(text: string, pairs: Array<{ from: string; to: string }>): { text: string; count: number } {
   const usable = pairs.filter((p) => p.from && p.from !== p.to).sort((a, b) => b.from.length - a.from.length);
   if (!usable.length || !text) return { text, count: 0 };
-  const to = new Map(usable.map((p) => [p.from, p.to]));
-  const re = new RegExp(`(?<![\\p{L}\\p{N}])(?:${usable.map((p) => escapeRegex(p.from)).join("|")})(?![\\p{L}\\p{N}])`, "gu");
+  const key = (x: string) => x.replace(/’/g, "'");
+  const to = new Map(usable.map((p) => [key(p.from), p.to]));
+  const re = new RegExp(`(?<![\\p{L}\\p{N}])(?:${usable.map((p) => namePattern(p.from)).join("|")})(?![\\p{L}\\p{N}])`, "gu");
   let count = 0;
-  const out = text.replace(re, (m) => { count++; return to.get(m) ?? m; });
+  const out = text.replace(re, (m) => { count++; return to.get(key(m)) ?? m; });
   return { text: out, count };
 }

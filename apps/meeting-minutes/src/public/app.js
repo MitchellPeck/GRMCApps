@@ -1023,6 +1023,13 @@ function renderSpeakerMap(it){
       var tx=document.getElementById('tx-'+it.id);
       tx.value=renderTranscriptJS(it.transcript_segments, it.speaker_map);
       it.transcript=tx.value;
+      // Once the minutes exist, the server corrects the summary, action items
+      // and report in place; show what it wrote.
+      if(state.meeting && state.meeting.report_generated_at){
+        var mid=state.meeting.id;
+        saveItemField(it, { speakerMap: it.speaker_map }).then(function(){ refreshMeeting(mid); });
+        return;
+      }
       saveItemField(it, { speakerMap: it.speaker_map });
       invalidateSummary(it);
       // Naming a voice changes who said what, so the summary and its action
@@ -1130,9 +1137,12 @@ function renderMeetingSpeakerPanel(){
             syncItems(det.items);
           }
           renderMeetingSpeakerPanel();
-          // The server cleared every meeting-sourced summary and queued them
-          // again; the poll shows them landing.
-          msg('mspk-msg','ok','Speakers saved — transcripts updated. Summaries are being rewritten.');
+          // Without minutes yet, the server cleared every meeting-sourced
+          // summary and queued them again; the poll shows them landing. With
+          // minutes, it corrected them in place.
+          msg('mspk-msg','ok', state.meeting && state.meeting.report_generated_at
+            ? 'Speakers saved — transcripts, summaries, action items and the minutes updated.'
+            : 'Speakers saved — transcripts updated. Summaries are being rewritten.');
           startPolling();
         });
       })['catch'](function(e){ savingMspk=false; setBtn('btn-save-mspk', false); msg('mspk-msg','err',e.message); });
@@ -1840,7 +1850,8 @@ function fixCountsText(res){
 }
 function libraryFlagHtml(res){
   return (res.libraryMatches||[]).map(function(p){
-    return '<div class="hint">The People list still spells this “'+esc(p.name)+'”. Change it in People if it’s wrong there too.</div>';
+    return '<div class="hint">The People list still spells this “'+esc(p.name)+'”. '
+      +'<a href="#" class="fix-people-link">Change it in People</a> if it’s wrong there too.</div>';
   }).join('');
 }
 function fixResultHtml(f){
@@ -1861,7 +1872,7 @@ function runFix(dryRun){
     if(dryRun){
       out.innerHTML = res.total
         ? '<div class="alert alert-info">Will change '+esc(fixCountsText(res))+'.</div>'+libraryFlagHtml(res)
-        : '<div class="alert alert-info">“'+esc(from)+'” isn’t in this meeting.</div>';
+        : '<div class="alert alert-info">“'+esc(from)+'” isn’t in this meeting. Capital letters count: “John” and “john” are different.</div>';
       return;
     }
     state.lastFix=res;
@@ -1869,6 +1880,12 @@ function runFix(dryRun){
     refreshMeeting(mid);
   });
 }
+document.addEventListener('click', function(e){
+  var link=e.target && e.target.closest ? e.target.closest('.fix-people-link') : null;
+  if(!link) return;
+  e.preventDefault();
+  switchTab('people');
+});
 document.addEventListener('click', function(e){
   var btn=e.target && e.target.closest ? e.target.closest('.fix-undo') : null;
   if(!btn || !state.meeting) return;

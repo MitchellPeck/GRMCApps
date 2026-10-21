@@ -135,19 +135,39 @@ export function attachRanges(body: string, items: ReportItemInput[]): string {
 }
 
 // The lines of the report that write up items[index]: its "###" heading up to
-// the next "#", "##" or "###" heading. Null when the report has no heading
-// for it.
+// the next "#", "##" or "###" heading. Found by title first, since the agenda
+// may have been reordered since the report was written, then by number. Null
+// when the report has no heading for it.
 export function topicSectionLines<T extends { title: string }>(
   markdown: string, items: T[], index: number
 ): { start: number; end: number } | null {
   const lines = markdown.split(/\r?\n/);
-  for (let i = 0; i < lines.length; i++) {
-    if (!/^###\s/.test(lines[i]) || topicFor(lines[i], items) !== items[index]) continue;
+  const bounds = (i: number) => {
     let end = i + 1;
     while (end < lines.length && !/^#{1,3}\s/.test(lines[end])) end++;
     return { start: i, end };
+  };
+  const want = items[index];
+  if (!want) return null;
+  for (let i = 0; i < lines.length; i++) {
+    if (/^###\s/.test(lines[i]) && topicByTitle(lines[i], items) === want) return bounds(i);
+  }
+  for (let i = 0; i < lines.length; i++) {
+    if (/^###\s/.test(lines[i]) && !topicByTitle(lines[i], items) && topicFor(lines[i], items) === want) return bounds(i);
   }
   return null;
+}
+
+// Where the minutes proper start: after the header, attendance and guests,
+// which are laid out from the meeting's own records.
+export function reportBodyStart(lines: string[]): number {
+  let attendance = false;
+  for (let i = 0; i < lines.length; i++) {
+    if (!/^##\s/.test(lines[i])) continue;
+    if (/^##\s+Attendance\b/i.test(lines[i])) { attendance = true; continue; }
+    return i;
+  }
+  return attendance ? lines.length : 0;
 }
 
 const normTitle = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
@@ -158,6 +178,10 @@ const normTitle = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "")
 export function topicFor<T extends { title: string }>(heading: string, items: T[]): T | null {
   const n = /^###\s+(\d+)\.\s/.exec(heading);
   if (n) return items[Number(n[1]) - 1] ?? null;
+  return topicByTitle(heading, items);
+}
+
+function topicByTitle<T extends { title: string }>(heading: string, items: T[]): T | null {
   const text = normTitle(heading.replace(/^###\s+(?:(?:\d+(?:\.\d+)*|[ivxlcdm]+|[a-z])[.)]?\s+)?/i, ""));
   if (!text) return null;
   return items.find((it) => normTitle(it.title) === text)

@@ -41,3 +41,8 @@ test("replaceMany applies several renames at once, so two names can swap", () =>
   assert.deepEqual(replaceMany("Speaker 1 and Speaker 10", [{ from: "Speaker 1", to: "Linda" }]),
     { text: "Linda and Speaker 10", count: 1 });
 });
+
+test("a straight apostrophe matches a curly one and the other way round", () => {
+  assert.deepEqual(replaceWords("Thanks, O’Brien.", "O'Brien", "O'Bryan"), { text: "Thanks, O'Bryan.", count: 1 });
+  assert.equal(replaceWords("O'Brien", "O’Brien", "X").count, 1);
+});

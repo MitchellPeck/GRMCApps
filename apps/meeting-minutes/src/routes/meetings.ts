@@ -585,7 +585,8 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
     }
     const r = await fixWords(pool, id, from, to, { itemId, dryRun: b.dryRun === true, by: getIdentity(req).email });
     if (!r.total && b.dryRun !== true) {
-      reply.code(422); return { ok: false, error: `Nothing to change: “${from}” isn't in this meeting.`, ...r };
+      reply.code(422);
+      return { ok: false, error: `Nothing to change: “${from}” isn't in this meeting. Capital letters count.`, ...r };
     }
     return { ok: true, ...r };
   });

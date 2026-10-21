@@ -110,10 +110,14 @@ async function summarizeNow(itemId: number): Promise<void> {
   // asking for it again forever.
   if (!result.summary.trim()) throw new Error("Claude returned an empty summary. Try again.");
 
-  // The transcript or notes changed while Claude was working. That edit
-  // already queued a new run; saving this one would describe old text.
+  // The transcript or notes changed while Claude was working, so this summary
+  // would describe old text.
   const fresh = await getAgendaItem(pool, itemId);
-  if (!fresh || fresh.transcript !== item.transcript || fresh.notes !== item.notes) return;
+  if (!fresh) return;
+  if (fresh.transcript !== item.transcript || fresh.notes !== item.notes) {
+    await abandonStaleSummary(pool, itemId);
+    return;
+  }
 
   // Someone an action item names is evidently part of the meeting: mark them
   // present and as a presenter of this item.
@@ -147,6 +151,26 @@ async function speakerOrderFor(item: AgendaItem): Promise<string[] | undefined> 
   if (item.transcript_source !== "meeting") return undefined;
   const items = await listAgendaItems(pool, item.meeting_id);
   return chronologicalSpeakerOrder(items.filter((it) => it.transcript_source === "meeting").map((it) => it.transcript_segments));
+}
+
+// Drop a summary run whose transcript changed under it. An ordinary edit queued
+// a new run already, but a name fix or a rename deliberately doesn't, so clear
+// this run's "processing" (leaving a newer "queued" alone), ask again if the
+// topic still has no summary, and let a waiting report move on.
+export async function abandonStaleSummary(
+  dbPool: Pool,
+  itemId: number,
+  requeue: (itemId: number) => Promise<void> = requestSummary,
+  advance: (meetingId: number) => Promise<void> = advanceReport
+): Promise<void> {
+  await dbPool.query(
+    "UPDATE agenda_items SET summarize_status = 'idle' WHERE id = $1 AND summarize_status = 'processing'",
+    [itemId]
+  );
+  const it = await getAgendaItem(dbPool, itemId);
+  if (!it) return;
+  if (!it.summary.trim() && itemHasContent(it) && it.summarize_status !== "queued") await requeue(itemId);
+  await advance(it.meeting_id);
 }
 
 // ── Report ──────────────────────────────────────────────────────────────────
