@@ -1,4 +1,5 @@
-import { spawn } from "node:child_process";
+import { ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import { PassThrough, Readable } from "node:stream";
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -172,13 +173,16 @@ export const MAX_SECTION_SECONDS = 1800;
 
 // A section of a stored recording as mono MP3, for playing a topic or part of
 // the minutes. MediaRecorder WebM has no seek index, so the browser can't jump
-// into the whole file; ffmpeg cuts the stretch instead. Empty when `start` is
-// past the end. Read-only on the file.
-export function extractSection(inputPath: string, start: number, seconds: number): Promise<Buffer> {
+// into the whole file; ffmpeg cuts the stretch instead. Streamed: it resolves
+// as soon as the first audio is ready, so playback starts while ffmpeg is
+// still working. Null when `start` is past the end. kill() stops ffmpeg (the
+// listener went away). Read-only on the file.
+export interface OpenSection { stream: Readable; kill(): void }
+export function openSection(inputPath: string, start: number, seconds: number): Promise<OpenSection | null> {
   const from = Math.max(0, start);
   const dur = Math.min(MAX_SECTION_SECONDS, Math.max(0.5, seconds));
   return new Promise((resolve, reject) => {
-    let child;
+    let child: ChildProcessWithoutNullStreams;
     try {
       child = spawn("ffmpeg", [
         "-hide_banner", "-nostats", "-nostdin", "-loglevel", "error",
@@ -186,17 +190,36 @@ export function extractSection(inputPath: string, start: number, seconds: number
         "-vn", "-ac", "1", "-c:a", "libmp3lame", "-b:a", "64k",
         // No ID3 or Xing header: past the end of the audio the output is truly empty.
         "-id3v2_version", "0", "-write_xing", "0", "-f", "mp3", "pipe:1",
-      ], { stdio: ["ignore", "pipe", "pipe"] });
+      ]);
     } catch (e) { reject(e); return; }
-    const out: Buffer[] = [], err: Buffer[] = [];
-    child.stdout.on("data", (c: Buffer) => out.push(c));
+    const out = new PassThrough();
+    const err: Buffer[] = [];
+    let started = false;
+    const kill = () => { if (child.exitCode === null) child.kill("SIGKILL"); };
+    out.on("close", kill);
     child.stderr.on("data", (c: Buffer) => err.push(c));
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code === 0) resolve(Buffer.concat(out));
-      else reject(new Error(`Could not cut the section: ${Buffer.concat(err).toString("utf8").trim().split("\n").pop()}`));
+    child.stdout.once("data", (first: Buffer) => {
+      started = true;
+      out.write(first);
+      child.stdout.pipe(out);
+      resolve({ stream: out, kill: () => { kill(); out.destroy(); } });
+    });
+    child.on("error", (e) => { if (!started) reject(e); else out.destroy(e); });
+    child.on("close", (code, signal) => {
+      if (started) { if (!out.writableEnded && !out.destroyed) out.end(); return; }
+      if (code === 0) resolve(null);
+      else if (!signal) reject(new Error(`Could not cut the section: ${Buffer.concat(err).toString("utf8").trim().split("\n").pop()}`));
     });
   });
+}
+
+// The same section, whole, in memory.
+export async function extractSection(inputPath: string, start: number, seconds: number): Promise<Buffer> {
+  const sec = await openSection(inputPath, start, seconds);
+  if (!sec) return Buffer.alloc(0);
+  const parts: Buffer[] = [];
+  for await (const c of sec.stream) parts.push(c as Buffer);
+  return Buffer.concat(parts);
 }
 
 export interface AudioPart { path: string; offset: number }

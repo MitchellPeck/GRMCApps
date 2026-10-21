@@ -512,7 +512,12 @@ export async function saveReport(
 // The minutes after editing. What they were generated from, and when, stay.
 export async function saveReportEdit(pool: Pool, meetingId: number, markdown: string): Promise<void> {
   await pool.query(
-    "UPDATE meetings SET report = $2, report_updated_at = clock_timestamp(), updated_at = now() WHERE id = $1",
+    // At least a millisecond after generation: times reach JS at millisecond
+    // precision, and an edit must never compare equal to the generation.
+    `UPDATE meetings
+        SET report = $2, updated_at = now(),
+            report_updated_at = GREATEST(clock_timestamp(), report_generated_at + interval '1 millisecond')
+      WHERE id = $1`,
     [meetingId, markdown]
   );
 }

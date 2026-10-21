@@ -215,3 +215,26 @@ test("extractSection returns MP3 of the requested stretch and nothing past the e
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("openSection starts streaming before the whole section is cut, and kill() stops ffmpeg", { skip: !hasFfmpeg }, async () => {
+  const { openSection } = await import("./chunking");
+  const dir = mkdtempSync(join(tmpdir(), "chunk-test-"));
+  try {
+    const input = makeRecording(dir);
+    const t0 = Date.now();
+    const sec = await openSection(input, 0, 1500);
+    assert.ok(sec, "expected audio");
+    const firstAt = Date.now() - t0;
+    let bytes = 0;
+    sec!.stream.on("data", (c: Buffer) => { bytes += c.length; });
+    const closed = new Promise<void>((r) => sec!.stream.on("close", () => r()));
+    sec!.kill();
+    await closed;
+    // 25 minutes at 64 kbit/s is ~12 MB; killed at once, nowhere near that arrives.
+    assert.ok(bytes < 6_000_000, `streamed ${bytes} bytes after kill`);
+    assert.ok(firstAt < 5000, `first audio after ${firstAt} ms`);
+    assert.equal(await openSection(input, 1e6, 10), null);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

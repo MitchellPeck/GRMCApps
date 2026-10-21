@@ -15,7 +15,7 @@ import {
 } from "../google";
 import { hasAudioExtension } from "../whisper";
 import { speakerStats } from "../speakers";
-import { extractClip, extractSection } from "../chunking";
+import { extractClip, openSection } from "../chunking";
 import {
   createMeeting, listMeetings, getMeeting, updateMeeting, deleteMeeting,
   setAttendees, getAttendeeIds, replaceAgendaItems, addAgendaItem,
@@ -77,8 +77,8 @@ function messagePage(reply: FastifyReply, status: number, title: string, text: s
   );
 }
 
-// One section of a stored recording as MP3, for the ▶ on a part of the
-// minutes. start/end are seconds on that recording's timeline.
+// One section of a stored recording as MP3, streamed, for the ▶ on a part of
+// the minutes. start/end are seconds on that recording's timeline.
 export async function sendSection(
   reply: FastifyReply,
   storagePath: string | undefined,
@@ -91,11 +91,13 @@ export async function sendSection(
   if (!storagePath) { reply.code(404); return { ok: false, error: "Recording not found." }; }
   if (!existsSync(storagePath)) { reply.code(404); return { ok: false, error: "Recording file is missing." }; }
   try {
-    const mp3 = await extractSection(storagePath, start, end - start);
-    if (!mp3.length) { reply.code(416); return { ok: false, error: "That part of the recording doesn't exist." }; }
+    const sec = await openSection(storagePath, start, end - start);
+    if (!sec) { reply.code(416); return { ok: false, error: "That part of the recording doesn't exist." }; }
+    // Stop cutting when the listener stops or moves to another section.
+    reply.raw.on("close", sec.kill);
     reply.header("content-type", "audio/mpeg");
     reply.header("cache-control", "private, max-age=3600");
-    return reply.send(mp3);
+    return reply.send(sec.stream);
   } catch (e) {
     reply.code(500); return { ok: false, error: (e as Error).message };
   }

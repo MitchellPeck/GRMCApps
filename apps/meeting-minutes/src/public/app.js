@@ -1313,11 +1313,22 @@ function uploadAudio(it, input){
 var meetingRec=null; // {meetingId, recordingId, title, topic, mr, stream, t0, chain, failedChunk, timer}
 var meetingRecStarting=false; // true only during the getUserMedia→POST /recording/start window
 // One player for the play buttons in the minutes, separate from the speaker
-// samples; starting either stops the other.
-var sectionPlayer=null, sectionPlayingBtn=null;
+// samples; starting either stops the other. The server cuts the section as it
+// streams, so the button shows it is loading until audio actually plays.
+var sectionPlayer=null, sectionPlayingBtn=null, sectionUrl='';
 function stopSection(){
-  if(sectionPlayer){ try { sectionPlayer.pause(); } catch(e){} }
-  if(sectionPlayingBtn){ sectionPlayingBtn.innerHTML='&#9654;'; sectionPlayingBtn=null; }
+  // Dropping the source (rather than src='', which raises an error event)
+  // ends the download, so the server stops cutting.
+  if(sectionPlayer){ try { sectionPlayer.pause(); sectionPlayer.removeAttribute('src'); sectionPlayer.load(); } catch(e){} }
+  sectionUrl='';
+  if(sectionPlayingBtn){ sectionPlayingBtn.innerHTML='&#9654;'; sectionPlayingBtn.classList.remove('loading'); sectionPlayingBtn=null; }
+}
+// The audio element can't say why it failed; ask the server for its message.
+function sectionFailed(url){
+  stopSection();
+  api(url).then(function(res){
+    msg('report-msg','err', (res && res.error) || 'That part of the recording could not be played.');
+  });
 }
 document.addEventListener('click', function(e){
   var btn=e.target && e.target.closest ? e.target.closest('.sec-play') : null;
@@ -1328,14 +1339,20 @@ document.addEventListener('click', function(e){
   if(!sectionPlayer){
     sectionPlayer=new Audio();
     sectionPlayer.addEventListener('ended', stopSection);
+    sectionPlayer.addEventListener('playing', function(){
+      if(sectionPlayingBtn){ sectionPlayingBtn.classList.remove('loading'); sectionPlayingBtn.innerHTML='&#9632;'; }
+    });
+    sectionPlayer.addEventListener('error', function(){ if(sectionPlayingBtn && sectionUrl) sectionFailed(sectionUrl); });
   }
   var base=btn.getAttribute('data-src')==='i' ? '/api/recordings/' : '/api/meeting-recordings/';
-  sectionPlayer.src=base+btn.getAttribute('data-rec')+'/section?start='+Number(btn.getAttribute('data-start')).toFixed(2)
+  var url=base+btn.getAttribute('data-rec')+'/section?start='+Number(btn.getAttribute('data-start')).toFixed(2)
     +'&end='+Number(btn.getAttribute('data-end')).toFixed(2);
+  sectionPlayer.src=url; sectionUrl=url;
   sectionPlayingBtn=btn;
-  btn.innerHTML='&#9632;';
+  btn.classList.add('loading');
+  btn.innerHTML='&#8230;';
   var p=sectionPlayer.play();
-  if(p && p['catch']) p['catch'](function(){ if(sectionPlayingBtn===btn) stopSection(); });
+  if(p && p['catch']) p['catch'](function(){ if(sectionPlayingBtn===btn) sectionFailed(url); });
 });
 
 var meetingRecFinishing=false; // true from "Stop" until the server accepts the recording

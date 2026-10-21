@@ -4,13 +4,15 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { EventEmitter } from "node:events";
+import { Readable } from "node:stream";
 import { sendSection } from "./routes/meetings";
 
 const hasFfmpeg = spawnSync("ffmpeg", ["-version"]).status === 0;
 
 // Just enough of a Fastify reply to see what sendSection answers.
 function fakeReply() {
-  const r = { status: 200, headers: {} as Record<string, string>, body: undefined as unknown,
+  const r = { status: 200, headers: {} as Record<string, string>, body: undefined as unknown, raw: new EventEmitter(),
     code(n: number) { r.status = n; return r; },
     header(k: string, v: string) { r.headers[k] = v; return r; },
     send(b: unknown) { r.body = b; return r; } };
@@ -44,6 +46,12 @@ test("sendSection answers 416 past the end of the audio", { skip: !hasFfmpeg }, 
     await sendSection(ok as any, wav, { start: "0", end: "2" });
     assert.equal(ok.status, 200);
     assert.equal(ok.headers["content-type"], "audio/mpeg");
+    // Streamed, not buffered: playback can start while ffmpeg is still cutting.
+    assert.ok(ok.body instanceof Readable);
+    const closed = new Promise<void>((res) => (ok.body as Readable).on("close", () => res()));
+    (ok.body as Readable).resume();
+    ok.raw.emit("close"); // the listener went away
+    await closed;
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

@@ -466,7 +466,7 @@ test("a report without ranges renders as before", { skip }, () => {
 test("pressing play on a section loads that stretch of the right recording", { skip }, () => {
   const { w, doc } = boot();
   const played: string[] = [];
-  w.Audio = function () { return { src: "", play() { played.push(this.src); return Promise.resolve(); }, pause() {}, addEventListener() {} }; };
+  w.Audio = function () { return { src: "", play() { played.push(this.src); return Promise.resolve(); }, pause() {}, addEventListener() {}, removeAttribute() {}, load() {} }; };
   const box = doc.createElement("div");
   box.innerHTML = w.eval(`renderMarkdown("### 1. Budget <!--t:m12:600.0-1200.0-->\\n- [ ] Send <!--t:i4:5.0-9.0-->")`);
   doc.body.appendChild(box);
@@ -522,4 +522,48 @@ test("the report shows its approximate length", { skip }, () => {
   const { w, doc } = bootWithReport([]);
   w.eval(`state.report = { status: "idle", error: "", changes: [], pages: 5.5 }; renderReportState();`);
   assert.match(doc.getElementById("report-pages").textContent, /≈ 5\.5 pages/);
+});
+
+function fakeAudio(w: any) {
+  const players: any[] = [];
+  w.Audio = function () {
+    const handlers: Record<string, Array<() => void>> = {};
+    const a = { src: "", paused: true,
+      play() { a.paused = false; return Promise.resolve(); }, pause() { a.paused = true; },
+      removeAttribute(k: string) { if (k === "src") a.src = ""; }, load() {},
+      addEventListener(ev: string, fn: () => void) { (handlers[ev] = handlers[ev] || []).push(fn); },
+      fire(ev: string) { (handlers[ev] || []).forEach((fn) => fn()); } };
+    players.push(a);
+    return a;
+  };
+  return players;
+}
+
+test("a section shows it is loading until audio plays", { skip }, () => {
+  const { w, doc } = boot();
+  const players = fakeAudio(w);
+  const box = doc.createElement("div");
+  box.innerHTML = w.eval(`renderMarkdown("### 1. Budget <!--t:m12:600.0-1200.0-->")`);
+  doc.body.appendChild(box);
+  const btn = box.querySelector(".sec-play");
+  btn.dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  assert.ok(btn.classList.contains("loading"));
+  players[0].fire("playing");
+  assert.ok(!btn.classList.contains("loading"));
+  assert.equal(btn.innerHTML, "■");
+});
+
+test("a section that can't play says why", { skip }, async () => {
+  const { w, doc } = boot();
+  const players = fakeAudio(w);
+  w.fetch = () => Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({ ok: false, error: "Recording file is missing." }) });
+  w.eval("renderDetail()");
+  doc.getElementById("report-box").innerHTML = w.eval(`renderMarkdown("### 1. Budget <!--t:m12:600.0-1200.0-->")`);
+  const btn = doc.querySelector("#report-box .sec-play");
+  btn.dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  players[0].fire("error");
+  await new Promise((r) => setTimeout(r, 20));
+  assert.match(doc.getElementById("report-msg").textContent, /Recording file is missing/);
+  assert.equal(btn.innerHTML, "▶");
+  assert.ok(!btn.classList.contains("loading"));
 });
