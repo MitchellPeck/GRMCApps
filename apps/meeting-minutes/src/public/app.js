@@ -518,7 +518,7 @@ function openMeeting(id){
   Promise.all([ api('/api/people?all=1'), api('/api/meetings/'+id) ]).then(function(r){
     var peopleRes=r[0], det=r[1];
     if(!det.ok || !det.meeting){ document.getElementById('detail-body').innerHTML='<div class="alert alert-err">'+esc(det.error||'Could not load the meeting.')+'</div>'; return; }
-    if(!state.meeting || state.meeting.id!==det.meeting.id) state.lastFix=null;
+    if(!state.meeting || state.meeting.id!==det.meeting.id){ state.lastFix=null; state.section=null; state.topicFocus=null; }
     state.people = (peopleRes.ok?peopleRes.people:[]);
     state.peopleById = {}; state.people.forEach(function(p){ state.peopleById[p.id]=p; });
     state.lockDrafts = false;
@@ -556,12 +556,16 @@ function renderDetail(){
   var meta=[m.meeting_date, m.location].filter(Boolean).map(esc).join(' &middot; ');
   var h='';
   // Header
-  h+='<div class="dhead"><h2 id="d-title-txt">'+esc(m.title)+'</h2>'
+  h+='<section data-sec="details" hidden>'
+    +'<div class="dhead"><h2 id="d-title-txt">'+esc(m.title)+'</h2>'
     +(meta?'<div class="dmeta" id="d-meta-txt">'+meta+'</div>':'<div class="dmeta" id="d-meta-txt"></div>')
-    +'<div class="dedit"><button class="btn-sm" id="btn-edit-meeting">Edit details</button></div></div>';
+    +'<div class="dedit"><button class="btn-sm" id="btn-edit-meeting">Edit details</button></div></div>'
+    +(m.description?'<div class="card"><div class="ct">About this meeting</div><div>'+esc(m.description)+'</div></div>':'')
+    +'</section>';
 
   // Attendees
-  h+='<div class="card"><div class="ct">Who is present?</div>'
+  h+='<section data-sec="people" hidden>'
+    +'<div class="card"><div class="ct">Who is present?</div>'
     +'<div class="hint" style="margin-bottom:8px">Select who is present from the people library (add more under the People tab). Anyone not selected is recorded as absent. Attendees become selectable as presenters below.</div>'
     +'<div class="chips" id="attendee-chips"></div>'
     +'<div class="hint" id="absent-line" style="margin-top:8px"></div>'
@@ -572,21 +576,39 @@ function renderDetail(){
     +'<div class="guest-add"><input type="text" id="g-name" placeholder="Guest name">'
     +'<input type="text" id="g-title" placeholder="Role (optional)">'
     +'<button class="btn-sm" id="btn-add-guest" data-default="Add guest">Add guest</button></div>'
-    +'</div>';
+    +'</div></section>';
 
   // Meeting recording
-  h+='<div class="card"><div class="ct">Meeting recording</div>'
+  h+='<section data-sec="recording" hidden>'
+    +'<div class="card"><div class="ct">Meeting recording</div>'
     +'<div id="mrec-msg"></div>'
     +'<div class="btn-row"><button class="btn btn-primary" id="btn-meeting-rec" data-default="● Record meeting">● Record meeting</button>'
     +'<span class="rec-status" id="mrec-status"></span></div>'
     +'<div class="hint">One recording for the whole meeting. Open each topic as you discuss it — that click files the audio under the right topic. Processing starts when you stop.</div>'
-    +'<div id="mrec-extra"></div></div>';
+    +'<div id="mrec-extra"></div></div></section>';
 
   // Meeting-wide speaker naming (populated once transcripts with meeting-wide
   // speaker labels exist; empty until then)
+  h+='<section data-sec="speakers" hidden>';
   h+='<div id="meeting-speakers"></div>';
+  // Fix a misheard name or word everywhere at once.
+  h+='<div class="card"><div class="ct">Fix a name or word</div>'
+    +'<div class="hint">Corrects it in the transcripts, summaries, action items, speaker names, guests and the report, all at once.</div>'
+    +'<div class="fix-row" id="fix-panel">'
+    +'<input id="fix-from" placeholder="Replace (e.g. John)">'
+    +'<input id="fix-to" placeholder="With (e.g. Jon)">'
+    +'<select id="fix-scope"><option value="">Whole meeting</option>'
+    +state.items.map(function(it, i){ return '<option value="'+it.id+'">'+(i+1)+'. '+esc(it.title)+'</option>'; }).join('')
+    +'</select>'
+    +'<button class="btn btn-secondary btn-sm" id="btn-fix-preview">Check</button>'
+    +'<button class="btn btn-primary btn-sm" id="btn-fix-apply">Fix</button>'
+    +'</div><div id="fix-msg"></div><div id="fix-result">'+(state.lastFix ? fixResultHtml(state.lastFix) : '')+'</div></div>';
+
+  h+='</section>';
+
 
   // Agenda upload
+  h+='<section data-sec="agenda" hidden>';
   h+='<div class="card"><div class="ct">Agenda</div>'
     +'<div id="agenda-msg"></div>'
     +(m.agenda_file_name?'<div class="hint" style="margin-bottom:8px">Loaded from: '+esc(m.agenda_file_name)+'</div>':'')
@@ -599,22 +621,11 @@ function renderDetail(){
   // Agenda items (the run-the-meeting flow)
   h+='<div class="section-title">Run the meeting</div>';
   h+='<div id="items-wrap"></div>';
-
-  // Fix a misheard name or word everywhere at once.
-  h+='<hr class="hr"><div class="section-title">Fix a name or word</div>'
-    +'<div class="hint">Corrects it in the transcripts, summaries, action items, speaker names, guests and the report, all at once.</div>'
-    +'<div class="fix-row" id="fix-panel">'
-    +'<input id="fix-from" placeholder="Replace (e.g. John)">'
-    +'<input id="fix-to" placeholder="With (e.g. Jon)">'
-    +'<select id="fix-scope"><option value="">Whole meeting</option>'
-    +state.items.map(function(it, i){ return '<option value="'+it.id+'">'+(i+1)+'. '+esc(it.title)+'</option>'; }).join('')
-    +'</select>'
-    +'<button class="btn btn-secondary btn-sm" id="btn-fix-preview">Check</button>'
-    +'<button class="btn btn-primary btn-sm" id="btn-fix-apply">Fix</button>'
-    +'</div><div id="fix-msg"></div><div id="fix-result">'+(state.lastFix ? fixResultHtml(state.lastFix) : '')+'</div>';
+  h+='</section>';
 
   // Report
-  h+='<hr class="hr"><div class="section-title">Report</div>'
+  h+='<section data-sec="minutes" hidden><div class="minutes-layout"><div class="minutes-main">'
+    +'<div class="section-title">Minutes</div>'
     +'<div id="report-msg"></div>'
     +'<div id="report-stale"></div>'
     +'<div class="btn-row"><button class="btn btn-gold" id="btn-report" data-default="Generate report">Generate report</button>'
@@ -627,8 +638,13 @@ function renderDetail(){
     +' <span class="hint" id="report-pages"></span>'
     +'</span></div>'
     +'<div class="hint" id="report-hint">The report waits for any transcription and summaries still in progress, then writes itself. You can close this page meanwhile.</div>'
-    +'<div id="report-box" style="margin-top:14px">'+(m.report?'<div class="report">'+renderMarkdown(m.report)+'</div>':'')+'</div>';
+    +'<div id="report-box" style="margin-top:14px">'+(m.report?'<div class="report">'+renderMarkdown(m.report)+'</div>':'')+'</div>'
+    // The chat (plan 5) sits beside the minutes; hidden while it has nothing.
+    +'</div><aside id="chat-panel" class="chat-panel" hidden></aside></div></section>';
 
+  h='<div class="mtg-shell"><nav class="mtg-nav" id="mtg-nav"></nav>'
+    +'<select id="mtg-nav-select" class="mtg-nav-select" aria-label="Section"></select>'
+    +'<div class="mtg-main">'+h+'</div></div>';
   document.getElementById('detail-body').innerHTML=h;
 
   renderAttendeeChips();
@@ -649,8 +665,72 @@ function renderDetail(){
   document.getElementById('btn-add-guest').addEventListener('click', addGuest);
   document.getElementById('g-name').addEventListener('keydown', function(e){ if(e.key==='Enter') addGuest(); });
   document.getElementById('g-title').addEventListener('keydown', function(e){ if(e.key==='Enter') addGuest(); });
+  document.getElementById('mtg-nav-select').addEventListener('change', function(){
+    var v=this.value; if(v.indexOf('topic:')===0) showSection('agenda', Number(v.slice(6))); else showSection(v);
+  });
   renderReportState();
+  showSection(state.section || defaultSection(), state.topicFocus);
 }
+
+// ── Sections and the side menu ──────────────────────────────────────────────
+var SECTIONS=[['details','Details'],['people','People'],['agenda','Agenda'],['recording','Recording'],['speakers','Speakers'],['minutes','Minutes']];
+function defaultSection(){
+  if(state.meeting && state.meeting.report) return 'minutes';
+  return state.items && state.items.length ? 'agenda' : 'details';
+}
+function renderMeetingNav(){
+  var nav=document.getElementById('mtg-nav'), sel=document.getElementById('mtg-nav-select');
+  if(!nav || !sel) return;
+  var hints=typeof navHints==='function' ? navHints() : { topics:{} };
+  var topics=(state.items||[]).map(function(it, i){
+    var hint=hints.topics && hints.topics[it.id];
+    return '<a href="#" class="nav-topic'+(state.section==='agenda' && state.topicFocus===it.id?' active':'')+'" data-topic="'+it.id+'">'
+      +(i+1)+'. '+esc(it.title)+(hint?' <span class="nav-hint">'+esc(hint)+'</span>':'')+'</a>';
+  }).join('');
+  nav.innerHTML=SECTIONS.map(function(s){
+    var hint=hints[s[0]];
+    var active=state.section===s[0] && !(s[0]==='agenda' && state.topicFocus);
+    return '<a href="#" data-sec="'+s[0]+'"'+(active?' class="active"':'')+'>'+s[1]
+      +(hint?' <span class="nav-hint">'+esc(hint)+'</span>':'')+'</a>'
+      +(s[0]==='agenda' && topics ? '<div class="nav-topics">'+topics+'</div>' : '');
+  }).join('');
+  sel.innerHTML=SECTIONS.map(function(s){
+    var opt='<option value="'+s[0]+'">'+s[1]+'</option>';
+    if(s[0]!=='agenda') return opt;
+    return opt+(state.items||[]).map(function(it, i){
+      return '<option value="topic:'+it.id+'">&nbsp;&nbsp;'+(i+1)+'. '+esc(it.title)+'</option>';
+    }).join('');
+  }).join('');
+  sel.value = state.section==='agenda' && state.topicFocus ? 'topic:'+state.topicFocus : (state.section||'');
+}
+function showSection(sec, topicId){
+  state.section=sec;
+  state.topicFocus = sec==='agenda' && topicId ? topicId : null;
+  document.querySelectorAll('#detail-body section[data-sec]').forEach(function(el){
+    el.hidden = el.getAttribute('data-sec')!==sec;
+  });
+  applyTopicFocus();
+  if(state.topicFocus){
+    var it=(state.items||[]).filter(function(x){ return x.id===state.topicFocus; })[0];
+    var body=it && document.getElementById('ibody-'+it.id);
+    if(body && body.classList.contains('collapsed')) toggleItemOpen(it);
+  }
+  renderMeetingNav();
+}
+// With a topic chosen in the menu, Agenda shows only that topic.
+function applyTopicFocus(){
+  (state.items||[]).forEach(function(it){
+    var el=document.getElementById('item-'+it.id);
+    if(el) el.hidden = !!state.topicFocus && state.topicFocus!==it.id;
+  });
+}
+document.addEventListener('click', function(e){
+  var a=e.target && e.target.closest ? e.target.closest('#mtg-nav a') : null;
+  if(!a) return;
+  e.preventDefault();
+  if(a.hasAttribute('data-topic')) showSection('agenda', Number(a.getAttribute('data-topic')));
+  else showSection(a.getAttribute('data-sec'));
+});
 
 function editMeeting(){
   var m=state.meeting;
@@ -853,6 +933,7 @@ function renderItems(){
   // The rebuilt rows default to showing the per-topic recorder; re-apply the
   // whole-meeting lock so a rebuild mid-recording cannot bring them back.
   syncItemRecControls();
+  applyTopicFocus();
 }
 
 // Update everything about one already-rendered item without touching the
@@ -1565,6 +1646,16 @@ function syncItemRecControls(){
 // The whole-meeting recorder keeps running when you scroll away or go back to
 // the meetings list, so its status is rendered into a viewport-fixed banner
 // driven by the recorder itself rather than by the detail view.
+// The agenda item after the one the recording is filing under (the first one
+// when none is yet). Null on the last.
+function nextTopic(){
+  var items=state.items||[];
+  if(!meetingRec || !items.length) return null;
+  if(!meetingRec.topicId) return items[0];
+  for(var i=0;i<items.length-1;i++) if(items[i].id===meetingRec.topicId) return items[i+1];
+  return null;
+}
+
 function renderRecBanner(){
   var el=document.getElementById('rec-banner');
   if(!el) return;
@@ -1598,6 +1689,7 @@ function renderRecBanner(){
         ? '<span class="rb-topic">Filing under: '+esc(meetingRec.topic)+'</span>'
         : '<span class="rb-topic rb-warn">No topic opened yet &mdash; audio files under the first item</span>')
     +'<span class="rb-actions">'
+      +(onThisMeeting && nextTopic() ? '<button class="btn-sm" id="rb-next">Next topic &rsaquo;</button> ' : '')
       +(onThisMeeting ? '' : '<button class="btn-sm" id="rb-open">Open meeting</button> ')
       +'<button class="btn-sm" id="rb-stop">Stop &amp; process</button>'
     +'</span>';
@@ -1605,6 +1697,8 @@ function renderRecBanner(){
   document.body.classList.add('has-rec-banner');
   var open=document.getElementById('rb-open');
   if(open) open.addEventListener('click', function(){ openMeeting(meetingRec.meetingId); });
+  var next=document.getElementById('rb-next');
+  if(next) next.addEventListener('click', function(){ var it=nextTopic(); if(it) showSection('agenda', it.id); });
   document.getElementById('rb-stop').addEventListener('click', function(){ stopMeetingRecording(); });
 }
 
@@ -1711,6 +1805,7 @@ function postTopicMarker(itemId){
   if(!meetingRec || !state.meeting || meetingRec.meetingId!==state.meeting.id) return;
   var it=(state.items||[]).filter(function(x){ return x.id===itemId; })[0];
   meetingRec.topic = it ? it.title : '';
+  meetingRec.topicId = it ? it.id : null;
   renderRecBanner();
   api('/api/meeting-recordings/'+meetingRec.recordingId+'/marker', {
     method:'POST', body:{ itemId: itemId, atSeconds: meetingElapsedSeconds() }

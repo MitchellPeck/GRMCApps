@@ -814,3 +814,76 @@ test("going back to the list mid-recording keeps the recorder's lock", { skip },
     showList();`);
   assert.ok(!calls.some((c) => c.method === "DELETE"), "lock kept while recording");
 });
+
+// ── Meeting page in sections ────────────────────────────────────────────────
+
+const visible = (doc: any) => Array.from(doc.querySelectorAll("#detail-body section[data-sec]"))
+  .filter((el: any) => !el.hidden).map((el: any) => el.getAttribute("data-sec"));
+
+function bootTwoTopics() {
+  const b = boot();
+  b.w.eval(`state.items.push({ id: 2, title: 'Roof', description: '', transcript: '', notes: '', transcript_segments: [],
+    speaker_map: {}, speaker_stats: [], recordings: [], presenter_ids: [], action_items: [], summary: '',
+    transcribe_status: 'idle', transcribe_error: '', transcript_source: '' });`);
+  return b;
+}
+
+test("the meeting opens on the section that fits where it is", { skip }, () => {
+  const { w, doc } = boot();
+  w.eval("state.section = null; renderDetail()");
+  assert.deepEqual(visible(doc), ["agenda"]);
+  w.eval("state.section = null; state.items = []; renderDetail()");
+  assert.deepEqual(visible(doc), ["details"]);
+  w.eval("state.section = null; state.meeting.report = '# M'; renderDetail()");
+  assert.deepEqual(visible(doc), ["minutes"]);
+});
+
+test("the side menu switches sections, and a redraw keeps the one you're on", { skip }, () => {
+  const { w, doc } = boot();
+  w.eval("state.section = null; renderDetail()");
+  doc.querySelector('#mtg-nav [data-sec="people"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  assert.deepEqual(visible(doc), ["people"]);
+  assert.ok(doc.querySelector('#mtg-nav [data-sec="people"]').classList.contains("active"));
+  w.eval("renderDetail()");
+  assert.deepEqual(visible(doc), ["people"]);
+  const sel = doc.getElementById("mtg-nav-select");
+  sel.value = "speakers";
+  sel.dispatchEvent(new w.Event("change"));
+  assert.deepEqual(visible(doc), ["speakers"]);
+});
+
+test("a topic in the menu shows just that topic, opened", { skip }, () => {
+  const { w, doc } = bootTwoTopics();
+  w.eval("state.section = null; renderDetail()");
+  doc.querySelector('#mtg-nav [data-topic="2"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  assert.deepEqual(visible(doc), ["agenda"]);
+  assert.equal(doc.getElementById("item-1").hidden, true);
+  assert.equal(doc.getElementById("item-2").hidden, false);
+  assert.ok(!doc.getElementById("ibody-2").classList.contains("collapsed"));
+  doc.querySelector('#mtg-nav [data-sec="agenda"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  assert.equal(doc.getElementById("item-1").hidden, false);
+});
+
+test("switching sections never stops a recording", { skip }, () => {
+  const { w, doc } = boot();
+  w.eval("state.section = null; renderDetail(); var __stopped = false; stopRecording = function(){ __stopped = true; };");
+  for (const sec of ["people", "minutes", "recording", "agenda"]) {
+    doc.querySelector(`#mtg-nav [data-sec="${sec}"]`).dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  }
+  assert.equal(w.eval("__stopped"), false);
+});
+
+test("the recording bar's Next topic opens the following topic", { skip }, () => {
+  const { w, doc } = bootTwoTopics();
+  const calls = stubFetch(w, () => ({ ok: true }));
+  w.eval(`renderDetail();
+    meetingRec = { meetingId: 42, recordingId: 7, title: "M", topic: "Budget", topicId: 1, t0: performance.now(),
+      mr: { state: "recording" }, stream: { getTracks(){ return []; } } };
+    renderRecBanner();`);
+  const next = doc.getElementById("rb-next");
+  assert.ok(next, "Next topic shown");
+  next.dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  assert.ok(!doc.getElementById("ibody-2").classList.contains("collapsed"));
+  assert.ok(calls.some((c) => c.path === "/api/meeting-recordings/7/marker" && c.body.itemId === 2));
+  assert.equal(doc.getElementById("rb-next"), null, "no Next on the last topic");
+});
