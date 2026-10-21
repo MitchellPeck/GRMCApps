@@ -307,3 +307,28 @@ button.roll-row:hover{background:var(--paper)}
 .voice-head select{min-width:190px;max-width:100%}
 .report-editor .rblock ul{margin:0;padding-left:22px}
 .report-editor .rblock li.todo{margin-left:-22px}
+
+/* ── Chat beside the minutes ────────────────────────────────────────────── */
+.chat-panel{position:sticky;top:calc(env(safe-area-inset-top,0px) + 12px);display:flex;flex-direction:column;gap:8px;
+  background:var(--card);border:1px solid var(--rule);border-radius:var(--r-lg);padding:12px;max-height:calc(100vh - 40px)}
+body.has-rec-banner .chat-panel{top:64px}
+.chat-head .hint{margin-top:2px}
+.chat-log{flex:1;min-height:160px;overflow-y:auto;display:flex;flex-direction:column;gap:8px;padding-right:2px}
+.chat-msg{border-radius:12px;padding:8px 10px;font-size:13.5px;line-height:1.45;max-width:95%}
+.chat-msg.user{align-self:flex-end;background:var(--navy);color:#fff}
+.chat-msg.assistant{align-self:flex-start;background:var(--paper);border:1px solid var(--rule)}
+.chat-msg.assistant p{margin:2px 0}
+.chat-msg.err{border-color:var(--danger-border);background:var(--rej-bg);color:var(--rej-fg)}
+.chat-msg.working{color:var(--muted)}
+.chat-card{display:flex;align-items:center;gap:8px;margin-top:6px;padding:6px 8px;border-radius:8px;background:var(--ok-bg);color:var(--ok-fg);font-size:12.5px}
+.chat-card.clip{background:var(--info-bg);color:var(--info-fg)}
+.chat-card.undone{opacity:.6;text-decoration:line-through}
+.chat-card > span{flex:1;min-width:0}
+.chat-quote{display:block;font-style:italic}
+.chat-compose{display:flex;gap:8px;align-items:flex-end}
+.chat-compose textarea{flex:1;min-width:0;resize:vertical;font:inherit;padding:6px 8px}
+@media (max-width:720px){ .chat-panel{position:static;max-height:none} }
+/* The meeting page is wider than the list so the minutes and the chat fit side
+   by side; the other sections keep a comfortable reading width. */
+#view-detail.layout{max-width:1220px}
+.mtg-main > section:not([data-sec="minutes"]), .mtg-head{max-width:760px}

@@ -541,7 +541,9 @@ function openMeeting(id){
     state.guests = det.guests || [];
     state.report = det.report || null;
     state.lock = det.lock || null;
+    if(state.chatFor!==det.meeting.id){ state.chat=[]; state.chatFor=det.meeting.id; state.chatDraft=''; }
     renderDetail();
+    loadChat();
     startLockHeartbeat();
     if(anyPendingWork()) startPolling();
   });
@@ -690,6 +692,7 @@ function renderDetail(){
   document.getElementById('btn-add-guest').addEventListener('click', addGuest);
   document.getElementById('g-name').addEventListener('keydown', function(e){ if(e.key==='Enter') addGuest(); });
   document.getElementById('g-title').addEventListener('keydown', function(e){ if(e.key==='Enter') addGuest(); });
+  renderChatPanel();
   document.getElementById('mtg-nav-select').addEventListener('change', function(){
     var v=this.value; if(v.indexOf('topic:')===0) showSection('agenda', Number(v.slice(6))); else showSection(v);
   });
@@ -855,6 +858,105 @@ document.addEventListener('click', function(e){
   e.preventDefault();
   var href=a.getAttribute('href'), win=window.open('', '_blank');
   flushReportSave().then(function(){ if(win) win.location=href; else window.location.href=href; });
+});
+
+// ── Chat ────────────────────────────────────────────────────────────────────
+// Beside the minutes: tell it what to fix or ask about the meeting. It does
+// what the page does (same server actions) and shows a card for each change,
+// with Undo, and a ▶ for any part of the recording it points to.
+function renderChatPanel(){
+  var el=document.getElementById('chat-panel'); if(!el || !state.meeting) return;
+  el.hidden=false;
+  el.innerHTML='<div class="chat-head"><b>Ask or tell it what to fix</b>'
+    +'<div class="hint">“It’s Jon, not John”, “Shorten item 3”, “Play where they voted on the budget”.</div></div>'
+    +'<div class="chat-log" id="chat-log" aria-live="polite"></div>'
+    +'<div class="chat-compose"><textarea id="chat-input" rows="2" placeholder="Type a message…"></textarea>'
+    +'<button class="btn btn-primary" id="btn-chat-send" data-default="Send">Send</button></div>';
+  var input=document.getElementById('chat-input');
+  input.value=state.chatDraft||'';
+  input.addEventListener('input', function(){ state.chatDraft=input.value; });
+  input.addEventListener('keydown', function(e){
+    if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); sendChat(); }
+  });
+  document.getElementById('btn-chat-send').addEventListener('click', sendChat);
+  renderChatLog();
+}
+function chatCardHtml(c){
+  if(c.kind==='clip'){
+    var span=fmtSpanTime(c.start)+'–'+fmtSpanTime(c.end);
+    return '<div class="chat-card clip"><button type="button" class="sec-play" data-src="'+esc(c.source)+'" data-rec="'+esc(c.recordingId)
+      +'" data-start="'+esc(c.start)+'" data-end="'+esc(c.end)+'" title="Play '+span+'">&#9654;</button>'
+      +'<span><b>'+esc(c.topic||'')+'</b> <span class="sec-time">'+span+'</span>'
+      +(c.quote?'<span class="chat-quote">“'+esc(c.quote)+'”</span>':'')+'</span></div>';
+  }
+  return '<div class="chat-card change'+(c.undone?' undone':'')+'"><span>'+esc(c.summary)+'</span>'
+    +(c.undone ? '<span class="hint">Undone</span>'
+      : c.changeId ? '<button type="button" class="btn-sm chat-undo" data-change="'+esc(c.changeId)+'">Undo</button>' : '')+'</div>';
+}
+function renderChatLog(){
+  var log=document.getElementById('chat-log'); if(!log) return;
+  var msgs=state.chat||[];
+  log.innerHTML = msgs.length || state.chatSending ? msgs.map(function(m){
+    if(m.role==='user') return '<div class="chat-msg user">'+esc(m.text).replace(/\n/g,'<br>')+'</div>';
+    return '<div class="chat-msg assistant'+(m.error?' err':'')+'">'+(m.text?renderMarkdown(m.text):'')
+      +(m.cards||[]).map(chatCardHtml).join('')+'</div>';
+  }).join('')+(state.chatSending?'<div class="chat-msg assistant working"><span class="spin" style="border-top-color:var(--navy)"></span> Working…</div>':'')
+    : '<div class="empty-hint">Nothing asked yet.</div>';
+  log.scrollTop=log.scrollHeight;
+}
+function loadChat(){
+  if(!state.meeting) return;
+  var mid=state.meeting.id;
+  api('/api/meetings/'+mid+'/chat').then(function(res){
+    if(!res.ok || !state.meeting || state.meeting.id!==mid || state.chatSending) return;
+    state.chat=res.messages||[];
+    renderChatLog();
+  });
+}
+function sendChat(){
+  var input=document.getElementById('chat-input');
+  var text=input ? input.value.trim() : '';
+  if(!text || state.chatSending || readOnly()) return;
+  var mid=state.meeting.id;
+  state.chat=(state.chat||[]).concat([{ role:'user', text:text, cards:[] }]);
+  state.chatSending=true; state.chatDraft=''; input.value='';
+  setBtn('btn-chat-send', true, 'Sending…');
+  renderChatLog();
+  // The chat can change the minutes on the server: save any edit first.
+  flushReportSave().then(function(){
+    return api('/api/meetings/'+mid+'/chat', { method:'POST', body:{ message:text } });
+  }).then(function(res){
+    state.chatSending=false;
+    if(!state.meeting || state.meeting.id!==mid) return;
+    setBtn('btn-chat-send', false);
+    if(!res.ok){
+      state.chat.push({ role:'assistant', text:res.error||'Something went wrong.', cards:[], error:true });
+      state.chatDraft=text;
+      var inp=document.getElementById('chat-input'); if(inp) inp.value=text;
+      renderChatLog();
+      return;
+    }
+    state.chat.push({ role:'assistant', text:res.reply||'', cards:res.cards||[] });
+    renderChatLog();
+    if((res.cards||[]).some(function(c){ return c.kind==='change'; })) refreshMeeting(mid);
+  }, function(){
+    state.chatSending=false; setBtn('btn-chat-send', false);
+    state.chat.push({ role:'assistant', text:'Couldn’t reach the server. Check your connection and try again.', cards:[], error:true });
+    state.chatDraft=text; var inp=document.getElementById('chat-input'); if(inp) inp.value=text;
+    renderChatLog();
+  });
+}
+document.addEventListener('click', function(e){
+  var btn=e.target && e.target.closest ? e.target.closest('.chat-undo') : null;
+  if(!btn || !state.meeting || readOnly()) return;
+  var mid=state.meeting.id, cid=Number(btn.getAttribute('data-change'));
+  btn.disabled=true;
+  api('/api/meetings/'+mid+'/changes/'+cid+'/undo', { method:'POST' }).then(function(res){
+    if(!res.ok){ btn.disabled=false; msg('report-msg','err',res.error); return; }
+    (state.chat||[]).forEach(function(m){ (m.cards||[]).forEach(function(c){ if(c.changeId===cid) c.undone=true; }); });
+    renderChatLog();
+    refreshMeeting(mid);
+  });
 });
 
 // ── Sections and the side menu ──────────────────────────────────────────────

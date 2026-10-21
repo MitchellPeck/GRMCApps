@@ -1243,3 +1243,88 @@ test("Speakers: one card per voice, unnamed first, with talk time", { skip }, ()
   assert.ok(cards[0].classList.contains("unnamed"));
   assert.match(cards[1].textContent, /Speaker 1.*38 min/);
 });
+
+// ── Chat panel ──────────────────────────────────────────────────────────────
+
+function bootChat(route: (path: string, opts: any) => any) {
+  const b = boot();
+  const calls = stubFetch(b.w, route);
+  b.w.eval(`state.meeting.report = "# M\\n\\n## Summary\\nJohn spoke."; state.meeting.report_generated_at = "2026-04-14T10:00:00Z";
+    state.report = { status: "idle", changes: [] }; state.section = "minutes"; renderDetail();`);
+  return { ...b, calls };
+}
+const history = { ok: true, messages: [
+  { role: "user", text: "Who presented the budget?", cards: [] },
+  { role: "assistant", text: "Linda did, at 10:10.", cards: [{ kind: "clip", source: "m", recordingId: 7, start: 610, end: 640, quote: "giving is ahead", topic: "Budget" }] },
+] };
+
+test("the chat panel sits beside the minutes and shows the conversation so far", { skip }, async () => {
+  const { w, doc } = bootChat((p) => p.endsWith("/chat") ? history : { ok: true });
+  w.eval("loadChat()");
+  await flush();
+  const panel = doc.getElementById("chat-panel");
+  assert.equal(panel.hidden, false);
+  assert.match(doc.getElementById("chat-log").textContent, /Who presented the budget\?.*Linda did, at 10:10\./s);
+  const clip = doc.querySelector("#chat-log .sec-play");
+  assert.ok(clip, "a clip card plays");
+  assert.equal(clip.getAttribute("data-start"), "610");
+  assert.match(doc.getElementById("chat-log").textContent, /giving is ahead/);
+});
+
+test("sending a message posts it and shows the reply with its change card", { skip }, async () => {
+  const { w, doc, calls } = bootChat((p, o) => p.endsWith("/chat") && o.method === "POST"
+    ? { ok: true, reply: "Fixed it.", cards: [{ kind: "change", summary: "“John” → “Jon”: 3 places", changeId: 12 }] }
+    : p.endsWith("/chat") ? { ok: true, messages: [] } : { ok: true });
+  doc.getElementById("chat-input").value = "It's Jon, not John";
+  doc.getElementById("btn-chat-send").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  assert.match(doc.getElementById("chat-log").textContent, /It's Jon, not John/);
+  assert.match(doc.getElementById("chat-log").textContent, /Working/);
+  await flush();
+  assert.deepEqual(calls.find((c) => c.method === "POST" && c.path === "/api/meetings/42/chat")!.body, { message: "It's Jon, not John" });
+  const log = doc.getElementById("chat-log").textContent;
+  assert.match(log, /Fixed it\./);
+  assert.match(log, /“John” → “Jon”: 3 places/);
+  assert.doesNotMatch(log, /Working/);
+  doc.querySelector("#chat-log .chat-undo").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  await flush();
+  assert.ok(calls.some((c) => c.method === "POST" && c.path === "/api/meetings/42/changes/12/undo"));
+});
+
+test("Enter sends; Shift+Enter is a new line", { skip }, async () => {
+  const { w, doc, calls } = bootChat((p, o) => p.endsWith("/chat") && o.method === "POST" ? { ok: true, reply: "Ok.", cards: [] } : { ok: true, messages: [] });
+  const input = doc.getElementById("chat-input");
+  input.value = "First";
+  input.dispatchEvent(new w.KeyboardEvent("keydown", { key: "Enter", shiftKey: true, bubbles: true }));
+  assert.equal(calls.filter((c) => c.method === "POST").length, 0);
+  input.dispatchEvent(new w.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  await flush();
+  assert.equal(calls.filter((c) => c.method === "POST" && c.path.endsWith("/chat")).length, 1);
+});
+
+test("an unsaved minutes edit is saved before the chat runs", { skip }, async () => {
+  const { w, doc, calls } = bootChat((p, o) => p.endsWith("/chat") && o.method === "POST" ? { ok: true, reply: "Ok.", cards: [] }
+    : o.method === "PUT" ? { ok: true, report: { status: "idle", changes: [] } } : { ok: true, messages: [] });
+  editLine(w, doc, 2, "Jon spoke at length.");
+  doc.getElementById("chat-input").value = "Shorten the summary";
+  doc.getElementById("btn-chat-send").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  await flush();
+  const order = calls.filter((c) => (c.method === "PUT" && c.path.endsWith("/report")) || (c.method === "POST" && c.path.endsWith("/chat"))).map((c) => c.method);
+  assert.deepEqual(order, ["PUT", "POST"]);
+});
+
+test("a chat error shows in the conversation", { skip }, async () => {
+  const { w, doc } = bootChat((p, o) => p.endsWith("/chat") && o.method === "POST"
+    ? { ok: false, status: 503, error: "Add an Anthropic API key in Settings to use the chat." } : { ok: true, messages: [] });
+  doc.getElementById("chat-input").value = "Hi";
+  doc.getElementById("btn-chat-send").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  await flush();
+  assert.match(doc.getElementById("chat-log").textContent, /API key in Settings/);
+  assert.equal(doc.getElementById("chat-input").value, "Hi", "the message is kept to try again");
+});
+
+test("while someone else edits, the chat can't be used", { skip }, () => {
+  const { w, doc } = bootChat(() => ({ ok: true, messages: [] }));
+  w.eval(`state.lock = { held: false, holder: { name: "Bob" } }; renderDetail();`);
+  assert.equal(doc.getElementById("btn-chat-send").disabled, true);
+  assert.equal(doc.getElementById("chat-input").readOnly, true);
+});
