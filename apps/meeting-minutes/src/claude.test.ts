@@ -181,7 +181,21 @@ test("the summary prompt asks only for real commitments", () => {
 test("the report prompt sets a length budget and asks for cited times", () => {
   const p = reportSystemPrompt("", "");
   assert.match(p, /5[–-]7 pages/);
-  assert.match(p, /\[mm:ss-mm:ss\]/);
+  assert.match(p, /\[start-end\]/);
   assert.doesNotMatch(p, /comprehensive/i);
   assert.doesNotMatch(p, /Keep every concrete/);
+});
+
+test("the prompts keep real clock times and copy stamps exactly, past the hour too", () => {
+  const p = reportSystemPrompt("", "");
+  assert.doesNotMatch(p, /Never write a time anywhere/);
+  assert.match(p, /recording timestamp/);
+  assert.match(p, /h:mm:ss/);
+  assert.match(SUMMARIZE_SYSTEM, /h:mm:ss/);
+  assert.doesNotMatch(p, /\(Nothing else on the heading line/);
+});
+
+test("parseSummary reads an en-dash action-item time", () => {
+  const r = parseSummary(JSON.stringify({ summary: "s", actionItems: [{ task: "T", owner: "O", at: "1:10:03–1:10:40" }] }));
+  assert.deepEqual(r.actionItems, [{ task: "T", owner: "O", start: 4203, end: 4240 }]);
 });

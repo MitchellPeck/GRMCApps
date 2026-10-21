@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { ActionItem, ReportBodyInput } from "./claude";
-import { AudioRange, formatRangeMarker, parseClock, stripRangeMarkers } from "./ranges";
+import { AudioRange, formatRangeMarker, parseClockRange, stripRangeMarkers, withinRange } from "./ranges";
 
 // The minutes are written by Claude from every item's transcript, notes and
 // summary, so the write-up is organized across the whole meeting rather than
@@ -103,7 +103,8 @@ export function consolidateActionItems(items: ReportItemInput[]): string[] {
       const key = `${task.toLowerCase()}|${owner.toLowerCase()}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      const timed = it.range && a.start !== undefined && a.end !== undefined;
+      // A time outside the topic would play some other part of the meeting.
+      const timed = a.start !== undefined && a.end !== undefined && withinRange(it.range, a.start, a.end);
       const marker = timed ? ` ${formatRangeMarker({ ...it.range!, start: a.start!, end: a.end! })}` : "";
       out.push(`- [ ] ${task} — **${owner}** (${it.title})${marker}`);
     }
@@ -111,12 +112,10 @@ export function consolidateActionItems(items: ReportItemInput[]): string[] {
   return out;
 }
 
-// Seconds of slack allowed around a topic's range for a section's citation.
-const CITE_SLACK_SECONDS = 5;
-
 // Turn Claude's body into the stored one: each "### n." heading gets its
 // topic's range, and a "####" heading's "[mm:ss-mm:ss]" citation becomes a
-// range when it reads and falls inside the topic. Anything else is dropped.
+// range when it falls inside the topic, and is dropped otherwise. A bracket
+// that isn't a time ("[carried]") is the heading's own text and stays.
 export function attachRanges(body: string, items: ReportItemInput[]): string {
   let cur: ReportItemInput | null = null;
   return body.split(/\r?\n/).map((line) => {
@@ -126,14 +125,11 @@ export function attachRanges(body: string, items: ReportItemInput[]): string {
       return cur?.range ? `${line.trimEnd()} ${formatRangeMarker(cur.range)}` : line;
     }
     if (/^#{1,3}\s/.test(line)) { cur = null; return line; }
-    const cite = /^(####\s.*?)\s*\[([^\]]*)\]\s*$/.exec(line);
+    const cite = /^(####\s.*?)\s*\[([\d:\s\-–—]+)\]\s*$/.exec(line);
     if (!cite) return line;
-    const [a, b] = cite[2].split("-");
-    const start = parseClock(a ?? ""), end = parseClock(b ?? "");
+    const t = parseClockRange(cite[2]);
     const r: AudioRange | null = cur ? (cur as ReportItemInput).range : null;
-    const inside = r && start !== null && end !== null && end > start
-      && start >= r.start - CITE_SLACK_SECONDS && end <= r.end + CITE_SLACK_SECONDS;
-    return inside ? `${cite[1]} ${formatRangeMarker({ ...r!, start: start!, end: end! })}` : cite[1];
+    return t && withinRange(r, t.start, t.end) ? `${cite[1]} ${formatRangeMarker({ ...r!, ...t })}` : cite[1];
   }).join("\n");
 }
 

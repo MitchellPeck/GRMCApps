@@ -158,9 +158,10 @@ test("saveTranscriptionResult clears a stale summary with the new transcript", {
 
   await saveTranscriptionResult(itemId, [
     { text: "New content.", speaker: "SPEAKER_00", start: 0, end: 2 },
-  ], {}, pool);
+  ], {}, 77, pool);
 
-  const after = await pool.query("SELECT transcript, summary, action_items, status, transcript_source FROM agenda_items WHERE id = $1", [itemId]);
+  const after = await pool.query("SELECT transcript, summary, action_items, status, transcript_source, transcript_recording_id FROM agenda_items WHERE id = $1", [itemId]);
+  assert.equal(Number(after.rows[0].transcript_recording_id), 77);
   assert.equal(after.rows[0].transcript, "Speaker 1: New content.");
   assert.equal(after.rows[0].summary, "");
   assert.deepEqual(after.rows[0].action_items, []);
@@ -175,7 +176,7 @@ const mjob = (meetingId: number): MeetingJob =>
 
 function meetingSpyDeps(over: Partial<MeetingDeps> = {}) {
   const events: string[] = [];
-  const saved: Array<{ itemId: number; segments: DiarizedSegment[]; map: SpeakerMap; order: string[] }> = [];
+  const saved: Array<{ itemId: number; segments: DiarizedSegment[]; map: SpeakerMap; order: string[]; recordingId: number }> = [];
   const maps: SpeakerMap[] = [];
   const deps: MeetingDeps = {
     transcribe: async () => ({ text: "", segments: [] }),
@@ -184,7 +185,7 @@ function meetingSpyDeps(over: Partial<MeetingDeps> = {}) {
     loadMarkers: async () => [],
     fallbackItemId: async () => 500,
     presenterFor: async () => "",
-    saveItem: async (itemId, segments, map, order) => { saved.push({ itemId, segments, map, order }); events.push(`save:${itemId}`); },
+    saveItem: async (itemId, segments, map, order, recordingId) => { saved.push({ itemId, segments, map, order, recordingId }); events.push(`save:${itemId}`); },
     saveMeetingMap: async (_id, map) => { maps.push(map); events.push("map"); },
     log: () => {},
     ...over,
@@ -211,6 +212,8 @@ test("runMeetingJob segments by markers and writes every topic with one map and 
   assert.equal(events[events.length - 1], "status:1:done");
   assert.equal(saved.length, 2);
   const seven = saved.find((s) => s.itemId === 7)!;
+  // The topic remembers which recording its times are on.
+  assert.ok(saved.every((s) => s.recordingId === 10));
   assert.deepEqual(seven.segments.map((s) => s.text), ["intro", "budget"]);
   for (const s of saved) {
     assert.deepEqual(s.map, { SPEAKER_00: "Alice Smith" });

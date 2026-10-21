@@ -57,3 +57,21 @@ export function segmentsRange(segments: DiarizedSegment[], source: "m" | "i", re
   for (const s of segments) { start = Math.min(start, s.start); end = Math.max(end, s.end); }
   return { source, recordingId, start, end };
 }
+
+// "12:40-13:05" (hyphen, en or em dash; h:mm:ss past the hour) to seconds.
+// Null when either end is unreadable or the range runs backwards.
+export function parseClockRange(s: string): { start: number; end: number } | null {
+  const parts = String(s ?? "").split(/\s*[-–—]\s*/);
+  if (parts.length !== 2) return null;
+  const start = parseClock(parts[0]), end = parseClock(parts[1]);
+  return start !== null && end !== null && end > start ? { start, end } : null;
+}
+
+// Seconds of slack allowed around a topic's range for a time cited inside it.
+export const RANGE_SLACK_SECONDS = 5;
+
+// Whether a cited stretch lies inside a topic's range. A citation that falls
+// outside would play some other part of the meeting.
+export function withinRange(r: AudioRange | null, start: number, end: number): boolean {
+  return !!r && start >= r.start - RANGE_SLACK_SECONDS && end <= r.end + RANGE_SLACK_SECONDS;
+}

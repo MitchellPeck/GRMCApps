@@ -135,7 +135,7 @@ test("attachRanges marks topic headings by number and converts in-range sub-sect
     "### 1. Budget <!--t:m12:600.0-1200.0-->",
     "#### Schedule A — Operating <!--t:m12:630.0-720.0-->",
     "#### Schedule B",
-    "#### Schedule C",
+    "#### Schedule C [soon]",
     "- **Income:** $5 [10:31-10:40]",
     "### 2. Roof",
     "#### Gutters",
@@ -186,4 +186,40 @@ test("reportHtml never shows range markers", () => {
 test("reportHtml is unchanged for a report without markers", () => {
   const md = "# Board\n\n## Summary\nMet.\n- [ ] Send — **Bob**";
   assert.match(reportHtml(md, "x"), /<li>☐ Send — <strong>Bob<\/strong><\/li>/);
+});
+
+test("action-item times outside their topic get no play button", () => {
+  const late = { source: "m" as const, recordingId: 12, start: 4200, end: 5100 }; // 1:10:00–1:25:00
+  const items = [item({ id: 5, title: "Finance", range: late, actionItems: [
+    { task: "Hour-less stamp", owner: "Bob", start: 603, end: 640 }, // "10:03-10:40" — topic 1's audio
+    { task: "Right stamp", owner: "Ann", start: 4203, end: 4240 },
+  ] })];
+  assert.deepEqual(consolidateActionItems(items), [
+    "- [ ] Hour-less stamp — **Bob** (Finance)",
+    "- [ ] Right stamp — **Ann** (Finance) <!--t:m12:4203.0-4240.0-->",
+  ]);
+});
+
+test("section cites accept en and em dashes, and keep brackets that aren't times", () => {
+  const items = [item({ id: 1, title: "Budget", range: R })];
+  const body = [
+    "### 1. Budget",
+    "#### Schedule A [10:30–12:00]",
+    "#### Schedule B [10:30 — 12:00]",
+    "#### Schedule C [Restricted Funds]",
+    "#### Motion [carried]",
+  ].join("\n");
+  assert.equal(attachRanges(body, items), [
+    "### 1. Budget <!--t:m12:600.0-1200.0-->",
+    "#### Schedule A <!--t:m12:630.0-720.0-->",
+    "#### Schedule B <!--t:m12:630.0-720.0-->",
+    "#### Schedule C [Restricted Funds]",
+    "#### Motion [carried]",
+  ].join("\n"));
+});
+
+test("a meeting past the hour cites h:mm:ss", () => {
+  const late = { source: "m" as const, recordingId: 12, start: 4200, end: 5100 };
+  const out = attachRanges("### 1. Finance\n#### Schedule A [1:10:30-1:12:00]", [item({ id: 1, title: "Finance", range: late })]);
+  assert.match(out, /#### Schedule A <!--t:m12:4230\.0-4320\.0-->/);
 });

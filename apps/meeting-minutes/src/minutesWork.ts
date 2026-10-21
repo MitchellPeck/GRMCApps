@@ -187,11 +187,14 @@ export async function reportInput(dbPool: Pool, meeting: MeetingRow, items: Agen
   const timing = await Promise.all(items.map(async (it) => {
     const meetingSourced = it.transcript_source === "meeting";
     let range: AudioRange | null = null;
-    if (meetingSourced) {
+    if (it.transcript_recording_id !== null) {
+      range = segmentsRange(it.transcript_segments, meetingSourced ? "m" : "i", it.transcript_recording_id);
+    } else if (meetingSourced) {
+      // Transcribed before the recording was kept with the segments: the
+      // latest recording is the best guess.
       range = meetingRec ? segmentsRange(it.transcript_segments, "m", meetingRec.id) : null;
     } else {
-      // With several recordings appended, the segment times no longer say
-      // which file they belong to.
+      // Likewise, and with several recordings there's no telling which.
       const recs = await listRecordings(dbPool, it.id);
       range = recs.length === 1 ? segmentsRange(it.transcript_segments, "i", recs[0].id) : null;
     }

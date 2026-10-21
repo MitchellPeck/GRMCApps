@@ -1,7 +1,7 @@
 import { Pool } from "pg";
 import { getSetting } from "./settings";
 import { SpeakerMap } from "./transcript";
-import { parseClock } from "./ranges";
+import { parseClockRange } from "./ranges";
 
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 const MODEL = "claude-sonnet-4-6";
@@ -182,8 +182,9 @@ of the same task.
 For each action item, give the owner: the person who agreed to it or was asked
 to do it. The transcript labels speakers by name ("Alice: ..."); use that to
 attribute ownership. Use a real name when it is clear, otherwise "Unassigned".
-Give "at", the stretch of the recording where it was agreed, as "mm:ss-mm:ss"
-taken from the [mm:ss] stamps at the start of transcript turns; use "" when the
+Give "at", the stretch of the recording where it was agreed, as "start-end",
+copying the [mm:ss] stamps at the start of transcript turns exactly as written
+(past the first hour they read h:mm:ss, e.g. 1:10:03); use "" when the
 transcript has no stamps.
 
 Respond with ONLY a JSON object, no prose around it:
@@ -194,11 +195,9 @@ Respond with ONLY a JSON object, no prose around it:
 Use an empty array when there are no action items. Base everything strictly on
 the provided text; never invent tasks, owners, or decisions.`;
 
-// "mm:ss-mm:ss" to a range; nothing when either end is unreadable or reversed.
+// The "at" range of an action item; nothing when it doesn't read.
 function actionTimes(at: unknown): { start: number; end: number } | {} {
-  const [a, b] = String(at ?? "").split("-");
-  const start = parseClock(a ?? ""), end = parseClock(b ?? "");
-  return start !== null && end !== null && end > start ? { start, end } : {};
+  return parseClockRange(String(at ?? "")) ?? {};
 }
 
 // Best-effort recovery from a JSON reply that does not parse (e.g. cut off
@@ -317,7 +316,6 @@ belongs to in parentheses. Write "None recorded." if there were none.
 ## Agenda
 For each agenda item, in the order given, numbered as given:
 ### <n>. <title>
-(Nothing else on the heading line; times for the item are added separately.)
 **Presented by:** <the presenter text given, exactly> (omit the line when none is given)
 Then the item's minutes, organized to fit what was actually presented:
 - When the presenter went through several distinct reports, documents,
@@ -326,8 +324,9 @@ Then the item's minutes, organized to fit what was actually presented:
   one its own "#### <name>" sub-heading in the order presented, with its own
   key figures and comments under it. Name each one as the speaker did. End
   each "####" line with the stretch of the recording it covers, written
-  [mm:ss-mm:ss] and taken from the [mm:ss] stamps at the start of that item's
-  transcript turns; leave it off when the transcript has no stamps.
+  [start-end] and copying the [mm:ss] stamps at the start of that item's
+  transcript turns exactly as written (past the first hour they read h:mm:ss,
+  e.g. [1:10:03-1:14:20]); leave it off when the transcript has no stamps.
   Then put any discussion, decisions and follow-up that concern the item as a
   whole after them.
 - Otherwise, use whichever of these labelled groups have content, each label
@@ -352,7 +351,10 @@ separately.
 Base everything strictly on the material provided. Never invent people,
 facts, figures, or decisions; if a figure was unclear in the recording, leave
 it out rather than guess. Refer to people by the names used in the
-material. Never write a time anywhere except at the end of a "####" line.`;
+material. Never write a recording timestamp ([mm:ss]) anywhere except at the
+end of a "####" line, and nothing after the title on a "###" line. Times of
+day that were said in the meeting ("adjourned at 8:47 PM", "next meeting at
+7:00 PM") are part of the minutes; keep them.`;
 
 // The organization's own guidance, from Settings, added to the system prompt:
 // standing instructions, and a past report to take the pattern from.

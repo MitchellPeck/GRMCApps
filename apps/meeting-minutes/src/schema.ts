@@ -143,6 +143,11 @@ ALTER TABLE meetings ADD COLUMN IF NOT EXISTS report_sources jsonb NOT NULL DEFA
 -- Later than report_generated_at means the minutes have been edited.
 ALTER TABLE meetings ADD COLUMN IF NOT EXISTS report_updated_at timestamptz;
 
+-- The recording a topic's transcript_segments are timed against: a
+-- meeting_recordings id for whole-meeting topics, an item_recordings id
+-- otherwise. NULL for topics transcribed before it was kept.
+ALTER TABLE agenda_items ADD COLUMN IF NOT EXISTS transcript_recording_id bigint;
+
 -- People at one meeting who are not in the library: visitors, speakers.
 -- Guests are present by definition.
 CREATE TABLE IF NOT EXISTS meeting_guests (

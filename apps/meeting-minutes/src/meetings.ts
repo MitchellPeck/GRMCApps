@@ -55,6 +55,7 @@ export interface AgendaItem {
   summarize_error: string;
   speaker_stats: SpeakerStat[];
   transcript_source: string;
+  transcript_recording_id: number | null;
   presenter_ids: number[];
   guest_presenter_ids: number[];
 }
@@ -79,6 +80,7 @@ function mapItemRow(row: any, presenterIds: number[], guestPresenterIds: number[
     summarize_error: row.summarize_error ?? "",
     speaker_stats: speakerStats(Array.isArray(row.transcript_segments) ? row.transcript_segments : []),
     transcript_source: row.transcript_source ?? "",
+    transcript_recording_id: row.transcript_recording_id == null ? null : Number(row.transcript_recording_id),
     presenter_ids: presenterIds,
     guest_presenter_ids: guestPresenterIds,
   };
@@ -400,6 +402,9 @@ export async function updateAgendaItem(
     guestPresenterIds?: number[];
     transcriptSource?: string;
     speakerOrder?: string[];
+    // Which recording new transcriptSegments are timed against; segments
+    // given without it are not tied to any recording.
+    transcriptRecordingId?: number | null;
   }
 ): Promise<Result<{}>> {
   const existing = await getAgendaItem(pool, itemId);
@@ -425,7 +430,10 @@ export async function updateAgendaItem(
     if (fields.transcriptSegments !== undefined || fields.speakerMap !== undefined) {
       const segs = fields.transcriptSegments !== undefined ? fields.transcriptSegments : existing.transcript_segments;
       const map = fields.speakerMap !== undefined ? fields.speakerMap : existing.speaker_map;
-      if (fields.transcriptSegments !== undefined) add("transcript_segments", JSON.stringify(segs));
+      if (fields.transcriptSegments !== undefined) {
+        add("transcript_segments", JSON.stringify(segs));
+        add("transcript_recording_id", fields.transcriptRecordingId ?? null);
+      }
       if (fields.speakerMap !== undefined) add("speaker_map", JSON.stringify(map));
       add("transcript", renderTranscript(segs, map, fields.speakerOrder));
     } else if (fields.transcript !== undefined) add("transcript", fields.transcript);

@@ -491,3 +491,27 @@ test("an edited report keeps its generation time and reads as edited", { skip: !
     await pool.end();
   }
 });
+
+test("a topic's play range is on the recording its segments came from", { skip: !url }, async () => {
+  const pool = new Pool({ connectionString: url });
+  await reset(pool);
+  try {
+    const { reportInput } = await import("./minutesWork");
+    const m = await createMeeting(pool, { title: "Two halves", meetingDate: "", location: "", description: "", email: "", name: "" });
+    assert.ok(m.ok);
+    const rec = async () => Number((await pool.query(
+      "INSERT INTO meeting_recordings (meeting_id, storage_path) VALUES ($1, '/tmp/none.webm') RETURNING id", [m.id])).rows[0].id);
+    const first = { id: await rec() }, second = { id: await rec() };
+    const a = await addAgendaItem(pool, m.id, "Before the break", "");
+    const b = await addAgendaItem(pool, m.id, "After the break", "");
+    assert.ok(a.ok && b.ok);
+    const seg = (start: number) => [{ text: "x", speaker: "S0", start, end: start + 5 }];
+    await updateAgendaItem(pool, a.id, { transcriptSegments: seg(100), transcriptSource: "meeting", transcriptRecordingId: first.id });
+    await updateAgendaItem(pool, b.id, { transcriptSegments: seg(30), transcriptSource: "meeting", transcriptRecordingId: second.id });
+    const input = await reportInput(pool, (await getMeeting(pool, m.id))!, await listAgendaItems(pool, m.id));
+    assert.deepEqual(input.items.map((it) => it.range && it.range.recordingId), [first.id, second.id]);
+    assert.deepEqual(input.items.map((it) => it.range && it.range.start), [100, 30]);
+  } finally {
+    await pool.end();
+  }
+});

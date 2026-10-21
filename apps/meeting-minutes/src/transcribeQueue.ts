@@ -125,7 +125,7 @@ export interface MeetingDeps {
   loadMarkers(recordingId: number): Promise<TopicMarker[]>;
   fallbackItemId(meetingId: number): Promise<number>;
   presenterFor(itemId: number): Promise<string>;
-  saveItem(itemId: number, segments: DiarizedSegment[], map: SpeakerMap, order: string[]): Promise<void>;
+  saveItem(itemId: number, segments: DiarizedSegment[], map: SpeakerMap, order: string[], recordingId: number): Promise<void>;
   saveMeetingMap(meetingId: number, map: SpeakerMap): Promise<void>;
   log(message: string): void; // must not throw
 }
@@ -150,7 +150,7 @@ export async function runMeetingJob(d: MeetingDeps, job: MeetingJob): Promise<vo
   }
   const order = chronologicalSpeakerOrder([...byItem.values()]);
   for (const [itemId, segs] of byItem) {
-    await d.saveItem(itemId, segs, map, order);
+    await d.saveItem(itemId, segs, map, order, job.recordingId);
   }
   await d.saveMeetingMap(job.meetingId, map);
   await d.setStatus(job.meetingId, "done");
@@ -254,11 +254,13 @@ export async function saveTranscriptionResult(
   itemId: number,
   segments: DiarizedSegment[],
   map: SpeakerMap,
+  recordingId: number,
   dbPool: Pool = pool
 ): Promise<void> {
   const withPresenter = await withPresenterAssignment(itemId, segments, map, dbPool);
   await updateAgendaItem(dbPool, itemId, {
     transcriptSegments: segments,
+    transcriptRecordingId: recordingId,
     speakerMap: withPresenter,
     summary: "",
     actionItems: [],
@@ -283,7 +285,7 @@ const realItemDeps: QueueDeps = {
       if (item) await advanceReport(item.meeting_id);
     }
   },
-  saveResult: (job, segments, map) => saveTranscriptionResult(job.itemId, segments, map),
+  saveResult: (job, segments, map) => saveTranscriptionResult(job.itemId, segments, map, job.recordingId),
   log: realLog,
 };
 
@@ -372,10 +374,12 @@ async function saveMeetingItem(
   itemId: number,
   segments: DiarizedSegment[],
   map: SpeakerMap,
-  order: string[]
+  order: string[],
+  recordingId: number
 ): Promise<void> {
   await updateAgendaItem(pool, itemId, {
     transcriptSegments: segments,
+    transcriptRecordingId: recordingId,
     speakerMap: map,
     summary: "",
     actionItems: [],
