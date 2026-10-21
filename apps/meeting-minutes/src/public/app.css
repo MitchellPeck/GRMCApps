@@ -221,3 +221,13 @@ body.has-rec-banner .mtg-nav{top:64px}
   .mtg-nav-select{display:block}
   .minutes-layout:has(.chat-panel:not([hidden])){grid-template-columns:minmax(0,1fr)}
 }
+
+/* ── Minutes editor ─────────────────────────────────────────────────────── */
+.report-editor .rblock{border-radius:4px;padding:1px 6px;margin:0 -6px}
+.report-editor.editable .rblock{cursor:text}
+.report-editor.editable .rblock:hover{background:var(--bg-soft,#f6f7f9)}
+.report-editor .rblock ul{margin:0}
+.report-editor .rblock p{margin:4px 0}
+.report-editor .rblock-edit{width:100%;font:inherit;line-height:1.5;padding:4px 6px;min-height:2.2em;resize:vertical}
+.report-save.err{color:var(--danger,#b42318);font-weight:600}
+@media print { #report-edit-hint, #report-save { display:none !important; } }

@@ -902,3 +902,90 @@ test("the menu shows how things stand", { skip }, () => {
   w.eval(`state.report.status = "pending"; renderReportState();`);
   assert.equal(hint('[data-sec="minutes"]'), "generating…");
 });
+
+// ── The Minutes editor ──────────────────────────────────────────────────────
+
+const REPORT = "# Board\n\n## Summary\nThe board met.\n\n### 1. Budget <!--t:m12:600.0-1200.0-->\n- **Income:** $5\n- [ ] Send — **Bob** (Budget) <!--t:m12:700.0-720.0-->";
+
+test("report lines split off their markers and join back the same", { skip }, () => {
+  const { w } = boot();
+  const lines = w.eval(`reportLines(${JSON.stringify(REPORT)})`);
+  assert.equal(lines.length, 6);
+  assert.deepEqual({ ...lines[3] }, { text: "### 1. Budget", marker: "<!--t:m12:600.0-1200.0-->" });
+  assert.equal(w.eval(`joinReportLines(reportLines(${JSON.stringify(REPORT)}))`), REPORT);
+});
+
+test("replacing a line keeps its marker, removes it when emptied, and splits a paste", { skip }, () => {
+  const { w } = boot();
+  const md = (expr: string) => w.eval(`joinReportLines(${expr})`);
+  const L = `reportLines(${JSON.stringify(REPORT)})`;
+  assert.match(md(`replaceLine(${L}, 3, "### 1. Budget and Finance")`), /### 1\. Budget and Finance <!--t:m12:600\.0-1200\.0-->/);
+  assert.doesNotMatch(md(`replaceLine(${L}, 2, "   ")`), /The board met/);
+  const split = md(`replaceLine(${L}, 2, "First line.\\n\\nSecond line.")`);
+  assert.match(split, /## Summary\nFirst line\.\nSecond line\.\n/);
+  assert.equal(w.eval(`estimatePagesJS("word ".repeat(800))`), 2);
+});
+
+function bootMinutes(answer: (path: string, opts: any) => any = () => ({ ok: true, report: { status: "idle", changes: [], pages: 1 } })) {
+  const b = boot();
+  const calls = stubFetch(b.w, answer);
+  b.w.eval(`state.meeting.report = ${JSON.stringify(REPORT)}; state.meeting.report_generated_at = "2026-04-14T10:00:00Z";
+    state.report = { status: "idle", error: "", changes: [], pages: 1 }; state.section = "minutes"; renderDetail();`);
+  return { ...b, calls };
+}
+
+test("clicking a line edits it without showing marker text, and saving keeps the marker", { skip }, async () => {
+  const { w, doc, calls } = bootMinutes();
+  const block = doc.querySelector('#report-editor .rblock[data-line="3"]');
+  block.dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  const ta = doc.querySelector("#report-editor textarea.rblock-edit");
+  assert.ok(ta, "textarea opened");
+  assert.equal(ta.value, "### 1. Budget");
+  ta.value = "### 1. Budget and Finance";
+  ta.dispatchEvent(new w.Event("blur"));
+  assert.match(doc.getElementById("report-save").textContent, /Saving/);
+  await new Promise((r) => setTimeout(r, 950));
+  const puts = calls.filter((c) => c.method === "PUT" && c.path === "/api/meetings/42/report");
+  assert.equal(puts.length, 1);
+  assert.match(puts[0].body.markdown, /### 1\. Budget and Finance <!--t:m12:600\.0-1200\.0-->/);
+  assert.match(doc.getElementById("report-save").textContent, /Saved/);
+  assert.ok(doc.querySelector('#report-editor .rblock[data-line="3"] .sec-play'), "▶ still there");
+});
+
+test("a save the server refuses shows why and keeps the edit", { skip }, async () => {
+  const { w, doc } = bootMinutes((p, o) => o.method === "PUT"
+    ? { ok: false, status: 409, error: "The report is being written. Try again when it finishes, or cancel it." } : { ok: true });
+  doc.querySelector('#report-editor .rblock[data-line="2"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  const ta = doc.querySelector("#report-editor textarea.rblock-edit");
+  ta.value = "The board met at length.";
+  ta.dispatchEvent(new w.Event("blur"));
+  await new Promise((r) => setTimeout(r, 950));
+  assert.match(doc.getElementById("report-save").textContent, /being written/);
+  assert.match(doc.getElementById("report-editor").textContent, /The board met at length\./);
+});
+
+test("Escape cancels an edit", { skip }, () => {
+  const { w, doc, calls } = bootMinutes();
+  doc.querySelector('#report-editor .rblock[data-line="2"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  const ta = doc.querySelector("#report-editor textarea.rblock-edit");
+  ta.value = "nope";
+  ta.dispatchEvent(new w.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  assert.match(doc.getElementById("report-editor").textContent, /The board met\./);
+  assert.equal(calls.filter((c) => c.method === "PUT").length, 0);
+});
+
+test("while the report is being written, or someone else edits, lines don't open", { skip }, () => {
+  const { w, doc } = bootMinutes();
+  w.eval(`state.report.status = "pending"; renderReportState();`);
+  doc.querySelector('#report-editor .rblock[data-line="2"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  assert.equal(doc.querySelector("#report-editor textarea"), null);
+  w.eval(`state.report.status = "idle"; state.lock = { held: false, holder: { name: "Bob" } }; renderDetail();`);
+  doc.querySelector('#report-editor .rblock[data-line="2"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  assert.equal(doc.querySelector("#report-editor textarea"), null);
+});
+
+test("no report yet: no editor", { skip }, () => {
+  const { w, doc } = boot();
+  w.eval(`state.meeting.report = ""; state.section = "minutes"; renderDetail();`);
+  assert.equal(doc.getElementById("report-editor"), null);
+});

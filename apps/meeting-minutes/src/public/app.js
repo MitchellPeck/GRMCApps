@@ -336,6 +336,7 @@ document.querySelectorAll('.tab').forEach(function(t){
   t.addEventListener('click', function(){ switchTab(t.getAttribute('data-tab')); });
 });
 function showList(){
+  if(reportSaveTimer) saveReportNow();
   stopRecording();
   stopPolling();
   // Summarize the item left open, so nothing is lost on the way out; let go of
@@ -636,9 +637,10 @@ function renderDetail(){
     +'<a class="btn btn-secondary" id="btn-report-gdoc" href="/api/meetings/'+m.id+'/google-doc" target="_blank" rel="noopener">Open in Google Docs</a> '
     +'<button class="btn btn-secondary" id="btn-report-print">Print PDF</button>'
     +' <span class="hint" id="report-pages"></span>'
+    +' <span class="hint report-save" id="report-save"></span>'
     +'</span></div>'
     +'<div class="hint" id="report-hint">The report waits for any transcription and summaries still in progress, then writes itself. You can close this page meanwhile.</div>'
-    +'<div id="report-box" style="margin-top:14px">'+(m.report?'<div class="report">'+renderMarkdown(m.report)+'</div>':'')+'</div>'
+    +'<div id="report-box" style="margin-top:14px">'+reportEditorHtml()+'</div>'
     // The chat (plan 5) sits beside the minutes; hidden while it has nothing.
     +'</div><aside id="chat-panel" class="chat-panel" hidden></aside></div></section>';
 
@@ -671,6 +673,106 @@ function renderDetail(){
   renderReportState();
   showSection(state.section || defaultSection(), state.topicFocus);
 }
+
+// ── The Minutes editor ──────────────────────────────────────────────────────
+// The report is edited a line at a time. Each line shows rendered, with its ▶;
+// clicking it opens that line's Markdown (its time-range marker kept aside) in
+// a box, and leaving the box puts the text back — several lines if several were
+// typed, none if it was emptied — and saves shortly after.
+
+function reportLines(md){
+  return String(md||'').split(/\r?\n/).filter(function(l){ return l.trim(); }).map(function(l){
+    var m=l.match(RANGE_MARKER);
+    return m ? { text: l.slice(0, m.index), marker: m[0].trim() } : { text: l, marker: '' };
+  });
+}
+function joinReportLines(lines){
+  return lines.map(function(l, i){
+    var line=l.text+(l.marker ? ' '+l.marker : '');
+    return (i>0 && /^#/.test(l.text) ? '\n' : '')+line;
+  }).join('\n');
+}
+function replaceLine(lines, index, newText){
+  var pieces=String(newText||'').split(/\r?\n/).map(function(x){ return x.replace(/\s+$/,''); })
+    .filter(function(x){ return x.trim(); });
+  var out=lines.slice(0, index);
+  pieces.forEach(function(text, i){ out.push({ text: text, marker: i===0 ? lines[index].marker : '' }); });
+  return out.concat(lines.slice(index+1));
+}
+function estimatePagesJS(md){
+  var words=String(md||'').replace(/<!--t:[^>]*-->/g,'').split(/\s+/).filter(Boolean).length;
+  return words ? Math.max(0.5, Math.round(words/400*2)/2) : 0;
+}
+function reportEditable(){
+  return !!(state.meeting && state.meeting.report) && !readOnly()
+    && !(state.report && state.report.status==='pending');
+}
+function reportEditorHtml(){
+  var m=state.meeting;
+  if(!m || !m.report) return '';
+  return '<div class="report report-editor" id="report-editor">'
+    +reportLines(m.report).map(function(l, i){
+      return '<div class="rblock" data-line="'+i+'">'+renderMarkdown(l.text+(l.marker?' '+l.marker:''))+'</div>';
+    }).join('')+'</div>'
+    +'<div class="hint" id="report-edit-hint">Click any line to change it. Changes save as you go.</div>';
+}
+function renderReportEditor(){
+  var box=document.getElementById('report-box'); if(box) box.innerHTML=reportEditorHtml();
+  var pg=document.getElementById('report-pages');
+  if(pg && state.meeting && state.meeting.report){
+    var n=estimatePagesJS(state.meeting.report); pg.textContent='≈ '+n+' page'+(n===1?'':'s');
+  }
+}
+document.addEventListener('click', function(e){
+  var block=e.target && e.target.closest ? e.target.closest('#report-editor .rblock') : null;
+  if(!block || e.target.closest('.sec-play, textarea')) return;
+  if(!reportEditable()) return;
+  var i=Number(block.getAttribute('data-line'));
+  var line=reportLines(state.meeting.report)[i]; if(!line) return;
+  var ta=document.createElement('textarea');
+  ta.className='rblock-edit'; ta.value=line.text; ta.rows=Math.max(1, Math.ceil(line.text.length/80));
+  block.innerHTML=''; block.appendChild(ta); ta.focus();
+  var done=false;
+  ta.addEventListener('keydown', function(ev){
+    if(ev.key==='Escape'){ done=true; renderReportEditor(); }
+  });
+  ta.addEventListener('blur', function(){
+    if(done) return; done=true;
+    if(ta.value===line.text){ renderReportEditor(); return; }
+    state.meeting.report=joinReportLines(replaceLine(reportLines(state.meeting.report), i, ta.value));
+    renderReportEditor();
+    scheduleReportSave();
+  });
+});
+
+var reportSaveTimer=null, REPORT_SAVE_MS=800;
+function reportSaveStatus(text, kind){
+  var el=document.getElementById('report-save'); if(!el) return;
+  el.textContent=text; el.className='hint report-save'+(kind?' '+kind:'');
+}
+function scheduleReportSave(){
+  reportSaveStatus('Saving…');
+  if(reportSaveTimer) clearTimeout(reportSaveTimer);
+  reportSaveTimer=setTimeout(saveReportNow, REPORT_SAVE_MS);
+}
+function saveReportNow(keepalive){
+  if(reportSaveTimer){ clearTimeout(reportSaveTimer); reportSaveTimer=null; }
+  if(!state.meeting) return Promise.resolve();
+  var mid=state.meeting.id, md=state.meeting.report;
+  if(keepalive){
+    try { fetch('/api/meetings/'+mid+'/report', { method:'PUT', keepalive:true,
+      headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({ markdown: md }) }); } catch(e){}
+    return Promise.resolve();
+  }
+  return api('/api/meetings/'+mid+'/report', { method:'PUT', body:{ markdown: md } }).then(function(res){
+    if(!state.meeting || state.meeting.id!==mid) return;
+    if(!res.ok){ reportSaveStatus(res.error||'Could not save.', 'err'); return; }
+    if(res.report){ state.report=res.report; }
+    reportSaveStatus('Saved');
+  });
+}
+// Leaving with a save still waiting: send it anyway.
+window.addEventListener('pagehide', function(){ if(reportSaveTimer) saveReportNow(true); });
 
 // ── Sections and the side menu ──────────────────────────────────────────────
 var SECTIONS=[['details','Details'],['people','People'],['agenda','Agenda'],['recording','Recording'],['speakers','Speakers'],['minutes','Minutes']];
@@ -2144,7 +2246,7 @@ document.addEventListener('click', function(e){
 
 function showReport(markdown){
   state.meeting.report=markdown;
-  document.getElementById('report-box').innerHTML='<div class="report">'+renderMarkdown(markdown)+'</div>';
+  document.getElementById('report-box').innerHTML=reportEditorHtml();
 }
 
 // The report controls follow the server: generating, failed, or ready — and,
@@ -2198,6 +2300,11 @@ function renderReportState(){
       : (has && r.status!=='pending' ? '<div class="hint report-current">Up to date with the agenda item summaries'
         +(r.generatedAt?' &middot; generated '+esc(fmtDate(r.generatedAt)):'')+'.</div>' : '');
   }
+  var eh=document.getElementById('report-edit-hint');
+  if(eh) eh.textContent = readOnly() ? 'Someone else is editing these minutes.'
+    : r.status==='pending' ? 'The report is being written; editing opens again when it’s done.'
+    : 'Click any line to change it. Changes save as you go.';
+  var ed=document.getElementById('report-editor'); if(ed) ed.classList.toggle('editable', reportEditable());
   renderMeetingNav();
   applyReadOnly();
 }
