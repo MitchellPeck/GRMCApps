@@ -7,6 +7,8 @@ import { config } from "../config";
 import { extractAgendaItems, isSupportedAgendaType } from "../claude";
 import { reportHtml } from "../report";
 import { stripRangeMarkers } from "../ranges";
+import { lockGuard } from "../lockGuard";
+import { acquireLock, getLock, releaseLock } from "../locks";
 import { fixWords, listChanges, renameTopicSpeakers, undoChange } from "../fixes";
 import {
   EDIT_SUMMARY_DELAY_MS, itemHasContent, reportState, requestReport, requestSummary,
@@ -80,6 +82,13 @@ function messagePage(reply: FastifyReply, status: number, title: string, text: s
 
 // One section of a stored recording as MP3, streamed, for the ▶ on a part of
 // the minutes. start/end are seconds on that recording's timeline.
+// Who holds a meeting's lock, as the caller sees it. Null when nobody does.
+async function lockFor(meetingId: number, email: string): Promise<{ held: boolean; holder: { email: string; name: string } } | null> {
+  const l = await getLock(pool, meetingId);
+  if (!l || !l.live) return null;
+  return { held: l.lock.email === email, holder: { email: l.lock.email, name: l.lock.name } };
+}
+
 export async function sendSection(
   reply: FastifyReply,
   storagePath: string | undefined,
@@ -105,6 +114,25 @@ export async function sendSection(
 }
 
 export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
+  // One editor per meeting: every write below goes through its lock.
+  app.addHook("preHandler", lockGuard(pool));
+
+  // Take, or keep alive, the lock on a meeting (the page calls this when it
+  // opens a meeting and every 30 seconds after). Not an edit.
+  app.post("/api/meetings/:id/lock", async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    if (!Number.isFinite(id) || !(await getMeeting(pool, id))) { reply.code(404); return { ok: false, error: "Meeting not found." }; }
+    const r = await acquireLock(pool, id, getIdentity(req));
+    return { ok: true, held: r.held, holder: { email: r.lock.email, name: r.lock.name } };
+  });
+
+  app.delete("/api/meetings/:id/lock", async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    if (!Number.isFinite(id)) { reply.code(404); return { ok: false, error: "Meeting not found." }; }
+    await releaseLock(pool, id, getIdentity(req).email);
+    return { ok: true };
+  });
+
   // List all meetings.
   app.get("/api/meetings", async () => {
     try { return { ok: true, meetings: await listMeetings(pool) }; }
@@ -133,6 +161,7 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
       meetingSpeakerStats,
       guests: await listGuests(pool, id),
       report: await reportState(pool, meeting),
+      lock: await lockFor(id, getIdentity(req).email),
     };
   });
 
