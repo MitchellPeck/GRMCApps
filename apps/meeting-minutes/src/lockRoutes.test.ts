@@ -130,5 +130,9 @@ test("chat routes: empty messages and a missing API key are refused clearly; his
   const other = await app.inject({ method: "POST", url: `/api/meetings/${id}/chat`, headers: B, payload: { message: "Hi" } });
   assert.equal(other.statusCode, 423, "the chat edits as the person using it, so it needs the lock");
   const h = JSON.parse((await app.inject({ url: `/api/meetings/${id}/chat`, headers: B })).body);
-  assert.deepEqual(h, { ok: true, messages: [] });
+  assert.deepEqual(h, { ok: true, messages: [], working: false });
+  await pool.query("INSERT INTO chat_messages (meeting_id, role, content) VALUES ($1, 'user', '[{\"type\":\"text\",\"text\":\"Hi\"}]')", [id]);
+  const reset = await app.inject({ method: "POST", url: `/api/meetings/${id}/chat/reset`, headers: A });
+  assert.equal(reset.statusCode, 200);
+  assert.deepEqual(JSON.parse((await app.inject({ url: `/api/meetings/${id}/chat`, headers: A })).body).messages, []);
 });

@@ -44,7 +44,19 @@ export async function chatTurn(
   who: { email: string; name: string },
   model: ChatModel
 ): Promise<{ reply: string; cards: ChatCard[] }> {
-  const history = (await loadChatHistory(pool, meetingId)).map((r) => ({ role: r.role, content: r.content }) as Anthropic.Beta.BetaMessageParam);
+  const rows = await loadChatHistory(pool, meetingId);
+  // A turn interrupted between the model's tool call and its results (a crash
+  // or restart) is closed by appending the missing results, never by editing.
+  const last = rows[rows.length - 1];
+  if (last?.role === "assistant") {
+    const open = (last.content as any[]).filter((b) => b.type === "tool_use");
+    if (open.length) {
+      const results = open.map((b) => ({ type: "tool_result", tool_use_id: b.id, content: "Interrupted before it ran.", is_error: true }));
+      await appendChat(pool, meetingId, "user", results);
+      rows.push({ id: 0, role: "user", content: results, cards: [], created_by: "", created_at: "" });
+    }
+  }
+  const history = rows.map((r) => ({ role: r.role, content: r.content }) as Anthropic.Beta.BetaMessageParam);
   const user: Anthropic.Beta.BetaMessageParam = { role: "user", content: [{ type: "text", text }] };
   history.push(user);
   await appendChat(pool, meetingId, "user", user.content as unknown[], [], who.email);
@@ -68,8 +80,12 @@ export async function chatTurn(
         tools: CHAT_TOOLS as Anthropic.Beta.BetaToolUnion[],
         messages: history,
         output_config: { effort: "medium" },
+        // If the stored history ever stops matching what a thinking block was
+        // produced from (say, after these instructions change), drop that
+        // block rather than fail the whole conversation.
+        thinking: { type: "adaptive", block_binding: { prefix_mismatch_behavior: "drop_block" } } as any,
         cache_control: { type: "ephemeral" },
-        betas: ["server-side-fallback-2026-07-01"],
+        betas: ["server-side-fallback-2026-07-01", "thinking-binding-controls-2026-08-01"],
         fallbacks: "default",
       });
     } catch (e) {
@@ -77,7 +93,7 @@ export async function chatTurn(
       return finish("Sorry, I couldn’t finish that: the AI service didn’t respond. Please try again.");
     }
 
-    if (res.stop_reason === "refusal") return finish("I can't help with that one.");
+    if (res.stop_reason === "refusal") return finish([...replies, "I can't help with that one."].join("\n\n"));
     const said = textOf(res.content);
     if (said) replies.push(said);
     const toolUses = res.content.filter((b): b is Anthropic.Beta.BetaToolUseBlock => b.type === "tool_use");
@@ -87,7 +103,14 @@ export async function chatTurn(
       // Cards were stored with the tool results that made them.
       await appendChat(pool, meetingId, "assistant", res.content as unknown[], [], "");
       history.push({ role: "assistant", content: res.content as Anthropic.Beta.BetaContentBlockParam[] });
-      if (toolUses.length) return finish("That answer was cut short. Could you ask again, a step at a time?");
+      if (toolUses.length) {
+        // Its tool calls were cut off: answer each one, unrun, so the history
+        // stays valid.
+        await appendChat(pool, meetingId, "user", toolUses.map((tu) => ({
+          type: "tool_result", tool_use_id: tu.id, content: "Cut off before it finished; not run.", is_error: true,
+        })));
+        return finish("That answer was cut short. Could you ask again, a step at a time?");
+      }
       return { reply: replies.join("\n\n") || "Done.", cards };
     }
 
@@ -114,6 +137,23 @@ export async function chatTurn(
   return finish("I stopped there: that was taking too many steps. Tell me what's left and I'll carry on.");
 }
 
+// One turn at a time per meeting, run in the background: a turn can take a
+// minute or more, longer than a proxy will hold a request open. The page polls
+// chatDisplay / chatWorking for the result.
+const running = new Map<number, Promise<void>>();
+export function chatWorking(meetingId: number): boolean { return running.has(meetingId); }
+export function waitForChat(meetingId: number): Promise<void> { return running.get(meetingId) ?? Promise.resolve(); }
+export function startChatTurn(
+  pool: Pool, meetingId: number, text: string, who: { email: string; name: string }, model: ChatModel
+): boolean {
+  if (running.has(meetingId)) return false;
+  const job = chatTurn(pool, meetingId, text, who, model)
+    .then(() => undefined, (e) => { console.error(`[chat] meeting ${meetingId}: ${(e as Error).message}`); })
+    .finally(() => running.delete(meetingId));
+  running.set(meetingId, job);
+  return true;
+}
+
 // The conversation as the page shows it: what people wrote, and what the chat
 // said back (with its cards), one entry per user message. Tool calls and their
 // results are not shown.
@@ -122,6 +162,9 @@ export async function chatDisplay(
   meetingId: number
 ): Promise<Array<{ role: "user" | "assistant"; text: string; cards: ChatCard[]; created_at: string }>> {
   const out: Array<{ role: "user" | "assistant"; text: string; cards: ChatCard[]; created_at: string }> = [];
+  const undone = new Set((await pool.query(
+    "SELECT id FROM meeting_changes WHERE meeting_id = $1 AND undone_at IS NOT NULL", [meetingId]
+  )).rows.map((r) => Number(r.id)));
   for (const row of await loadChatHistory(pool, meetingId)) {
     const blocks = row.content as any[];
     if (row.role === "user" && blocks.some((b) => b.type === "text")) {
@@ -137,7 +180,8 @@ export async function chatDisplay(
       const t = blocks.filter((b) => b.type === "text").map((b) => String(b.text).trim()).filter(Boolean).join("\n\n");
       if (t) last.text = last.text ? `${last.text}\n\n${t}` : t;
     }
-    last.cards.push(...(row.cards as ChatCard[]));
+    last.cards.push(...(row.cards as ChatCard[]).map((c) =>
+      c.kind === "change" && c.changeId && undone.has(c.changeId) ? { ...c, undone: true } : c));
   }
   return out;
 }

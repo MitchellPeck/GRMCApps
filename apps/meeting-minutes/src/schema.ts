@@ -186,6 +186,8 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   created_at  timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS chat_messages_meeting_idx ON chat_messages (meeting_id, id);
+-- "Start over" sets a conversation aside rather than deleting it.
+ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS archived_at timestamptz;
 
 -- People at one meeting who are not in the library: visitors, speakers.
 -- Guests are present by definition.

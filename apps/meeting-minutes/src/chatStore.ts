@@ -33,11 +33,16 @@ export async function appendChat(
 export async function loadChatHistory(pool: Pool, meetingId: number): Promise<ChatRow[]> {
   const r = await pool.query(
     `SELECT id, role, content::text AS content, cards::text AS cards, created_by, created_at
-       FROM chat_messages WHERE meeting_id = $1 ORDER BY id`,
+       FROM chat_messages WHERE meeting_id = $1 AND archived_at IS NULL ORDER BY id`,
     [meetingId]
   );
   return r.rows.map((row) => ({
     id: Number(row.id), role: row.role, content: JSON.parse(row.content), cards: JSON.parse(row.cards),
     created_by: row.created_by, created_at: row.created_at,
   }));
+}
+
+// "Start over": the conversation so far is set aside (kept, not shown or sent).
+export async function archiveChat(pool: Pool, meetingId: number): Promise<void> {
+  await pool.query("UPDATE chat_messages SET archived_at = now() WHERE meeting_id = $1 AND archived_at IS NULL", [meetingId]);
 }

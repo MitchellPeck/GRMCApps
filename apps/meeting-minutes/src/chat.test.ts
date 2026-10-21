@@ -61,8 +61,10 @@ test("a tool turn then an answer: tool results go back together, the reply and c
   assert.equal(s.calls[0].model, "claude-opus-5-5");
   assert.deepEqual(s.calls[0].output_config, { effort: "medium" });
   assert.equal(s.calls[0].fallbacks, "default");
-  assert.deepEqual(s.calls[0].betas, ["server-side-fallback-2026-07-01"]);
-  assert.equal(s.calls[0].thinking, undefined);
+  assert.ok(s.calls[0].betas.includes("server-side-fallback-2026-07-01"));
+  // History edits (e.g. a later prompt change) drop stale thinking instead of failing.
+  assert.deepEqual(s.calls[0].thinking, { type: "adaptive", block_binding: { prefix_mismatch_behavior: "drop_block" } });
+  assert.ok(s.calls[0].betas.includes("thinking-binding-controls-2026-08-01"));
   assert.equal(s.calls[0].tool_choice, undefined);
   const h = await store.loadChatHistory(pool, mid);
   assert.deepEqual(h.map((x: any) => x.role), ["user", "assistant", "user", "assistant"]);
@@ -131,4 +133,77 @@ test("the display history shows people's words and the chat's answers, with card
   const d = await chat.chatDisplay(pool, mid);
   assert.deepEqual(d.map((x: any) => [x.role, x.text]), [["user", "Jon not John"], ["assistant", "Let me fix that.\n\nDone."]]);
   assert.equal(d[1].cards.length, 1);
+});
+
+test("an answer cut off mid-tool-call still leaves every tool_use answered", { skip: !url }, async () => {
+  const mid = await setup();
+  const s = scripted([{ stop_reason: "max_tokens", content: [toolUse("t9", "get_report", {})] }]);
+  const r = await chat.chatTurn(pool, mid, "Do a lot", who, s.model);
+  assert.match(r.reply, /cut short/);
+  const h = await store.loadChatHistory(pool, mid);
+  assert.deepEqual(h.map((x: any) => x.role), ["user", "assistant", "user", "assistant"]);
+  assert.equal(h[2].content[0].type, "tool_result");
+  assert.equal(h[2].content[0].tool_use_id, "t9");
+});
+
+test("a history left with an unanswered tool call (a crash) is repaired by appending, not editing", { skip: !url }, async () => {
+  const mid = await setup();
+  await store.appendChat(pool, mid, "user", [text("Before the crash")]);
+  await store.appendChat(pool, mid, "assistant", [toolUse("tc", "get_report", {})]);
+  const s = scripted([{ content: [text("Back.")] }]);
+  await chat.chatTurn(pool, mid, "Hello again", who, s.model);
+  const msgs = s.calls[0].messages;
+  assert.equal(msgs[1].content[0].type, "tool_use");
+  assert.equal(msgs[2].role, "user");
+  assert.equal(msgs[2].content[0].type, "tool_result");
+  assert.equal(msgs[2].content[0].tool_use_id, "tc");
+  assert.deepEqual(msgs[msgs.length - 1], { role: "user", content: [{ type: "text", text: "Hello again" }] });
+});
+
+test("one message at a time per meeting; the turn runs in the background", { skip: !url }, async () => {
+  const mid = await setup();
+  let release: () => void = () => {};
+  const gate = new Promise<void>((r) => { release = r; });
+  const model = { create: async (params: any) => { await gate; return { stop_reason: "end_turn", content: [text("Ok.")], model: params.model }; } };
+  assert.equal(chat.startChatTurn(pool, mid, "First", who, model), true);
+  assert.equal(chat.chatWorking(mid), true);
+  assert.equal(chat.startChatTurn(pool, mid, "Second", who, model), false, "busy");
+  release();
+  await chat.waitForChat(mid);
+  assert.equal(chat.chatWorking(mid), false);
+  const d = await chat.chatDisplay(pool, mid);
+  assert.deepEqual(d.map((x: any) => x.text), ["First", "Ok."]);
+});
+
+test("Start over sets the conversation aside", { skip: !url }, async () => {
+  const mid = await setup();
+  await chat.chatTurn(pool, mid, "Hi", who, scripted([{ content: [text("Hello.")] }]).model);
+  await store.archiveChat(pool, mid);
+  assert.deepEqual(await store.loadChatHistory(pool, mid), []);
+  const s = scripted([{ content: [text("Fresh.")] }]);
+  await chat.chatTurn(pool, mid, "New start", who, s.model);
+  assert.equal(s.calls[0].messages.length, 1);
+});
+
+test("a refusal keeps what was already said", { skip: !url }, async () => {
+  const mid = await setup();
+  const s = scripted([
+    { stop_reason: "tool_use", content: [text("Looking."), toolUse("t", "get_report", {})] },
+    { stop_reason: "refusal", content: [] },
+  ]);
+  const r = await chat.chatTurn(pool, mid, "x", who, s.model);
+  assert.match(r.reply, /Looking\..*can't help/s);
+});
+
+test("cards already undone show as undone", { skip: !url }, async () => {
+  const mid = await setup();
+  const s = scripted([
+    { stop_reason: "tool_use", content: [toolUse("t1", "fix_words", { from: "John", to: "Jon", item_id: null })] },
+    { content: [text("Done.")] },
+  ]);
+  const r = await chat.chatTurn(pool, mid, "fix", who, s.model);
+  const { undoChange } = await import("./changes");
+  await undoChange(pool, mid, r.cards[0].changeId);
+  const d = await chat.chatDisplay(pool, mid);
+  assert.equal(d[1].cards[0].undone, true);
 });

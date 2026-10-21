@@ -9,7 +9,8 @@ import { reportHtml } from "../report";
 import { stripRangeMarkers } from "../ranges";
 import { patchItem, saveMeetingSpeakers } from "../actions";
 import { lockGuard } from "../lockGuard";
-import { anthropicChatModel, chatDisplay, chatTurn } from "../chat";
+import { anthropicChatModel, chatDisplay, chatWorking, startChatTurn } from "../chat";
+import { archiveChat } from "../chatStore";
 import { getSetting } from "../settings";
 import { acquireLock, getLock, releaseLock } from "../locks";
 import { fixWords, listChanges, renameTopicSpeakers, undoChange } from "../fixes";
@@ -599,7 +600,16 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
   app.get("/api/meetings/:id/chat", async (req, reply) => {
     const id = Number((req.params as { id: string }).id);
     if (!Number.isFinite(id) || !(await getMeeting(pool, id))) { reply.code(404); return { ok: false, error: "Meeting not found." }; }
-    return { ok: true, messages: await chatDisplay(pool, id) };
+    return { ok: true, messages: await chatDisplay(pool, id), working: chatWorking(id) };
+  });
+
+  // Start over: the conversation so far is set aside.
+  app.post("/api/meetings/:id/chat/reset", async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    if (!Number.isFinite(id) || !(await getMeeting(pool, id))) { reply.code(404); return { ok: false, error: "Meeting not found." }; }
+    if (chatWorking(id)) { reply.code(409); return { ok: false, error: "Still working on the last message." }; }
+    await archiveChat(pool, id);
+    return { ok: true };
   });
 
   app.post("/api/meetings/:id/chat", async (req, reply) => {
@@ -610,8 +620,13 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
     if (!message) { reply.code(400); return { ok: false, error: "Type a message first." }; }
     const key = await getSetting(pool, "anthropic_api_key");
     if (!key) { reply.code(503); return { ok: false, error: "Add an Anthropic API key in Settings to use the chat." }; }
-    const r = await chatTurn(pool, id, message, getIdentity(req), anthropicChatModel(key));
-    return { ok: true, ...r };
+    // The turn runs in the background (it can outlast a proxy's request
+    // timeout); the page polls GET …/chat until working is false.
+    if (!startChatTurn(pool, id, message, getIdentity(req), anthropicChatModel(key))) {
+      reply.code(409); return { ok: false, error: "Still working on your last message." };
+    }
+    reply.code(202);
+    return { ok: true, started: true };
   });
 
   // Stop writing a report, e.g. one stuck waiting on a topic.

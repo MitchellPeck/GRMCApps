@@ -82,20 +82,80 @@ test("fix_words corrects a name everywhere and says how many places", { skip: !u
   assert.doesNotMatch((await m.getMeeting(pool, mid)).report, /John/);
 });
 
-test("removing a topic or regenerating needs the person's say-so first", { skip: !url }, async () => {
+test("removing a topic or regenerating only offers a Confirm button; nothing happens yet", { skip: !url }, async () => {
   const { mid, item } = await setup();
-  const r1 = await run(mid, "remove_topic", { item_id: item, confirmed: false });
-  assert.equal(r1.isError, true);
-  assert.match(r1.content, /Ask the person first/);
+  const r1 = await run(mid, "remove_topic", { item_id: item });
+  assert.ok(!r1.isError, r1.content);
+  assert.deepEqual(r1.card, { kind: "confirm", action: "remove_topic", itemId: item, label: "Remove the topic “Budget” and what was recorded under it" });
   assert.ok(await m.getAgendaItem(pool, item), "still there");
-  const r2 = await run(mid, "regenerate_report", { confirmed: false });
-  assert.equal(r2.isError, true);
+  const r2 = await run(mid, "regenerate_report", {});
+  assert.equal(r2.card.kind, "confirm");
+  assert.equal(r2.card.action, "regenerate_report");
+});
+
+test("reprocessing is only offered for a finished recording", { skip: !url }, async () => {
+  const { mid } = await setup();
+  await pool.query("UPDATE meetings SET recording_status = 'recording' WHERE id = $1", [mid]);
+  const busy = await run(mid, "reprocess_recording", {});
+  assert.equal(busy.isError, true);
+  await pool.query("UPDATE meetings SET recording_status = 'done' WHERE id = $1", [mid]);
+  const ok = await run(mid, "reprocess_recording", {});
+  assert.equal(ok.card.kind, "confirm");
+});
+
+test("undoing a notes edit also puts the summary back", { skip: !url }, async () => {
+  const { mid, item } = await setup();
+  await m.updateAgendaItem(pool, item, { summary: "Old summary.", actionItems: [{ task: "A", owner: "B" }] });
+  const r = await run(mid, "update_topic", { item_id: item, title: null, description: null, notes: "New notes", transcript: null,
+    presenter_person_ids: null, presenter_guest_ids: null });
+  assert.equal((await m.getAgendaItem(pool, item)).summary, "", "notes edits re-summarize, like the page");
+  const { undoChange } = await import("./changes");
+  assert.deepEqual(await undoChange(pool, mid, r.card.changeId), { ok: true });
+  const it = await m.getAgendaItem(pool, item);
+  assert.equal(it.notes, "");
+  assert.equal(it.summary, "Old summary.");
+});
+
+test("presenters and a topic's action items can be set", { skip: !url }, async () => {
+  const { mid, item } = await setup();
+  const pid = Number((await pool.query("INSERT INTO people (name) VALUES ('Linda') RETURNING id")).rows[0].id);
+  const r = await run(mid, "update_topic", { item_id: item, title: null, description: null, notes: null, transcript: null,
+    presenter_person_ids: [pid], presenter_guest_ids: null });
+  assert.ok(!r.isError, r.content);
+  assert.deepEqual((await m.getAgendaItem(pool, item)).presenter_ids, [pid]);
+  const a = await run(mid, "set_action_items", { item_id: item, items: [{ task: "Send figures", owner: "Linda" }] });
+  assert.ok(a.card.changeId);
+  assert.deepEqual((await m.getAgendaItem(pool, item)).action_items, [{ task: "Send figures", owner: "Linda" }]);
+});
+
+test("a call that changes nothing makes no card", { skip: !url }, async () => {
+  const { mid } = await setup();
+  const r = await run(mid, "update_meeting_details", { title: null, meeting_date: null, location: null, description: null });
+  assert.equal(r.isError, true);
+  assert.equal(r.card, undefined);
+  const u = await run(mid, "rename_speakers", { renames: [{ voice: "S9", name: "Nobody" }] });
+  assert.equal(u.isError, true, "unknown voice");
+});
+
+test("a pasted (▶) or line number doesn't end up in the minutes", { skip: !url }, async () => {
+  const { mid } = await setup();
+  await run(mid, "edit_report", { edits: [{ line: 3, text: "3: ### 1. Budget and Finance (▶)" }] });
+  assert.match((await m.getMeeting(pool, mid)).report, /\n### 1\. Budget and Finance <!--t:m7:600\.0-1200\.0-->/);
+});
+
+test("a very long transcript is trimmed with a note", { skip: !url }, async () => {
+  const { mid, item } = await setup();
+  await pool.query("UPDATE agenda_items SET transcript = $2, transcript_segments = '[]' WHERE id = $1", [item, "word ".repeat(20000)]);
+  const r = JSON.parse((await run(mid, "get_transcript", { item_id: item })).content);
+  assert.ok(r.transcript.length <= 40100);
+  assert.match(r.note, /trimmed/i);
 });
 
 test("ids from another meeting are refused", { skip: !url }, async () => {
   const { mid, item } = await setup();
   const other = Number((await pool.query("INSERT INTO meetings (title) VALUES ('Other') RETURNING id")).rows[0].id);
-  const r = await run(other, "update_topic", { item_id: item, title: "Hijack", description: null, notes: null });
+  const r = await run(other, "update_topic", { item_id: item, title: "Hijack", description: null, notes: null, transcript: null,
+    presenter_person_ids: null, presenter_guest_ids: null });
   assert.equal(r.isError, true);
   assert.equal((await m.getAgendaItem(pool, item)).title, "Budget");
   void mid;

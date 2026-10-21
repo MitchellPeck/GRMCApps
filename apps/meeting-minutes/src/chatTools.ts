@@ -4,17 +4,16 @@ import { patchItem, saveMeetingSpeakers } from "./actions";
 import { Snapshot, readSnapshot, recordSnapshotChange, writeFields } from "./changes";
 import { fixWords } from "./fixes";
 import {
-  AgendaItem, addAgendaItem, addGuest, deleteAgendaItem, getAttendeeIds, getMeeting, listAgendaItems, listGuests,
-  removeGuest, reportEdited, setAttendees, updateMeeting,
+  AgendaItem, addAgendaItem, addGuest, getAttendeeIds, getMeeting, listAgendaItems, listGuests,
+  removeGuest, reportEdited, setAttendees, updateAgendaItem, updateMeeting,
 } from "./meetings";
-import { requestReport, requestSummary } from "./minutesWork";
+import { requestSummary } from "./minutesWork";
 import { listPeople } from "./people";
 import { formatClock, parseClock } from "./ranges";
 import { latestMeetingRecording, listRecordings } from "./recordings";
 import { joinReportLines, replaceLine, reportLines } from "./report";
 import { chronologicalSpeakerOrder } from "./segmentation";
 import { distinctSpeakers, resolveSpeakerName, transcriptForAi } from "./transcript";
-import { enqueueMeetingProcessing } from "./transcribeQueue";
 
 // What the chat can do. Every write calls the same function the page's own
 // route does, so "rename Speaker 3 to Linda" in the chat and the dropdown on
@@ -22,7 +21,11 @@ import { enqueueMeetingProcessing } from "./transcribeQueue";
 // changed, and an Undo when the change is in the change log.
 
 export type ChatCard =
-  | { kind: "change"; summary: string; changeId: number | null }
+  | { kind: "change"; summary: string; changeId: number | null; undone?: boolean }
+  // Something that can't easily be undone: the page shows a Confirm button,
+  // and only the person pressing it makes it happen (through the page's own
+  // route). The model can't do it on its own.
+  | { kind: "confirm"; action: "remove_topic" | "regenerate_report" | "reprocess_recording"; itemId?: number; recordingId?: number; label: string }
   | { kind: "clip"; source: "m" | "i"; recordingId: number; start: number; end: number; quote: string; topic: string };
 
 export interface ToolOutcome { content: string; isError?: boolean; card?: ChatCard }
@@ -34,7 +37,7 @@ const str = { type: "string" };
 const nstr = { type: ["string", "null"] };
 const int = { type: "integer" };
 const nint = { type: ["integer", "null"] };
-const bool = { type: "boolean" };
+const nints = { type: ["array", "null"], items: int };
 
 function tool(name: string, description: string, properties: Record<string, unknown> = {}): Anthropic.Tool {
   return {
@@ -57,16 +60,16 @@ export const CHAT_TOOLS: Anthropic.Tool[] = [
   tool("rename_speakers", "Name voices in the whole-meeting recording (voice ids from get_meeting). An empty name clears it. Same as naming them in the Speakers section.",
     { renames: { type: "array", items: { type: "object", properties: { voice: str, name: str }, required: ["voice", "name"], additionalProperties: false } } }),
   tool("rename_topic_speaker", "Name a voice in one topic's own recording (not the whole-meeting recording).", { item_id: int, voice: str, name: str }),
-  tool("update_topic", "Change a topic's title, description or typed notes. Pass null to leave one as it is.",
-    { item_id: int, title: nstr, description: nstr, notes: nstr }),
+  tool("update_topic", "Change a topic's title, description, typed notes, typed transcript (only when it wasn't recorded) or presenters (person ids from the people list, guest ids from the guests). Pass null to leave one as it is. New notes or transcript text means its summary is written again.",
+    { item_id: int, title: nstr, description: nstr, notes: nstr, transcript: nstr, presenter_person_ids: nints, presenter_guest_ids: nints }),
+  tool("set_action_items", "Replace a topic's own list of action items (what the minutes are generated from). To change the action items in the current minutes, use edit_report.",
+    { item_id: int, items: { type: "array", items: { type: "object", properties: { task: str, owner: str }, required: ["task", "owner"], additionalProperties: false } } }),
   tool("add_topic", "Add an agenda topic at the end.", { title: str, description: nstr }),
-  tool("remove_topic", "Remove an agenda topic and everything recorded under it. Ask the person first, and only pass confirmed: true after they said yes.",
-    { item_id: int, confirmed: bool }),
+  tool("remove_topic", "Offer to remove an agenda topic and everything recorded under it. This shows the person a Confirm button; it only happens if they press it.",
+    { item_id: int }),
   tool("resummarize_topic", "Write a topic's summary again from its transcript and notes.", { item_id: int }),
-  tool("regenerate_report", "Write the minutes again from scratch. This replaces every edit made to them. Ask the person first, and only pass confirmed: true after they said yes.",
-    { confirmed: bool }),
-  tool("reprocess_recording", "Transcribe the whole-meeting recording again. This replaces every topic's transcript, speaker names and summary. Ask first; pass confirmed: true only after they said yes.",
-    { confirmed: bool }),
+  tool("regenerate_report", "Offer to write the minutes again from scratch, replacing every edit made to them. This shows the person a Confirm button; it only happens if they press it."),
+  tool("reprocess_recording", "Offer to transcribe the whole-meeting recording again, replacing every topic's transcript, speaker names and summary. Shows a Confirm button; it only happens if they press it."),
   tool("fix_words", "Correct a misheard name or word everywhere at once: transcripts, summaries, action items, speaker names, guests and the minutes. Matching is whole-word and case-sensitive. item_id limits it to one topic.",
     { from: str, to: str, item_id: nint }),
   tool("edit_report", "Change lines of the minutes, by number from get_report. text replaces the line (it may hold several lines); an empty text deletes it. Keep the minutes concise.",
@@ -113,15 +116,21 @@ function speakerOrderFor(items: AgendaItem[], it: AgendaItem): string[] | undefi
     : undefined;
 }
 
+// Run an action and record what it changed. No card when nothing changed.
 async function changed(
   pool: Pool, meetingId: number, shape: Snapshot, summary: string, by: string, act: () => Promise<void>
-): Promise<ChatCard> {
+): Promise<ChatCard | undefined> {
   const before = await readSnapshot(pool, meetingId, shape);
   await act();
   const after = await readSnapshot(pool, meetingId, shape);
   const changeId = await recordSnapshotChange(pool, meetingId, "chat", summary, before, after, by);
-  return { kind: "change", summary, changeId };
+  return changeId === null ? undefined : { kind: "change", summary, changeId };
 }
+const done = (card: ChatCard | undefined) => ok(card ? { done: true } : { done: true, note: "Nothing needed changing." }, card);
+
+// Cap on a transcript handed to the model, so one long topic doesn't swamp
+// the conversation (and the cost of every later turn).
+const TRANSCRIPT_LIMIT = 40000;
 
 // ── Running a tool ──────────────────────────────────────────────────────────
 
@@ -158,13 +167,17 @@ export async function runChatTool(
       case "get_transcript": {
         const items = await listAgendaItems(pool, meetingId);
         const it = await itemOf(pool, meetingId, input.item_id);
-        return ok({ topic: it.title, transcript: transcriptForAi(it, speakerOrderFor(items, it)) || "(no transcript)" });
+        const t = transcriptForAi(it, speakerOrderFor(items, it)) || "(no transcript)";
+        if (t.length <= TRANSCRIPT_LIMIT) return ok({ topic: it.title, transcript: t });
+        return ok({ topic: it.title, transcript: t.slice(0, TRANSCRIPT_LIMIT),
+          note: `Trimmed to the first ${TRANSCRIPT_LIMIT} characters of ${t.length}; use search_transcripts to find later parts.` });
       }
       case "search_transcripts": {
         const q = need(isStr(input.query) && input.query.trim() ? input.query.trim().toLowerCase() : null, "Say what to search for.");
         const items = await listAgendaItems(pool, meetingId);
         const matches: unknown[] = [];
         for (const it of items) {
+          if (matches.length >= 25) break;
           const order = speakerOrderFor(items, it) ?? distinctSpeakers(it.transcript_segments);
           for (const sgm of it.transcript_segments) {
             if (!sgm.text.toLowerCase().includes(q)) continue;
@@ -186,12 +199,13 @@ export async function runChatTool(
           title: optStr(input.title, "title"), meetingDate: optStr(input.meeting_date, "meeting_date"),
           location: optStr(input.location, "location"), description: optStr(input.description, "description"),
         };
+        if (Object.values(fields).every((v) => v === undefined)) fail("Nothing to change: give at least one field.");
         const card = await changed(pool, meetingId, { meeting: { title: "", meeting_date: "", location: "", description: "" } },
           "Meeting details updated", by, async () => {
             const r = await updateMeeting(pool, meetingId, fields);
             if (!r.ok) fail(r.error);
           });
-        return ok({ done: true }, card);
+        return done(card);
       }
       case "set_attendance": {
         const ids = Array.isArray(input.present_person_ids) && input.present_person_ids.every(isInt)
@@ -201,7 +215,7 @@ export async function runChatTool(
         if (unknown.length) fail(`No such people: ${unknown.join(", ")}.`);
         const card = await changed(pool, meetingId, { attendees: [] }, `Attendance set (${ids.length} present)`, by,
           () => setAttendees(pool, meetingId, ids));
-        return ok({ done: true }, card);
+        return done(card);
       }
       case "add_guest": {
         const r = await addGuest(pool, meetingId, need(isStr(input.name) ? input.name : null, "Give the guest's name."), optStr(input.title, "title") ?? "");
@@ -215,10 +229,13 @@ export async function runChatTool(
         return ok({ done: true }, { kind: "change", summary: `Guest removed: ${g!.name}`, changeId: null });
       }
       case "rename_speakers": {
-        const renames = Array.isArray(input.renames) ? input.renames : fail("renames must be a list.");
+        const renames = Array.isArray(input.renames) && input.renames.length ? input.renames : fail("renames must be a non-empty list.");
+        const items = await listAgendaItems(pool, meetingId);
+        const voices = new Set(chronologicalSpeakerOrder(items.filter((x) => x.transcript_source === "meeting").map((x) => x.transcript_segments)));
         const map: Record<string, string> = { ...meeting.speaker_map };
         for (const r of renames) {
           if (!isStr(r?.voice) || !isStr(r?.name)) fail("Each rename needs a voice and a name.");
+          if (!voices.has(r.voice)) fail(`There is no voice “${r.voice}” in this meeting's recording; see get_meeting.`);
           if (r.name.trim()) map[r.voice] = r.name.trim(); else delete map[r.voice];
         }
         const before = await listChangeIds(pool, meetingId);
@@ -238,13 +255,48 @@ export async function runChatTool(
       }
       case "update_topic": {
         const it = await itemOf(pool, meetingId, input.item_id);
-        const body = { title: optStr(input.title, "title"), description: optStr(input.description, "description"), notes: optStr(input.notes, "notes") };
-        const card = await changed(pool, meetingId, { items: { [it.id]: { title: "", description: "", notes: "" } } },
-          `Topic updated: ${body.title ?? it.title}`, by, async () => {
+        const body: Record<string, unknown> = {
+          title: optStr(input.title, "title"), description: optStr(input.description, "description"),
+          notes: optStr(input.notes, "notes"), transcript: optStr(input.transcript, "transcript"),
+        };
+        if (input.presenter_person_ids !== null && input.presenter_person_ids !== undefined) {
+          const ids = Array.isArray(input.presenter_person_ids) && input.presenter_person_ids.every(isInt)
+            ? input.presenter_person_ids as number[] : fail("presenter_person_ids must be a list of person ids.");
+          const known = new Set((await listPeople(pool, true)).map((p) => p.id));
+          if (ids.some((id) => !known.has(id))) fail("Some of those people aren't in the people list.");
+          body.presenterIds = ids;
+        }
+        if (input.presenter_guest_ids !== null && input.presenter_guest_ids !== undefined) {
+          const ids = Array.isArray(input.presenter_guest_ids) && input.presenter_guest_ids.every(isInt)
+            ? input.presenter_guest_ids as number[] : fail("presenter_guest_ids must be a list of guest ids.");
+          const known = new Set((await listGuests(pool, meetingId)).map((g) => g.id));
+          if (ids.some((id) => !known.has(id))) fail("Some of those guests aren't at this meeting.");
+          body.guestPresenterIds = ids;
+        }
+        if (Object.values(body).every((v) => v === undefined)) fail("Nothing to change: give at least one field.");
+        // The summary and action items too: new notes clear them for rewriting,
+        // and Undo should put them back with the notes.
+        const card = await changed(pool, meetingId,
+          { items: { [it.id]: { title: "", description: "", notes: "", transcript: "", summary: "", action_items: [] } } },
+          `Topic updated: ${(body.title as string | undefined) ?? it.title}`, by, async () => {
             const r = await patchItem(pool, it.id, body, by);
             if (r.status !== 200) fail(String(r.body.error));
           });
-        return ok({ done: true }, card);
+        return done(card);
+      }
+      case "set_action_items": {
+        const it = await itemOf(pool, meetingId, input.item_id);
+        const list = Array.isArray(input.items) ? input.items : fail("items must be a list.");
+        const items = list.map((a: any) => {
+          if (!isStr(a?.task) || !a.task.trim()) fail("Each action item needs a task.");
+          return { task: a.task.trim(), owner: isStr(a?.owner) && a.owner.trim() ? a.owner.trim() : "Unassigned" };
+        });
+        const card = await changed(pool, meetingId, { items: { [it.id]: { action_items: [] } } },
+          `${it.title}: action items updated (${items.length})`, by, async () => {
+            const r = await updateAgendaItem(pool, it.id, { actionItems: items });
+            if (!r.ok) fail(r.error);
+          });
+        return done(card);
       }
       case "add_topic": {
         const r = await addAgendaItem(pool, meetingId, need(isStr(input.title) ? input.title : null, "Give the topic a title."), optStr(input.description, "description") ?? "");
@@ -253,27 +305,28 @@ export async function runChatTool(
       }
       case "remove_topic": {
         const it = await itemOf(pool, meetingId, input.item_id);
-        if (input.confirmed !== true) fail(`Ask the person first: removing “${it.title}” also deletes what was recorded under it.`);
-        await deleteAgendaItem(pool, it.id);
-        return ok({ done: true }, { kind: "change", summary: `Topic removed: ${it.title}`, changeId: null });
+        return ok({ shown: "A Confirm button. Nothing happens unless they press it." },
+          { kind: "confirm", action: "remove_topic", itemId: it.id, label: `Remove the topic “${it.title}” and what was recorded under it` });
       }
       case "resummarize_topic": {
         const it = await itemOf(pool, meetingId, input.item_id);
         await requestSummary(it.id);
-        return ok({ done: true, note: "The summary is being written; it appears in a minute or so." });
+        return ok({ done: true, note: "The summary is being written; it appears in a minute or so." },
+          { kind: "change", summary: `${it.title}: summary being written again`, changeId: null });
       }
       case "regenerate_report": {
-        if (input.confirmed !== true) fail("Ask the person first: regenerating replaces every edit made to these minutes.");
         if (!(await listAgendaItems(pool, meetingId)).length) fail("Add agenda topics before generating minutes.");
-        await requestReport(meetingId);
-        return ok({ done: true, note: "The minutes are being written; they appear when ready." },
-          { kind: "change", summary: "Minutes being written again", changeId: null });
+        return ok({ shown: "A Confirm button. Nothing happens unless they press it." },
+          { kind: "confirm", action: "regenerate_report", label: "Write the minutes again from scratch, replacing every edit made to them" });
       }
       case "reprocess_recording": {
-        if (input.confirmed !== true) fail("Ask the person first: reprocessing replaces every topic's transcript, speaker names and summary.");
         const rec = need(await latestMeetingRecording(pool, meetingId), "This meeting has no whole-meeting recording.");
-        if (!(await enqueueMeetingProcessing(meetingId, rec.id))) fail("That recording is no longer available.");
-        return ok({ done: true }, { kind: "change", summary: "Recording being processed again", changeId: null });
+        if (meeting.recording_status !== "done" && meeting.recording_status !== "error") {
+          fail("The recording is still being made or processed; it can be reprocessed once that's finished.");
+        }
+        return ok({ shown: "A Confirm button. Nothing happens unless they press it." },
+          { kind: "confirm", action: "reprocess_recording", recordingId: rec.id,
+            label: "Transcribe the recording again, replacing every topic's transcript, speaker names and summary" });
       }
       case "fix_words": {
         if (!isStr(input.from) || !isStr(input.to) || !input.from.trim() || !input.to.trim() || input.from.trim() === input.to.trim()) {
@@ -281,8 +334,7 @@ export async function runChatTool(
         }
         let itemId: number | undefined;
         if (input.item_id !== null && input.item_id !== undefined) itemId = (await itemOf(pool, meetingId, input.item_id)).id;
-        if (meeting.report_status === "pending") fail("The minutes are being written right now; try again when they're done.");
-        const r = await fixWords(pool, meetingId, input.from, input.to, { itemId, by });
+        const r = await fixWords(pool, meetingId, input.from.trim(), input.to.trim(), { itemId, by });
         if (!r.total) fail(`“${input.from}” isn't in this meeting (capital letters count).`);
         return ok({ counts: r.counts, total: r.total, people_list_still_says: r.libraryMatches.map((p) => p.name) },
           { kind: "change", summary: `“${input.from.trim()}” → “${input.to.trim()}”: ${r.total} place${r.total === 1 ? "" : "s"}`, changeId: r.changeId });
@@ -295,6 +347,8 @@ export async function runChatTool(
         for (const e of edits) {
           if (!isInt(e?.line) || e.line < 0 || e.line >= lines.length) fail(`There is no line ${e?.line}; get_report has ${lines.length} lines (0–${lines.length - 1}).`);
           if (!isStr(e.text)) fail("Each edit needs text (empty deletes the line).");
+          // get_report's "N: " numbers and "(▶)" marks aren't part of the text.
+          e.text = e.text.split(/\r?\n/).map((l: string) => l.replace(/^\s*\d+:\s/, "").replace(/\s*\(▶\)\s*$/, "")).join("\n");
         }
         if (new Set(edits.map((e: any) => e.line)).size !== edits.length) fail("Edit each line once per call.");
         // From the bottom up, so earlier line numbers stay put.
@@ -307,7 +361,7 @@ export async function runChatTool(
               await writeFields(c, meetingId, { meeting: { report: md } });
             } finally { c.release(); }
           });
-        return ok({ done: true, lines: lines.length }, card);
+        return card ? ok({ done: true, lines: lines.length }, card) : done(card);
       }
       case "play_clip": {
         const it = await itemOf(pool, meetingId, input.item_id);
