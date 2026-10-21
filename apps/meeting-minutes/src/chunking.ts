@@ -167,6 +167,38 @@ export function extractClip(inputPath: string, start: number, seconds: number): 
   });
 }
 
+// Longest stretch served when playing one section of the minutes.
+export const MAX_SECTION_SECONDS = 1800;
+
+// A section of a stored recording as mono MP3, for playing a topic or part of
+// the minutes. MediaRecorder WebM has no seek index, so the browser can't jump
+// into the whole file; ffmpeg cuts the stretch instead. Empty when `start` is
+// past the end. Read-only on the file.
+export function extractSection(inputPath: string, start: number, seconds: number): Promise<Buffer> {
+  const from = Math.max(0, start);
+  const dur = Math.min(MAX_SECTION_SECONDS, Math.max(0.5, seconds));
+  return new Promise((resolve, reject) => {
+    let child;
+    try {
+      child = spawn("ffmpeg", [
+        "-hide_banner", "-nostats", "-nostdin", "-loglevel", "error",
+        "-ss", from.toFixed(2), "-i", inputPath, "-t", dur.toFixed(2),
+        "-vn", "-ac", "1", "-c:a", "libmp3lame", "-b:a", "64k",
+        // No ID3 or Xing header: past the end of the audio the output is truly empty.
+        "-id3v2_version", "0", "-write_xing", "0", "-f", "mp3", "pipe:1",
+      ], { stdio: ["ignore", "pipe", "pipe"] });
+    } catch (e) { reject(e); return; }
+    const out: Buffer[] = [], err: Buffer[] = [];
+    child.stdout.on("data", (c: Buffer) => out.push(c));
+    child.stderr.on("data", (c: Buffer) => err.push(c));
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) resolve(Buffer.concat(out));
+      else reject(new Error(`Could not cut the section: ${Buffer.concat(err).toString("utf8").trim().split("\n").pop()}`));
+    });
+  });
+}
+
 export interface AudioPart { path: string; offset: number }
 
 // Decode `inputPath` to WAV and cut it into parts in `workDir`. Returns the

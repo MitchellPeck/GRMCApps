@@ -196,3 +196,22 @@ test("extractClip returns just the requested stretch as WAV, capped", { skip: !h
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("extractSection returns MP3 of the requested stretch and nothing past the end", { skip: !hasFfmpeg }, async () => {
+  const { extractSection } = await import("./chunking");
+  const dir = mkdtempSync(join(tmpdir(), "chunk-test-"));
+  try {
+    const input = makeRecording(dir);
+    const before = sha(input);
+    const mp3 = await extractSection(input, 600, 90);
+    assert.ok(mp3.length > 0);
+    const isMp3 = mp3.subarray(0, 3).toString("latin1") === "ID3" || (mp3[0] === 0xff && (mp3[1] & 0xe0) === 0xe0);
+    assert.ok(isMp3, "not MP3");
+    const past = await extractSection(input, 1e6, 10);
+    assert.equal(past.length, 0);
+    await assert.rejects(extractSection(join(dir, "missing.webm"), 0, 10), /Could not cut the section/);
+    assert.equal(sha(input), before);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

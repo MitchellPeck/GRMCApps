@@ -14,7 +14,7 @@ import {
 } from "../google";
 import { hasAudioExtension } from "../whisper";
 import { speakerStats } from "../speakers";
-import { extractClip } from "../chunking";
+import { extractClip, extractSection } from "../chunking";
 import {
   createMeeting, listMeetings, getMeeting, updateMeeting, deleteMeeting,
   setAttendees, getAttendeeIds, replaceAgendaItems, addAgendaItem,
@@ -74,6 +74,30 @@ function messagePage(reply: FastifyReply, status: number, title: string, text: s
     + `<body style="padding:32px;max-width:640px;margin:auto"><h2>${e(title)}</h2><p>${e(text)}</p>`
     + `<p><a href="/">Back to Meeting Minutes</a></p></body></html>`
   );
+}
+
+// One section of a stored recording as MP3, for the ▶ on a part of the
+// minutes. start/end are seconds on that recording's timeline.
+export async function sendSection(
+  reply: FastifyReply,
+  storagePath: string | undefined,
+  query: { start?: string; end?: string }
+): Promise<unknown> {
+  const start = Number(query.start), end = Number(query.end);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || start < 0) {
+    reply.code(400); return { ok: false, error: "Give a start and end time." };
+  }
+  if (!storagePath) { reply.code(404); return { ok: false, error: "Recording not found." }; }
+  if (!existsSync(storagePath)) { reply.code(404); return { ok: false, error: "Recording file is missing." }; }
+  try {
+    const mp3 = await extractSection(storagePath, start, end - start);
+    if (!mp3.length) { reply.code(416); return { ok: false, error: "That part of the recording doesn't exist." }; }
+    reply.header("content-type", "audio/mpeg");
+    reply.header("cache-control", "private, max-age=3600");
+    return reply.send(mp3);
+  } catch (e) {
+    reply.code(500); return { ok: false, error: (e as Error).message };
+  }
 }
 
 export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
@@ -475,6 +499,18 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
     } catch (e) {
       reply.code(500); return { ok: false, error: (e as Error).message };
     }
+  });
+
+  app.get("/api/meeting-recordings/:rid/section", async (req, reply) => {
+    const rid = Number((req.params as { rid: string }).rid);
+    const rec = Number.isFinite(rid) ? await getMeetingRecording(pool, rid) : null;
+    return sendSection(reply, rec?.storage_path, req.query as { start?: string; end?: string });
+  });
+
+  app.get("/api/recordings/:id/section", async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    const rec = Number.isFinite(id) ? await getRecording(pool, id) : null;
+    return sendSection(reply, rec?.storage_path, req.query as { start?: string; end?: string });
   });
 
   // Summarize one agenda item now (the browser asks when an item is closed).
