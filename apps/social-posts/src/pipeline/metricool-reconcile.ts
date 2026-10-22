@@ -8,8 +8,9 @@ export interface LinkChange {
   text?: string; newHash?: string;
 }
 
+/** `hold`: links (post id|network) to leave as they are if their post is absent — a relink couldn't tell where they went. */
 export function reconcileItem(
-  links: Link[], planner: Map<string, PlannerPost>, covered: { from: string; to: string },
+  links: Link[], planner: Map<string, PlannerPost>, covered: { from: string; to: string }, hold: Set<string> = new Set(),
 ): { changes: LinkChange[]; groups: Array<{ scheduledFor: string; networks: string[] }>; unknown: string[] } {
   const changes: LinkChange[] = [];
   const unknown: string[] = [];
@@ -23,7 +24,8 @@ export function reconcileItem(
     if (!net) {
       // Absent only means removed if the list covered that day; published posts stay.
       const day = link.scheduledFor.slice(0, 10);
-      if (link.state !== "gone" && link.state !== "published" && day >= covered.from && day <= covered.to) {
+      const held = hold.has(`${link.metricoolPostId}|${link.network}`);
+      if (!held && link.state !== "gone" && link.state !== "published" && day >= covered.from && day <= covered.to) {
         changes.push({ link, state: "gone" });
         state = "gone";
       }
@@ -31,7 +33,8 @@ export function reconcileItem(
       unknown.push(`${link.network} on ${link.metricoolPostId}: ${net.state === "unknown" ? "status" : "time"} not readable`);
     } else {
       const c: LinkChange = { link };
-      if (net.state !== link.state) c.state = net.state;  // also revives a gone link (Metricool undo)
+      // Also revives a gone link (Metricool undo). Published is final: a later odd report never undoes it.
+      if (link.state !== "published" && net.state !== link.state) c.state = net.state;
       if (net.scheduledFor !== link.scheduledFor) c.scheduledFor = net.scheduledFor;
       if (net.detail !== link.detail) c.detail = net.detail;
       if (net.publicUrl !== link.publicUrl) c.publicUrl = net.publicUrl;
@@ -39,7 +42,7 @@ export function reconcileItem(
       if (!link.textHash) c.newHash = hash;  // first sync only sets the baseline
       else if (hash !== link.textHash) { c.text = net.text; c.newHash = hash; }
       if (Object.keys(c).length > 1) changes.push(c);
-      state = net.state;
+      state = c.state ?? link.state;
       when = net.scheduledFor;
     }
     if (state !== "gone") live.push({ scheduledFor: when, network: link.network });

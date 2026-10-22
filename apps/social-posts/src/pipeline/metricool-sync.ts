@@ -9,7 +9,7 @@ import { DEFAULT_TZ, addDays, localDateIn } from "../dates";
 import { getMetricoolCreds } from "../metricool";
 import { listPlanner, PlannerPost, textHash } from "../metricool-planner";
 import { Link, linksFor, pendingIdlessSends } from "./metricool-links";
-import { applyRelink, heldPostIds, refreshIdents, relinkPlan } from "./metricool-relink";
+import { applyRelink, heldPostIds, refreshIdents, relinkPlan, type RelinkResult } from "./metricool-relink";
 import { LinkChange, overallStatus, reconcileItem } from "./metricool-reconcile";
 import { idlessSends, idlessSendsForRelink, importPlannerPost, shouldImport } from "./metricool-import";
 import { splitContent } from "./repo";
@@ -26,12 +26,14 @@ export interface SyncCounts {
   /** Posts that became Published. */ published: number;
   /** Posts that couldn't be synced this run (each carries a note); tried again next run. */ failed: number;
   /** Metricool-only posts that couldn't be imported; tried again next run. */ importFailed: number;
+  /** 1 when following re-id'd posts failed this run (nothing is marked gone then); tried again next run. */ relinkFailed: number;
   /** Set when Metricool couldn't be read; nothing else changed. */ error?: string;
 }
 
 type Db = Pool | PoolClient;
 interface Covered { from: string; to: string }
 
+const UNPLACED = "Couldn't tell which Metricool post this is now.";
 const dayOf = (l: Link) => l.scheduledFor.slice(0, 10);
 // A range no day falls in: one-post syncs list only a few days, so absence there proves nothing.
 const NOTHING_COVERED: Covered = { from: "~", to: "" };
@@ -50,7 +52,7 @@ async function syncOnce(pool: Pool, o: { itemId?: string; now?: Date }): Promise
   const now = o.now || new Date();
   const tz = (await getSetting(pool, "default_timezone")) || DEFAULT_TZ;
   const today = localDateIn(tz, now);
-  const counts: SyncCounts = { moved: 0, split: 0, edited: 0, gone: 0, imported: 0, published: 0, failed: 0, importFailed: 0 };
+  const counts: SyncCounts = { moved: 0, split: 0, edited: 0, gone: 0, imported: 0, published: 0, failed: 0, importFailed: 0, relinkFailed: 0 };
   // Go-live day: nothing dated before the first sync is ever imported.
   if (!(await getSetting(pool, IMPORT_SINCE_SETTING))) await setSetting(pool, IMPORT_SINCE_SETTING, today);
 
@@ -83,19 +85,34 @@ async function syncOnce(pool: Pool, o: { itemId?: string; now?: Date }): Promise
   }
 
   // Follow posts Metricool re-id'd (and sends that never got an id) before anything reads as gone.
-  await refreshIdents(pool, ranged, planner);
-  const idless = (await idlessSendsForRelink(pool, tz)).filter((s) => !o.itemId || s.itemId === o.itemId);
-  const plan = relinkPlan(ranged, planner, idless, await heldPostIds(pool));
-  await applyRelink(pool, plan);
-  const claimed = new Set(plan.map((e) => e.toPostId));
+  // Whatever the plan named is claimed (never imported); its unsure links are held (never marked gone).
+  // A failed relink mustn't stop every run from here on: it's counted, and nothing is marked gone this
+  // time (a link it would have followed would read as deleted). Reconcile and imports still run, except
+  // that with no plan at all nothing is imported either (a re-id'd post would come in as a duplicate).
+  const relinkFailed = (e: unknown) => {
+    counts.relinkFailed = 1;
+    console.warn("[metricool-sync] relink failed:", (e as Error).message);
+  };
+  try { await refreshIdents(pool, ranged, planner); } catch (e) { relinkFailed(e); }
+  let plan: RelinkResult | null = null;
+  let applied = false;
+  try {
+    const idless = (await idlessSendsForRelink(pool, tz)).filter((s) => !o.itemId || s.itemId === o.itemId);
+    plan = relinkPlan(ranged, planner, idless, await heldPostIds(pool));
+    await applyRelink(pool, plan.entries);
+    applied = true;
+  } catch (e) { relinkFailed(e); }
+  const relinked = !counts.relinkFailed;
+  const claimed = new Set([...(plan?.entries || []).map((e) => e.toPostId), ...(plan?.contested || [])]);
+  const unsure = new Set((plan?.unsure || []).map((l) => `${l.metricoolPostId}|${l.network}`));
 
-  const touched = new Set([...ranged.map((l) => l.contentItemId), ...plan.map((e) => e.itemId)]);
+  const touched = new Set([...ranged.map((l) => l.contentItemId), ...(applied ? plan!.entries.map((e) => e.itemId) : [])]);
   const byId = new Map(planner.map((p) => [p.id, p]));
   // Only the full run marks links gone; a post moved beyond a one-post window would otherwise read as deleted.
-  const goneRange = o.itemId ? NOTHING_COVERED : covered;
+  const goneRange = o.itemId || !relinked ? NOTHING_COVERED : covered;
   for (const [itemId, itemLinks] of await linksFor(pool, [...touched])) {
     try {
-      await syncItem(pool, itemId, itemLinks, byId, goneRange, tz, now, counts);
+      await syncItem(pool, itemId, itemLinks, byId, goneRange, tz, now, counts, unsure);
     } catch (e) {
       // One broken post mustn't stop the others (or the imports) on every run from now on.
       counts.failed++;
@@ -104,7 +121,7 @@ async function syncOnce(pool: Pool, o: { itemId?: string; now?: Date }): Promise
     }
   }
 
-  if (!o.itemId) {
+  if (!o.itemId && plan) {
     const linked = await heldPostIds(pool);
     const sent = new Set((await pool.query(
       `SELECT DISTINCT metricool_post_id FROM metricool_sends WHERE metricool_post_id <> ''`)).rows.map((r) => String(r.metricool_post_id)));
@@ -132,9 +149,12 @@ async function idlessDays(pool: Pool, itemId: string, now: Date): Promise<string
 
 async function syncItem(
   pool: Pool, itemId: string, links: Link[], planner: Map<string, PlannerPost>, covered: Covered, tz: string, now: Date,
-  counts: SyncCounts,
+  counts: SyncCounts, unsure: Set<string>,
 ): Promise<void> {
-  const { changes, groups, unknown } = reconcileItem(links, planner, covered);
+  const { changes, groups, unknown } = reconcileItem(links, planner, covered, unsure);
+  // A vanished post a relink couldn't place: the link stays as it is, with a note.
+  const unplaced = links.filter((l) => unsure.has(`${l.metricoolPostId}|${l.network}`) && !planner.has(l.metricoolPostId));
+  const notes = unplaced.length ? [UNPLACED] : [];
   const changeOf = new Map<Link, LinkChange>(changes.map((c) => [c.link, c]));
   // The links as they stand once the changes are written.
   const after: Link[] = links.map((l) => {
@@ -166,7 +186,7 @@ async function syncItem(
       }
     }
     // No groups means every link is gone: there's no time to set, only the status.
-    if (groups.length < 2 && await writeStatus(client, itemId, after, unknown, tz, now)) counts.published++;
+    if (groups.length < 2 && await writeStatus(client, itemId, after, unknown, tz, now, notes)) counts.published++;
     await client.query("COMMIT");
   } catch (e) {
     await client.query("ROLLBACK");
@@ -185,7 +205,8 @@ async function syncItem(
   for (const id of parts) {
     const own = partLinks.get(id) || [];
     const nets = new Set(own.map((l) => l.network));
-    if (await writeStatus(pool, id, own, unknown.filter((u) => nets.has(u.split(" ")[0])), tz, now)) counts.published++;
+    const held = unplaced.some((l) => nets.has(l.network)) ? notes : [];
+    if (await writeStatus(pool, id, own, unknown.filter((u) => nets.has(u.split(" ")[0])), tz, now, held)) counts.published++;
   }
 }
 
@@ -234,7 +255,9 @@ async function replaceCaption(
 }
 
 /** Writes the post's overall status and note when they differ; true when it just became Published. */
-async function writeStatus(db: Db, itemId: string, links: Link[], unknown: string[], tz: string, now: Date): Promise<boolean> {
+async function writeStatus(
+  db: Db, itemId: string, links: Link[], unknown: string[], tz: string, now: Date, extra: string[] = [],
+): Promise<boolean> {
   if (!links.length) return false;  // never touch a post with no links
   const cur = (await db.query(`SELECT status, publish_check FROM content_items WHERE id = $1`, [itemId])).rows[0];
   if (!cur) return false;
@@ -242,7 +265,7 @@ async function writeStatus(db: Db, itemId: string, links: Link[], unknown: strin
   const goneDays = links.filter((l) => l.state === "gone" && l.goneAt).map((l) => localDateIn(tz, new Date(l.goneAt!))).sort();
   const o = overallStatus(links.map((l) => ({ state: l.state, network: l.network, detail: l.detail })),
     goneDays[goneDays.length - 1] || localDateIn(tz, now));
-  const note = [o.note, ...unknown.map((u) => `Couldn't read Metricool (${u}).`)].filter(Boolean).join(" ");
+  const note = [o.note, ...unknown.map((u) => `Couldn't read Metricool (${u}).`), ...extra].filter(Boolean).join(" ");
   // A Published post never goes back, and Cancelled is the team's call.
   const status = cur.status === "published" || cur.status === "cancelled" ? cur.status : o.status;
   if (status === cur.status && note === cur.publish_check) return false;

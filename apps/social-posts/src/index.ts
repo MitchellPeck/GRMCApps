@@ -75,7 +75,7 @@ async function start() {
     await syncMetricool(pool)
       .then((r) => {
         if (r.error) app.log.warn({ error: r.error }, "Metricool sync couldn't read the planner");
-        else if (r.failed || r.importFailed) app.log.warn(r, "Metricool sync left some posts for the next run");
+        else if (r.failed || r.importFailed || r.relinkFailed) app.log.warn(r, "Metricool sync left some posts for the next run");
         else if (Object.values(r).some((n) => n)) app.log.info(r, "Metricool sync");
       })
       .catch((e) => app.log.warn(e, "Metricool sync failed"));

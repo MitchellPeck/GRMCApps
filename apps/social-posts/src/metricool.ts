@@ -151,7 +151,6 @@ export function publicationState(post: { providers?: McProvider[] }): { state: "
   return { state: "unknown", detail: "" };
 }
 
-/** Posts in Metricool's planner between two dates (YYYY-MM-DD), published or not. */
 /** The planner list's body exactly as Metricool sent it, unparsed (the probe saves it as a fixture). */
 export async function fetchSchedulerPostsRaw(c: MetricoolCreds, start: string, end: string, timezone: string): Promise<string> {
   if (!c.blogId) throw new Error("No Metricool brand picked — open Settings, load brands, and choose one.");
@@ -163,6 +162,7 @@ export async function fetchSchedulerPostsRaw(c: MetricoolCreds, start: string, e
   return text;
 }
 
+/** Posts in Metricool's planner between two dates (YYYY-MM-DD), published or not. */
 export async function listSchedulerPosts(c: MetricoolCreds, start: string, end: string, timezone: string): Promise<Array<{ id: string; providers: McProvider[] }>> {
   const text = await fetchSchedulerPostsRaw(c, start, end, timezone);
   let data: any = {};

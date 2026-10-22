@@ -1,13 +1,13 @@
 import { Pool } from "pg";
 import { PlannerPost, PlannerNetwork, textHash, wallIn } from "../metricool-planner";
 import { addLinks } from "./metricool-links";
+import type { RelinkSend } from "./metricool-relink";
 import { overallStatus } from "./metricool-reconcile";
 import { getContentRow, ContentRow } from "./repo";
 
 /** A send the app logged without a Metricool id (the create call returned none). */
 export interface IdlessSend { textHash: string; networks: string[]; date: string }
 
-const sameSet = (a: string[], b: string[]) => a.length === b.length && [...a].sort().join() === [...b].sort().join();
 const readable = (n: PlannerNetwork) => !!n.scheduledFor && n.state !== "unknown";
 
 export function shouldImport(
@@ -19,11 +19,9 @@ export function shouldImport(
   if (!nets.length) return false;
   const date = nets.map((n) => n.scheduledFor).sort()[0].slice(0, 10);
   if (date < importSince) return false;
-  // The app's own sends from before ids were recorded: same text, networks and day.
-  const mine = post.networks.map((n) => n.network);
-  const hashes = new Set(post.networks.map((n) => textHash(n.text)));
-  const postDate = post.networks.map((n) => n.scheduledFor).filter(Boolean).sort()[0]?.slice(0, 10);
-  return !idlessSends.some((s) => hashes.has(s.textHash) && sameSet(s.networks, mine) && s.date === postDate);
+  // The app's own sends that never got an id: the same text on a network it went to. Not the date or the whole
+  // set of networks: a post moved in Metricool changes date, and moving one network splits it in two.
+  return !idlessSends.some((s) => post.networks.some((n) => s.networks.includes(n.network) && textHash(n.text) === s.textHash));
 }
 
 /** Sends with no recorded Metricool id, shaped for shouldImport. */
@@ -36,13 +34,21 @@ export async function idlessSends(db: Pool): Promise<IdlessSend[]> {
   }));
 }
 
-/** Id-less content sends shaped for relinkPlan: the item, and the send time on the church's clock. */
-export async function idlessSendsForRelink(db: Pool, timezone: string) {
+/**
+ * Id-less content sends shaped for relinkPlan: the send row, the item, and the send time on the church's
+ * clock. Only sends whose post still exists here, and not ones already relinked: a link on one of the
+ * send's networks made at or after the send came from it (rows from before ids were written back).
+ */
+export async function idlessSendsForRelink(db: Pool, timezone: string): Promise<RelinkSend[]> {
   const rows = (await db.query(
-    `SELECT source_ref, text, networks, created_at FROM metricool_sends
-      WHERE status = 'sent' AND metricool_post_id = '' AND source_type = 'content' AND source_ref <> ''`)).rows;
+    `SELECT s.id, s.source_ref, s.text, s.networks, s.created_at FROM metricool_sends s JOIN content_items c ON c.id = s.source_ref
+      WHERE s.status = 'sent' AND s.metricool_post_id = '' AND s.source_type = 'content'
+        AND NOT EXISTS (SELECT 1 FROM metricool_links l
+                         WHERE l.content_item_id = s.source_ref AND l.created_at >= s.created_at
+                           AND l.network = ANY (string_to_array(replace(replace(s.networks, ' ', ''), 'twitter', 'x'), ',')))
+      ORDER BY s.id`)).rows;
   return rows.map((r) => ({
-    itemId: String(r.source_ref), textHash: textHash(r.text), sentAt: wallIn(timezone, new Date(r.created_at)),
+    sendId: String(r.id), itemId: String(r.source_ref), textHash: textHash(r.text), sentAt: wallIn(timezone, new Date(r.created_at)),
     networks: String(r.networks).split(",").map((n) => n.trim()).filter(Boolean).map((n) => (n === "twitter" ? "x" : n)),
   }));
 }

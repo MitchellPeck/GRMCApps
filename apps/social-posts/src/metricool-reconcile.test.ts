@@ -91,3 +91,14 @@ test("overallStatus follows the table", () => {
   assert.deepEqual(overallStatus(["gone", "gone"], "2026-10-22"), { status: "ready", note: "Removed from Metricool on 2026-10-22." });
   assert.deepEqual(overallStatus([], "d"), { status: "scheduled", note: "" });
 });
+
+test("a published link stays published whatever the planner says later", () => {
+  const l = link({ state: "published", publicUrl: "https://facebook.com/1", textHash: textHash("hi") });
+  const r = reconcileItem([l], planner(post("p1", [net("instagram", { state: "failed", detail: "Token expired", publicUrl: "https://instagram.com/2" })])), covered);
+  assert.equal(r.changes.length, 1);
+  assert.equal(r.changes[0].state, undefined);
+  assert.equal(r.changes[0].detail, "Token expired");
+  assert.equal(r.changes[0].publicUrl, "https://instagram.com/2");
+  const s = reconcileItem([l], planner(post("p1", [net("instagram", { state: "scheduled", publicUrl: "https://facebook.com/1" })])), covered);
+  assert.deepEqual(s.changes, []);
+});

@@ -57,6 +57,13 @@ function instantOfWall(wall: Date, zone: string): Date {
   return guess;
 }
 
+/** A wall time (YYYY-MM-DDTHH:MM[:SS]) in zone `from`, read on zone `to`'s clock (YYYY-MM-DDTHH:MM). */
+export function wallToZone(wall: string, from: string, to: string): string {
+  const w = new Date(wall.slice(0, 16) + ":00Z");
+  if (isNaN(w.getTime()) || from === to) return wall.slice(0, 16);
+  return wallIn(to, instantOfWall(w, from));
+}
+
 // A dateTime ending in Z or carrying an offset is an instant. Otherwise it's a
 // wall time in the row's own zone (the church's, if the row names none).
 function scheduledFor(pd: any, tz: string): string {

@@ -5,6 +5,9 @@ import { Pool } from "pg";
 import { buildSchedulerPayload, charWarnings, isPublishMode, MetricoolCreds, PublishMode, schedulePost } from "../metricool";
 import { logSend } from "../metricool-sends";
 import { addLinks, hasLiveLinks, pendingIdlessSends } from "./metricool-links";
+import { wallToZone } from "../metricool-planner";
+import { getSetting } from "../settings";
+import { DEFAULT_TZ } from "../dates";
 import { syncMetricool } from "./metricool-sync";
 import { splitContent } from "./repo";
 import { markSentToMetricool } from "./sync";
@@ -152,6 +155,9 @@ async function afterSend(pool: Pool, r: SendRequest, sent: Sent[], unsent: Group
     } catch (e) { warn(e); }
   }
   for (const t of times) await markSentToMetricool(pool, holder.get(t)!, t).catch(warn);
+  // Links hold the church's clock, as the sync reads Metricool; the dialog's zone may differ.
+  const church = (await getSetting(pool, "default_timezone").catch(() => "")) || DEFAULT_TZ;
+  const onChurchClock = (t: string) => { try { return wallToZone(t, r.timezone || church, church); } catch { return t; } };
   for (const s of sent) {
     const owner = holder.get(s.dateTime)!;
     // The send log follows the post too, so an id-less send is relinked (and refused) on the right one.
@@ -160,7 +166,7 @@ async function afterSend(pool: Pool, r: SendRequest, sent: Sent[], unsent: Group
     }
     // No id means no link: the sync below finds it in the planner instead.
     if (s.postId) {
-      await addLinks(pool, owner, s.postId, s.networks.map(platformOf), s.dateTime, r.publish === "draft" ? "draft" : "scheduled").catch(warn);
+      await addLinks(pool, owner, s.postId, s.networks.map(platformOf), onChurchClock(s.dateTime), r.publish === "draft" ? "draft" : "scheduled").catch(warn);
     }
   }
   for (const owner of new Set(holder.values())) await syncMetricool(pool, { itemId: owner }).catch(warn);

@@ -240,6 +240,8 @@ CREATE TABLE IF NOT EXISTS metricool_links (
 CREATE INDEX IF NOT EXISTS metricool_links_item_idx ON metricool_links (content_item_id);
 ALTER TABLE metricool_links ADD COLUMN IF NOT EXISTS metricool_uuid text NOT NULL DEFAULT '';
 ALTER TABLE metricool_links ADD COLUMN IF NOT EXISTS metricool_created text NOT NULL DEFAULT '';
+-- When the link was made. Rows from before this column read as made when it was added, i.e. after every older send.
+ALTER TABLE metricool_links ADD COLUMN IF NOT EXISTS created_at timestamptz NOT NULL DEFAULT now();
 ALTER TABLE content_items ADD COLUMN IF NOT EXISTS split_from text;
 ALTER TABLE content_items ADD COLUMN IF NOT EXISTS split_at timestamptz;
 ALTER TABLE content_items ADD COLUMN IF NOT EXISTS from_metricool boolean NOT NULL DEFAULT false;

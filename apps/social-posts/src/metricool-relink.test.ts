@@ -13,8 +13,10 @@ const link = (o: Partial<Link>): Link => ({
   contentItemId: "i1", metricoolPostId: "403266041", network: "facebook", scheduledFor: "2026-10-23T17:19", state: "scheduled",
   detail: "", publicUrl: "", textHash: "", goneAt: null, metricoolUuid: "", metricoolCreated: "", ...o });
 // Test helper: held ids default to the given links' own, plus any others.
-const relinkPlan = (links: Link[], p: PlannerPost[], idless: Parameters<typeof plan4>[2], extra: string[] = []) =>
+const fullPlan = (links: Link[], p: PlannerPost[], idless: Parameters<typeof plan4>[2], extra: string[] = []) =>
   plan4(links, p, idless, new Set([...links.map((l) => l.metricoolPostId), ...extra]));
+const relinkPlan = (links: Link[], p: PlannerPost[], idless: Parameters<typeof plan4>[2], extra: string[] = []) =>
+  fullPlan(links, p, idless, extra).entries;
 const probeText = () => planner("metricool-planner-before.json").find((p) => p.id === "403266041")!.networks[0].text;
 
 test("a one-network move is followed to both new ids", () => {
@@ -68,7 +70,7 @@ test("two links wanting one post leave it alone", () => {
 });
 
 test("an id-less send is matched to its Metricool post", () => {
-  const send = { itemId: "i9", networks: ["facebook"], textHash: textHash(probeText()), sentAt: "2026-10-22T11:19" };
+  const send = { sendId: "s9", itemId: "i9", networks: ["facebook"], textHash: textHash(probeText()), sentAt: "2026-10-22T11:19" };
   const plan = relinkPlan([], planner("metricool-planner-after-move.json"), [send]);
   assert.equal(plan.length, 1);
   assert.equal(plan[0].link, null);
@@ -91,3 +93,31 @@ test("relinked posts are not imported", () => {
   assert.equal(shouldImport(post, new Set(), new Set(), "2026-01-01", [], new Set()), true);
 });
 
+
+test("a link's relink wins over the id-less send it came from", () => {
+  // The send was relinked once already (links on 403266041), and its log row is still id-less.
+  const probe = planner("metricool-planner-before.json").find((p) => p.id === "403266041")!;
+  const links = ["facebook", "instagram"].map((network) => link({ network, textHash: textHash(probeText()),
+    metricoolUuid: probe.uuid, metricoolCreated: probe.createdAt }));
+  const send = { sendId: "s1", itemId: "i1", networks: ["facebook", "instagram"], textHash: textHash(probeText()), sentAt: probe.createdAt };
+  const plan = relinkPlan(links, planner("metricool-planner-after-move.json"), [send]);
+  assert.deepEqual(plan.map((e) => [e.network, e.toPostId, e.link !== null]).sort(),
+    [["facebook", "403266378", true], ["instagram", "403266388", true]]);
+});
+
+test("an ambiguous relink names its candidates and the link it couldn't follow", () => {
+  const l = link({ metricoolCreated: "2026-10-22T11:19", textHash: textHash("same") });
+  const r = fullPlan([l], [mk("a", "same"), mk("b", "same"), mk("c", "other")], []);
+  assert.deepEqual(r.entries, []);
+  assert.deepEqual([...r.contested].sort(), ["a", "b"]);
+  assert.deepEqual(r.unsure, [l]);
+  // Two links cancelling over one post: both are unsure, the post is contested.
+  const a = link({ metricoolPostId: "x1", metricoolCreated: "2026-10-22T11:19", textHash: textHash("same") });
+  const b = link({ metricoolPostId: "x2", contentItemId: "i2", metricoolCreated: "2026-10-22T11:19", textHash: textHash("same") });
+  const r2 = fullPlan([a, b], [mk("a", "same")], []);
+  assert.deepEqual([r2.entries, [...r2.contested], r2.unsure], [[], ["a"], [a, b]]);
+  // Two id-less sends wanting one post: the post is contested too.
+  const s = (id: string) => ({ sendId: id, itemId: "i" + id, networks: ["facebook"], textHash: textHash("same"), sentAt: "2026-10-22T11:19" });
+  const r3 = fullPlan([], [mk("a", "same")], [s("1"), s("2")]);
+  assert.deepEqual([r3.entries, [...r3.contested]], [[], ["a"]]);
+});

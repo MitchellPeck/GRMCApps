@@ -1265,8 +1265,12 @@ test("a post the app sent without getting an id back is not imported", () => {
   const post: PlannerPost = { id: "s2", uuid: "", createdAt: "", creatorId: "", media: [], networks: [net("facebook", "2026-12-01T09:00", "Hello\n"), net("x", "2026-12-01T09:00", "Hello")] };
   const idless = [{ textHash: textHash("Hello"), networks: ["facebook", "x"], date: "2026-12-01" }];
   assert.equal(shouldImport(post, new Set(), new Set(), "2026-01-01", idless, new Set()), false);
-  assert.equal(shouldImport(post, new Set(), new Set(), "2026-01-01", [{ ...idless[0], date: "2026-12-02" }], new Set()), true);
-  assert.equal(shouldImport(post, new Set(), new Set(), "2026-01-01", [{ ...idless[0], networks: ["facebook"] }], new Set()), true);
+  // Moved in Metricool since: the date no longer has to match.
+  assert.equal(shouldImport(post, new Set(), new Set(), "2026-01-01", [{ ...idless[0], date: "2026-12-02" }], new Set()), false);
+  // One network moved off into a post of its own: overlapping networks are enough.
+  assert.equal(shouldImport(post, new Set(), new Set(), "2026-01-01", [{ ...idless[0], networks: ["facebook"] }], new Set()), false);
+  assert.equal(shouldImport(post, new Set(), new Set(), "2026-01-01", [{ ...idless[0], networks: ["facebook", "instagram", "x"] }], new Set()), false);
+  assert.equal(shouldImport(post, new Set(), new Set(), "2026-01-01", [{ ...idless[0], networks: ["instagram"] }], new Set()), true);
   assert.equal(shouldImport(post, new Set(), new Set(), "2026-01-01", [{ ...idless[0], textHash: textHash("Other") }], new Set()), true);
 });
 
@@ -1315,15 +1319,15 @@ test("applyRelink rewrites ids and keeps state", async () => {
   await addLinks(pool, id, "403266041", ["facebook", "instagram"], "2026-10-23T17:19", "scheduled", { uuid: "", created: "2026-10-22T11:19" });
   await pool.query(`UPDATE metricool_links SET text_hash = $1 WHERE content_item_id = $2`, [textHash(probe), id]);
   const links = (await linksFor(pool, [id])).get(id)!;
-  assert.equal(await applyRelink(pool, relinkPlan(links, moved, [], await heldPostIds(pool))), 2);
+  assert.equal(await applyRelink(pool, relinkPlan(links, moved, [], await heldPostIds(pool)).entries), 2);
   const after = (await linksFor(pool, [id])).get(id)!;
   assert.deepEqual(after.map((l) => [l.network, l.metricoolPostId, l.state]), [["facebook", "403266378", "scheduled"], ["instagram", "403266388", "scheduled"]]);
   assert.deepEqual(after.map((l) => l.metricoolUuid), ["6952897850155486888", "8990753926270239577"]);
   assert.equal(after[0].metricoolCreated, "2026-10-22T11:19");
-  assert.deepEqual(relinkPlan(after, moved, [], await heldPostIds(pool)), []);
+  assert.deepEqual(relinkPlan(after, moved, [], await heldPostIds(pool)).entries, []);
   // A later edit moves the facebook link on again; no stale or duplicate row is left behind.
   const edited = realPlanner("metricool-planner-after-edit.json");
-  assert.equal(await applyRelink(pool, relinkPlan(after, edited, [], await heldPostIds(pool))), 1);
+  assert.equal(await applyRelink(pool, relinkPlan(after, edited, [], await heldPostIds(pool)).entries), 1);
   const rows = (await linksFor(pool, [id])).get(id)!;
   assert.deepEqual(rows.map((l) => [l.network, l.metricoolPostId]).sort(), [["facebook", "403266648"], ["instagram", "403266388"]]);
   assert.equal((await pool.query(`SELECT 1 FROM metricool_links WHERE metricool_post_id = '403266378'`)).rowCount, 0);
@@ -1352,10 +1356,16 @@ test("an id-less send becomes a new scheduled link", async () => {
   // A copy of the real edited post under an id no earlier test linked.
   const edited = realPlanner("metricool-planner-after-edit.json").filter((p) => p.id === "403266648").map((p) => ({ ...p, id: "idless-9001" }));
   const text = edited[0].networks[0].text;
-  const plan = relinkPlan([], edited, [{ itemId: r.value.id, networks: ["facebook"], textHash: textHash(text), sentAt: "2026-10-22T11:19" }], await heldPostIds(pool));
+  const sendId = String((await pool.query(
+    `INSERT INTO metricool_sends (source_type, source_ref, text, networks, scheduled_for, timezone, metricool_post_id, status)
+     VALUES ('content', $1, $2, 'facebook', '2026-10-23T17:19:00', 'America/New_York', '', 'sent') RETURNING id`, [r.value.id, text])).rows[0].id);
+  const plan = relinkPlan([], edited, [{ sendId, itemId: r.value.id, networks: ["facebook"], textHash: textHash(text), sentAt: "2026-10-22T11:19" }], await heldPostIds(pool)).entries;
   assert.equal(await applyRelink(pool, plan), 1);
   const rows = (await linksFor(pool, [r.value.id])).get(r.value.id)!;
   assert.ok(rows.some((l) => l.metricoolPostId === "idless-9001" && l.state === "scheduled" && l.scheduledFor === "2026-10-23T17:19"));
+  // The send now carries the post's id: it's no longer id-less, and the import guard counts it as sent.
+  assert.equal((await pool.query(`SELECT metricool_post_id FROM metricool_sends WHERE id = $1`, [sendId])).rows[0].metricool_post_id, "idless-9001");
+  await pool.query(`DELETE FROM metricool_sends WHERE id = $1`, [sendId]);
 });
 
 test("refreshIdents fills uuid and created for present posts, once", async () => {
@@ -1382,14 +1392,30 @@ test("refreshIdents fills uuid and created for present posts, once", async () =>
 test("idlessSendsForRelink converts send time to the church zone and keeps content sends only", async () => {
   const ins = (type: string, ref: string, postId: string) => pool.query(
     `INSERT INTO metricool_sends (source_type, source_ref, text, networks, scheduled_for, timezone, metricool_post_id, status, created_at)
-     VALUES ($1,$2,'hello','facebook,twitter','2026-11-01T09:00','America/Chicago',$3,'sent','2026-10-22T16:19:30Z')`, [type, ref, postId]);
-  await pool.query(`DELETE FROM metricool_sends WHERE source_ref IN ('zc-item','zc-other','zc-withid')`);
-  await ins("content", "zc-item", "");
+     VALUES ($1,$2,'hello','facebook,twitter','2026-11-01T09:00','America/Chicago',$3,'sent','2026-10-22T16:19:30Z') RETURNING id`, [type, ref, postId]);
+  await pool.query(`DELETE FROM metricool_sends WHERE source_ref IN ('zc-item','zc-other','zc-withid','zc-gone')`);
+  await pool.query(`DELETE FROM content_items WHERE id IN ('zc-item','zc-other','zc-withid')`);
+  for (const id of ["zc-item", "zc-other", "zc-withid"]) {
+    await pool.query(`INSERT INTO content_items (id, title, publish_date) VALUES ($1, 'zc', '2026-11-01')`, [id]);
+  }
+  const sendId = String((await ins("content", "zc-item", "")).rows[0].id);
   await ins("sermon", "zc-other", "");
   await ins("content", "zc-withid", "123");
-  const got = (await idlessSendsForRelink(pool, "America/New_York")).filter((x) => ["zc-item", "zc-other", "zc-withid"].includes(x.itemId));
-  assert.deepEqual(got, [{ itemId: "zc-item", textHash: textHash("hello"), sentAt: "2026-10-22T12:19", networks: ["facebook", "x"] }]);
-  await pool.query(`DELETE FROM metricool_sends WHERE source_ref IN ('zc-item','zc-other','zc-withid')`);
+  await ins("content", "zc-gone", "");  // its post was deleted: nothing to link it to
+  const mine = async () => (await idlessSendsForRelink(pool, "America/New_York")).filter((x) => ["zc-item", "zc-other", "zc-withid", "zc-gone"].includes(x.itemId));
+  assert.deepEqual(await mine(), [{ sendId, itemId: "zc-item", textHash: textHash("hello"), sentAt: "2026-10-22T12:19", networks: ["facebook", "x"] }]);
+  // A link on one of its networks made at or after the send means it was relinked already (before ids were written back).
+  await pool.query(`INSERT INTO metricool_links (content_item_id, metricool_post_id, network, scheduled_for, state, created_at)
+                    VALUES ('zc-item', 'zc-old', 'x', '2026-11-01T09:00', 'scheduled', '2026-10-22T16:00:00Z')`);
+  assert.equal((await mine()).length, 1, "a link from before the send doesn't count");
+  await pool.query(`INSERT INTO metricool_links (content_item_id, metricool_post_id, network, scheduled_for, state, created_at)
+                    VALUES ('zc-item', 'zc-other-net', 'instagram', '2026-11-01T09:00', 'scheduled', '2026-10-22T16:20:00Z')`);
+  assert.equal((await mine()).length, 1, "nor one on another network");
+  await pool.query(`INSERT INTO metricool_links (content_item_id, metricool_post_id, network, scheduled_for, state, created_at)
+                    VALUES ('zc-item', 'zc-new', 'x', '2026-11-01T09:00', 'scheduled', '2026-10-22T16:19:30Z')`);
+  assert.deepEqual(await mine(), []);
+  await pool.query(`DELETE FROM metricool_sends WHERE source_ref IN ('zc-item','zc-other','zc-withid','zc-gone')`);
+  await pool.query(`DELETE FROM content_items WHERE id IN ('zc-item','zc-other','zc-withid')`);
 });
 
 // ── Metricool sync ──
@@ -1398,7 +1424,7 @@ test("idlessSendsForRelink converts send time to the church zone and keeps conte
 const SYNC_NOW = new Date("2026-10-22T16:00:00Z");
 const PROBE_TEXT = "Metricool API probe — ignore. 2026-10-22T15:19:09.421Z";
 const EDITED_TEXT = PROBE_TEXT + "\nFBTEXTEDIT";
-const NO_CHANGE = { moved: 0, split: 0, edited: 0, gone: 0, imported: 0, published: 0, failed: 0, importFailed: 0 };
+const NO_CHANGE = { moved: 0, split: 0, edited: 0, gone: 0, imported: 0, published: 0, failed: 0, importFailed: 0, relinkFailed: 0 };
 const plannerRaw = (name: string) => JSON.parse(readFileSync(join(__dirname, "..", "src", "fixtures", `metricool-planner-${name}.json`), "utf8"));
 /** The before payload with the probe post changed (or dropped, when `change` returns null). */
 const probeVariant = (change: (row: any) => any) => {
@@ -1698,6 +1724,93 @@ test("a one-post sync relinks an id-less send even before the post has any links
     await syncWith(plannerRaw("before"), { itemId: id });
     assert.deepEqual((await linkRows(id)).map((l) => [l.metricoolPostId, l.network, l.state]),
       [["403266041", "facebook", "scheduled"], ["403266041", "instagram", "scheduled"]]);
+  } finally { await clearSyncSettings(); }
+});
+
+/** The probe post as an id-less send (Metricool returned no id), logged a moment after Metricool made it. */
+const idlessProbeSend = (itemId: string) => pool.query(
+  `INSERT INTO metricool_sends (source_type, source_ref, text, networks, scheduled_for, timezone, metricool_post_id, status, created_at)
+   VALUES ('content', $1, $2, 'facebook,instagram', '2026-10-23T17:19:00', 'America/New_York', '', 'sent', '2026-10-22T15:19:30Z') RETURNING id`,
+  [itemId, PROBE_TEXT]);
+
+test("an id-less send is followed through a move and an edit, never imported twice", async () => {
+  const id = await probePost();
+  await pool.query("DELETE FROM metricool_links");
+  const sendId = (await idlessProbeSend(id)).rows[0].id;
+  try {
+    assert.deepEqual(await syncWith(plannerRaw("before")), { ...NO_CHANGE, imported: 5 });
+    assert.deepEqual((await linkRows(id)).map((l) => [l.metricoolPostId, l.network]), [["403266041", "facebook"], ["403266041", "instagram"]]);
+    assert.equal((await pool.query(`SELECT metricool_post_id FROM metricool_sends WHERE id = $1`, [sendId])).rows[0].metricool_post_id, "403266041",
+      "the send now carries its Metricool id");
+
+    assert.deepEqual(await syncWith(plannerRaw("after-move")), { ...NO_CHANGE, moved: 1, split: 1 });
+    assert.deepEqual((await linkRows(id)).map((l) => [l.metricoolPostId, l.network, l.state]), [["403266378", "facebook", "scheduled"]]);
+    const igId = (await pool.query("SELECT id FROM content_items WHERE split_from = $1", [id])).rows[0].id;
+    assert.deepEqual((await linkRows(igId)).map((l) => [l.metricoolPostId, l.network, l.state]), [["403266388", "instagram", "scheduled"]]);
+
+    assert.deepEqual(await syncWith(plannerRaw("after-edit")), { ...NO_CHANGE, edited: 1 });
+    assert.deepEqual((await linkRows(id)).map((l) => [l.metricoolPostId, l.state]), [["403266648", "scheduled"]], "followed by uuid");
+    assert.equal((await itemRow(id)).caption, EDITED_TEXT);
+    assert.equal((await pool.query("SELECT count(*)::int AS n FROM content_items WHERE from_metricool")).rows[0].n, 5, "nothing more imported");
+    assert.equal((await pool.query("SELECT count(*)::int AS n FROM metricool_links WHERE state = 'gone'")).rows[0].n, 0);
+  } finally { await clearSyncSettings(); }
+});
+
+test("an id-less send whose post was deleted here doesn't stop the sync, and its Metricool post isn't imported", async () => {
+  const id = await probePost();
+  await pool.query("DELETE FROM metricool_links");
+  await idlessProbeSend(id);
+  await pool.query("DELETE FROM content_items WHERE id = $1", [id]);
+  try {
+    assert.deepEqual(await syncWith(plannerRaw("before")), { ...NO_CHANGE, imported: 5 });
+    assert.equal((await pool.query(`SELECT count(*)::int AS n FROM metricool_links WHERE metricool_post_id = '403266041'`)).rows[0].n, 0);
+  } finally { await clearSyncSettings(); }
+});
+
+test("a relink that fails is counted, and the run still reconciles and imports", async () => {
+  const id = await probePost();
+  await pool.query("DELETE FROM metricool_links");
+  await idlessProbeSend(id);
+  await pool.query(`CREATE OR REPLACE FUNCTION refuse_probe_link() RETURNS trigger AS $$
+                    BEGIN IF NEW.metricool_post_id = '403266041' THEN RAISE EXCEPTION 'link refused'; END IF; RETURN NEW; END $$ LANGUAGE plpgsql`);
+  await pool.query(`CREATE TRIGGER refuse_probe_link BEFORE INSERT ON metricool_links FOR EACH ROW EXECUTE FUNCTION refuse_probe_link()`);
+  try {
+    assert.deepEqual(await syncWith(plannerRaw("before")), { ...NO_CHANGE, imported: 5, relinkFailed: 1 });
+    assert.equal((await pool.query(`SELECT count(*)::int AS n FROM metricool_links WHERE metricool_post_id = '403266041'`)).rows[0].n, 0,
+      "the probe's Metricool post isn't imported as a stranger");
+  } finally {
+    await pool.query("DROP TRIGGER IF EXISTS refuse_probe_link ON metricool_links");
+    await pool.query("DROP FUNCTION IF EXISTS refuse_probe_link()");
+    await clearSyncSettings();
+  }
+});
+
+test("a link that could be either of two Metricool posts is left as it is, noted, and neither post is imported", async () => {
+  const id = await probePost();
+  try {
+    await syncWith(plannerRaw("before"));
+    // The probe re-id'd twice over: same creation minute and text, new uuids. Can't tell which is ours.
+    const raw = plannerRaw("before");
+    raw.data = raw.data.flatMap((r: any) => (String(r.id) === "403266041"
+      ? [{ ...r, id: 990001, uuid: "u-one" }, { ...r, id: 990002, uuid: "u-two" }] : [r]));
+    const out = await syncWith(raw);
+    assert.deepEqual(out, NO_CHANGE);
+    assert.deepEqual((await linkRows(id)).map((l) => [l.metricoolPostId, l.state, l.goneAt]),
+      [["403266041", "scheduled", null], ["403266041", "scheduled", null]]);
+    const row = await itemRow(id);
+    assert.equal(row.status, "scheduled");
+    assert.match(row.publish_check, /Couldn't tell which Metricool post this is now\./);
+    assert.equal((await pool.query(`SELECT count(*)::int AS n FROM metricool_links WHERE metricool_post_id IN ('990001','990002')`)).rows[0].n, 0);
+  } finally { await clearSyncSettings(); }
+});
+
+test("a send's links record its time on the church's clock", async () => {
+  const id = await sendablePost();
+  try {
+    const { res } = await sendWith({ contentItemId: id, timezone: "America/Chicago" }, { ids: ["7301"] });
+    assert.equal(res.ok, true, JSON.stringify(res));
+    assert.deepEqual((await linkRows(id)).map((l) => [l.network, l.scheduledFor]),
+      [["facebook", "2026-11-05T11:00"], ["instagram", "2026-11-05T11:00"]]);
   } finally { await clearSyncSettings(); }
 });
 
