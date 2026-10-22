@@ -1381,7 +1381,7 @@ test("idlessSendsForRelink converts send time to the church zone and keeps conte
 const SYNC_NOW = new Date("2026-10-22T16:00:00Z");
 const PROBE_TEXT = "Metricool API probe — ignore. 2026-10-22T15:19:09.421Z";
 const EDITED_TEXT = PROBE_TEXT + "\nFBTEXTEDIT";
-const NO_CHANGE = { moved: 0, split: 0, edited: 0, gone: 0, imported: 0, published: 0 };
+const NO_CHANGE = { moved: 0, split: 0, edited: 0, gone: 0, imported: 0, published: 0, failed: 0, importFailed: 0 };
 const plannerRaw = (name: string) => JSON.parse(readFileSync(join(__dirname, "..", "src", "fixtures", `metricool-planner-${name}.json`), "utf8"));
 /** The before payload with the probe post changed (or dropped, when `change` returns null). */
 const probeVariant = (change: (row: any) => any) => {
@@ -1515,11 +1515,13 @@ test("a shared caption edited on one network only becomes separate captions", as
   const id = await probePost();
   try {
     await syncWith(plannerRaw("before"));
+    // X is on the post but was never sent: it keeps the old shared caption rather than going blank.
+    await pool.query(`UPDATE content_items SET platforms = '{facebook,instagram,x}' WHERE id = $1`, [id]);
     const edited = probeVariant((r) => ({ ...r, providers: r.providers.map((p: any) => (p.network === "facebook" ? { ...p, text: "FB only" } : p)) }));
     assert.deepEqual(await syncWith(edited), { ...NO_CHANGE, edited: 1 });
     const row = await itemRow(id);
     assert.equal(row.caption_mode, "separate");
-    assert.deepEqual(row.captions, { facebook: "FB only", instagram: PROBE_TEXT });
+    assert.deepEqual(row.captions, { facebook: "FB only", instagram: PROBE_TEXT, x: PROBE_TEXT });
     const history = (await pool.query("SELECT key, text FROM post_drafts WHERE content_item_id = $1", [id])).rows;
     assert.deepEqual(history, [{ key: "all", text: PROBE_TEXT }]);
     await assertSecondSyncChangesNothing(edited);
@@ -1600,6 +1602,13 @@ test("a failed planner call changes nothing", async () => {
     assert.deepEqual(after.links, before.links);
     assert.deepEqual(after.items.map(({ publish_check, updated_at, ...rest }) => rest), before.items.map(({ publish_check, updated_at, ...rest }) => rest));
     assert.match((await itemRow(id)).publish_check, /^Couldn't check Metricool: Metricool answered 500/);
+    const dropped = await createContent(pool, { title: "Called off", publishDate: "2026-10-23", platforms: ["facebook"], noMediaNeeded: true }, "me@x.org");
+    assert.ok(dropped.ok);
+    await pool.query(`UPDATE content_items SET status = 'cancelled' WHERE id = $1`, [dropped.value.id]);
+    await addLinks(pool, dropped.value.id, "cancelled-1", ["facebook"], "2026-10-23T09:00", "scheduled");
+    await syncWith("fail");
+    assert.equal((await itemRow(dropped.value.id)).publish_check, "", "a cancelled post gets no note");
+    await pool.query("DELETE FROM content_items WHERE id = $1", [dropped.value.id]);
     // Not set up at all: the same note, nothing else.
     await pool.query("DELETE FROM settings WHERE key = 'metricool_token'");
     await syncWith(plannerRaw("before"));
@@ -1618,4 +1627,45 @@ test("syncing one post touches only that post and imports nothing", async () => 
     assert.equal((await pool.query("SELECT count(*)::int AS n FROM content_items WHERE from_metricool")).rows[0].n, 0);
     assert.deepEqual((await itemRow(id)).platforms, ["facebook"]);
   } finally { await clearSyncSettings(); }
+});
+
+test("a one-post sync never marks a link gone: the post may have moved outside its window", async () => {
+  const id = await probePost();
+  try {
+    await syncWith(plannerRaw("before"));
+    const out = await syncWith(probeVariant(() => null), { itemId: id });
+    assert.deepEqual(out, NO_CHANGE);
+    assert.deepEqual((await linkRows(id)).map((l) => [l.state, l.goneAt]), [["scheduled", null], ["scheduled", null]]);
+    assert.deepEqual([(await itemRow(id)).status, (await itemRow(id)).publish_check], ["scheduled", ""]);
+  } finally { await clearSyncSettings(); }
+});
+
+test("one post failing to sync leaves a note and the rest of the run carries on", async () => {
+  const id = await probePost();
+  const other = await createContent(pool, { title: "Vision Sunday", publishDate: "2026-10-24", publishTime: "11:30", platforms: ["facebook"],
+    noMediaNeeded: true }, "me@x.org");
+  assert.ok(other.ok);
+  await pool.query(`UPDATE content_items SET status = 'scheduled' WHERE id = $1`, [other.value.id]);
+  await addLinks(pool, other.value.id, "403256740", ["facebook"], "2026-10-24T11:30", "scheduled");
+  // Refuse any split's new post, so the probe's split throws after its own transaction committed.
+  await pool.query(`CREATE OR REPLACE FUNCTION refuse_split() RETURNS trigger AS $$
+                    BEGIN IF NEW.split_from IS NOT NULL THEN RAISE EXCEPTION 'split refused'; END IF; RETURN NEW; END $$ LANGUAGE plpgsql`);
+  try {
+    const card = (r: any) => String(r.id) !== "403218820";  // left out at first, so the failing run has one to import
+    const base = plannerRaw("before"); base.data = base.data.filter(card);
+    await syncWith(base);
+    await pool.query(`CREATE TRIGGER refuse_split BEFORE INSERT ON content_items FOR EACH ROW EXECUTE FUNCTION refuse_split()`);
+    const body = plannerRaw("after-move");
+    for (const r of body.data) if (String(r.id) === "403256740") r.publicationDate = { dateTime: "2026-10-26T11:30:00", timezone: "America/New_York" };
+    const out = await syncWith(body);
+    assert.equal(out.failed, 1);
+    assert.equal(out.imported, 1, "imports still happen");
+    assert.match((await itemRow(id)).publish_check, /^Couldn't sync with Metricool: split refused/);
+    const moved = await itemRow(other.value.id);
+    assert.deepEqual([moved.d, moved.t], ["2026-10-26", "11:30"], "the other post still synced");
+  } finally {
+    await pool.query("DROP TRIGGER IF EXISTS refuse_split ON content_items");
+    await pool.query("DROP FUNCTION IF EXISTS refuse_split()");
+    await clearSyncSettings();
+  }
 });

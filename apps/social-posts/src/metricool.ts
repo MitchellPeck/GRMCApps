@@ -152,7 +152,8 @@ export function publicationState(post: { providers?: McProvider[] }): { state: "
 export async function fetchSchedulerPostsRaw(c: MetricoolCreds, start: string, end: string, timezone: string): Promise<string> {
   if (!c.blogId) throw new Error("No Metricool brand picked — open Settings, load brands, and choose one.");
   const qs = new URLSearchParams({ userId: c.userId, blogId: c.blogId, start: `${start}T00:00:00`, end: `${end}T23:59:59`, timezone, extendedRange: "true" });
-  const res = await fetch(`${BASE}/v2/scheduler/posts?${qs}`, { headers: mcHeaders(c) });
+  // Bounded: the sync runs one at a time, so a stalled call would hold up every later run.
+  const res = await fetch(`${BASE}/v2/scheduler/posts?${qs}`, { headers: mcHeaders(c), signal: AbortSignal.timeout(60_000) });
   const text = await res.text();
   if (!res.ok) throw new Error(`Metricool answered ${res.status}: ${text.trim().slice(0, 200)}`);
   return text;

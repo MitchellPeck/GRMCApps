@@ -24,6 +24,8 @@ export interface SyncCounts {
   /** Platforms deleted in Metricool. */ gone: number;
   imported: number;
   /** Posts that became Published. */ published: number;
+  /** Posts that couldn't be synced this run (each carries a note); tried again next run. */ failed: number;
+  /** Metricool-only posts that couldn't be imported; tried again next run. */ importFailed: number;
   /** Set when Metricool couldn't be read; nothing else changed. */ error?: string;
 }
 
@@ -31,6 +33,8 @@ type Db = Pool | PoolClient;
 interface Covered { from: string; to: string }
 
 const dayOf = (l: Link) => l.scheduledFor.slice(0, 10);
+// A range no day falls in: one-post syncs list only a few days, so absence there proves nothing.
+const NOTHING_COVERED: Covered = { from: "~", to: "" };
 const covers = (c: Covered, l: Link) => !!dayOf(l) && dayOf(l) >= c.from && dayOf(l) <= c.to;
 
 // Runs one at a time: the 30-minute job and a button press overlapping could import the same post twice.
@@ -46,7 +50,7 @@ async function syncOnce(pool: Pool, o: { itemId?: string; now?: Date }): Promise
   const now = o.now || new Date();
   const tz = (await getSetting(pool, "default_timezone")) || DEFAULT_TZ;
   const today = localDateIn(tz, now);
-  const counts: SyncCounts = { moved: 0, split: 0, edited: 0, gone: 0, imported: 0, published: 0 };
+  const counts: SyncCounts = { moved: 0, split: 0, edited: 0, gone: 0, imported: 0, published: 0, failed: 0, importFailed: 0 };
   // Go-live day: nothing dated before the first sync is ever imported.
   if (!(await getSetting(pool, IMPORT_SINCE_SETTING))) await setSetting(pool, IMPORT_SINCE_SETTING, today);
 
@@ -71,7 +75,7 @@ async function syncOnce(pool: Pool, o: { itemId?: string; now?: Date }): Promise
   } catch (e) {
     const reason = (e as Error).message;
     await pool.query(
-      `UPDATE content_items SET publish_check = $2 WHERE id = ANY($1) AND status <> 'published' AND publish_check <> $2`,
+      `UPDATE content_items SET publish_check = $2 WHERE id = ANY($1) AND status NOT IN ('published','cancelled') AND publish_check <> $2`,
       [[...new Set(ranged.map((l) => l.contentItemId))], "Couldn't check Metricool: " + reason]);
     return { ...counts, error: reason };
   }
@@ -85,8 +89,17 @@ async function syncOnce(pool: Pool, o: { itemId?: string; now?: Date }): Promise
 
   const touched = new Set([...ranged.map((l) => l.contentItemId), ...plan.map((e) => e.itemId)]);
   const byId = new Map(planner.map((p) => [p.id, p]));
+  // Only the full run marks links gone; a post moved beyond a one-post window would otherwise read as deleted.
+  const goneRange = o.itemId ? NOTHING_COVERED : covered;
   for (const [itemId, itemLinks] of await linksFor(pool, [...touched])) {
-    await syncItem(pool, itemId, itemLinks, byId, covered, tz, now, counts);
+    try {
+      await syncItem(pool, itemId, itemLinks, byId, goneRange, tz, now, counts);
+    } catch (e) {
+      // One broken post mustn't stop the others (or the imports) on every run from now on.
+      counts.failed++;
+      await pool.query(`UPDATE content_items SET publish_check = $2 WHERE id = $1 AND publish_check <> $2`,
+        [itemId, "Couldn't sync with Metricool: " + (e as Error).message]);
+    }
   }
 
   if (!o.itemId) {
@@ -98,7 +111,7 @@ async function syncOnce(pool: Pool, o: { itemId?: string; now?: Date }): Promise
     for (const p of planner) {
       if (!shouldImport(p, linked, sent, since, unsent, claimed)) continue;
       // One unreadable post mustn't stop the rest; it isn't linked, so the next run tries again.
-      try { await importPlannerPost(pool, p, tz); counts.imported++; } catch { /* retried next run */ }
+      try { await importPlannerPost(pool, p, tz); counts.imported++; } catch { counts.importFailed++; }
     }
   }
   return counts;
@@ -121,7 +134,7 @@ async function syncItem(
   try {
     await client.query("BEGIN");
     const item = (await client.query(
-      `SELECT caption, caption_mode, captions, publish_date::text AS d, to_char(publish_time, 'HH24:MI') AS t
+      `SELECT caption, caption_mode, captions, platforms, publish_date::text AS d, to_char(publish_time, 'HH24:MI') AS t
          FROM content_items WHERE id = $1 FOR UPDATE`, [itemId])).rows[0];
     if (!item) { await client.query("ROLLBACK"); return; }
     for (const c of changes) await writeLinkChange(client, c, now);
@@ -182,7 +195,8 @@ async function writeLinkChange(db: Db, c: LinkChange, now: Date): Promise<void> 
 
 /** Metricool's text wins; the old caption goes to draft history first so it can be brought back. */
 async function replaceCaption(
-  db: PoolClient, itemId: string, item: { caption: string; caption_mode: "same" | "separate"; captions: Record<string, string> },
+  db: PoolClient, itemId: string,
+  item: { caption: string; caption_mode: "same" | "separate"; captions: Record<string, string>; platforms: string[] },
   edits: LinkChange[], after: Link[], planner: Map<string, PlannerPost>,
 ): Promise<void> {
   await logDraft(db, itemId, { captionMode: item.caption_mode, caption: item.caption, captions: item.captions || {} }, "metricool-sync");
@@ -196,9 +210,11 @@ async function replaceCaption(
     planner.get(l.metricoolPostId)?.networks.find((n) => n.network === l.network)?.text] as const)
     .filter((x): x is readonly [string, string] => x[1] !== undefined);
   if (new Set(texts.map(([, t]) => textHash(t))).size > 1) {
-    // One shared caption, but Metricool now holds different text per network.
+    // One shared caption, but Metricool now holds different text per network. Platforms Metricool
+    // doesn't hold keep the old shared caption, so none is left blank.
+    const captions = { ...Object.fromEntries((item.platforms || []).map((n) => [n, item.caption])), ...Object.fromEntries(texts) };
     await db.query(`UPDATE content_items SET caption_mode = 'separate', caption = '', captions = $2, updated_at = now() WHERE id = $1`,
-      [itemId, Object.fromEntries(texts)]);
+      [itemId, captions]);
   } else {
     await db.query(`UPDATE content_items SET caption = $2, updated_at = now() WHERE id = $1`, [itemId, edits[0].text]);
   }
