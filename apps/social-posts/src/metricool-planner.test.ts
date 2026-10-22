@@ -18,7 +18,7 @@ test("parsePlanner reads the real before payload", () => {
   assert.ok(probe.networks.every((n) => n.state === "scheduled" && n.scheduledFor === "2026-10-23T17:19"));
   assert.equal(probe.uuid, "3714024336334799271");
   assert.equal(probe.createdAt, "2026-10-22T11:19");
-  assert.ok(probe.creatorId);
+  assert.equal(probe.creatorId, "3786559");
   const pub = posts.find((p) => p.id === "403208800")!.networks[0];
   assert.equal(pub.state, "published");
   assert.match(pub.publicUrl, /^https:\/\/facebook\.com\//);

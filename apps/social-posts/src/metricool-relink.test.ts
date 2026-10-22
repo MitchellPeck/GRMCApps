@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parsePlanner, textHash, type PlannerPost } from "./metricool-planner";
-import { relinkPlan } from "./pipeline/metricool-relink";
+import { relinkPlan as plan4 } from "./pipeline/metricool-relink";
 import { shouldImport } from "./pipeline/metricool-import";
 import type { Link } from "./pipeline/metricool-links";
 
@@ -12,6 +12,9 @@ const planner = (name: string) => parsePlanner(JSON.parse(readFileSync(join(__di
 const link = (o: Partial<Link>): Link => ({
   contentItemId: "i1", metricoolPostId: "403266041", network: "facebook", scheduledFor: "2026-10-23T17:19", state: "scheduled",
   detail: "", publicUrl: "", textHash: "", goneAt: null, metricoolUuid: "", metricoolCreated: "", ...o });
+// Test helper: held ids default to the given links' own, plus any others.
+const relinkPlan = (links: Link[], p: PlannerPost[], idless: Parameters<typeof plan4>[2], extra: string[] = []) =>
+  plan4(links, p, idless, new Set([...links.map((l) => l.metricoolPostId), ...extra]));
 const probeText = () => planner("metricool-planner-before.json").find((p) => p.id === "403266041")!.networks[0].text;
 
 test("a one-network move is followed to both new ids", () => {
@@ -75,7 +78,11 @@ test("an id-less send is matched to its Metricool post", () => {
   assert.equal(relinkPlan([], planner("metricool-planner-after-move.json"), [{ ...send, sentAt: "2026-10-22T11:20" }]).length, 1);
   assert.equal(relinkPlan([], planner("metricool-planner-after-move.json"), [{ ...send, sentAt: "2026-10-22T11:21" }]).length, 0);
   // A post a link already holds is not up for grabs.
-  assert.equal(relinkPlan([link({ metricoolPostId: "403266378" })], planner("metricool-planner-after-move.json"), [send]).length, 0);
+  assert.equal(relinkPlan([], planner("metricool-planner-after-move.json"), [send], ["403266378"]).length, 0);
+  // ...and neither is a post another item's link holds when only a subset of links is passed.
+  const other = link({ metricoolPostId: "403266378", contentItemId: "other" });
+  const gone = link({ metricoolPostId: "gone1", metricoolCreated: "2026-10-22T11:19", textHash: textHash(probeText()) });
+  assert.deepEqual(relinkPlan([gone], planner("metricool-planner-after-move.json"), [], [other.metricoolPostId]).map((e) => e.toPostId), []);
 });
 
 test("relinked posts are not imported", () => {

@@ -12,7 +12,7 @@ const readable = (n: PlannerNetwork) => !!n.scheduledFor && n.state !== "unknown
 
 export function shouldImport(
   post: PlannerPost, linkedIds: Set<string>, sentIds: Set<string>, importSince: string, idlessSends: IdlessSend[],
-  claimedIds: Set<string> = new Set(),  // posts a relink plan already follows
+  claimedIds: Set<string>,  // posts a relink plan already follows
 ): boolean {
   if (linkedIds.has(post.id) || sentIds.has(post.id) || claimedIds.has(post.id)) return false;
   const nets = post.networks.filter(readable);

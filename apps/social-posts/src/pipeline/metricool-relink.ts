@@ -1,6 +1,6 @@
 import { Pool } from "pg";
 import { PlannerPost, textHash } from "../metricool-planner";
-import { Link, addLinks } from "./metricool-links";
+import type { Link } from "./metricool-links";
 
 export interface RelinkSend { itemId: string; networks: string[]; textHash: string; sentAt: string }
 export interface RelinkEntry {
@@ -17,11 +17,11 @@ const minuteApart = (a: string, b: string) => {
 /**
  * Metricool gives a post a new id when one of its networks is moved or edited. Pure: for links whose
  * post vanished, and app sends that never got an id, find the one planner post+network each became.
+ * `held` is every post id in metricool_links (not just `links`), so another item's post is never taken.
  * Ambiguity changes nothing, and a planner post+network is never handed to two entries.
  */
-export function relinkPlan(links: Link[], planner: PlannerPost[], idless: RelinkSend[]): RelinkEntry[] {
+export function relinkPlan(links: Link[], planner: PlannerPost[], idless: RelinkSend[], held: Set<string>): RelinkEntry[] {
   const present = new Set(planner.map((p) => p.id));
-  const held = new Set(links.map((l) => l.metricoolPostId));
   const free = planner.filter((p) => !held.has(p.id));
   const picks: RelinkEntry[] = [];
 
@@ -31,7 +31,8 @@ export function relinkPlan(links: Link[], planner: PlannerPost[], idless: Relink
     const textOf = (p: PlannerPost) => textHash(p.networks.find((n) => n.network === link.network)!.text);
     let found = link.metricoolUuid ? cands.filter((p) => p.uuid === link.metricoolUuid) : [];
     if (!found.length) {
-      found = cands.filter((p) => p.createdAt && p.createdAt === link.metricoolCreated && p.creatorId
+      // No creator check: Link stores no creator id, so createdAt plus text (or created alone) decides.
+      found = cands.filter((p) => p.createdAt && p.createdAt === link.metricoolCreated
         && (link.textHash ? textOf(p) === link.textHash : true));
     }
     if (found.length !== 1) continue;
@@ -57,19 +58,47 @@ export function relinkPlan(links: Link[], planner: PlannerPost[], idless: Relink
   return picks.filter((e) => wanted.get(key(e.toPostId, e.network)) === 1);
 }
 
-/** Rewrite each link to its new id (state stays); an id-less send gets a new scheduled link. */
+/** Every post id any link holds, so relinkPlan never takes another item's post. */
+export async function heldPostIds(db: Pool): Promise<Set<string>> {
+  return new Set((await db.query(`SELECT DISTINCT metricool_post_id FROM metricool_links`)).rows.map((r) => String(r.metricool_post_id)));
+}
+
+/** Record uuid/created for links whose post is still in the planner, so a later move or edit can be followed. */
+export async function refreshIdents(db: Pool, links: Link[], planner: PlannerPost[]): Promise<number> {
+  const byId = new Map(planner.map((p) => [p.id, p]));
+  let n = 0;
+  for (const l of links) {
+    const p = byId.get(l.metricoolPostId);
+    if (!p || (p.uuid === l.metricoolUuid && p.createdAt === l.metricoolCreated)) continue;
+    n += (await db.query(
+      `UPDATE metricool_links SET metricool_uuid = $3, metricool_created = $4 WHERE metricool_post_id = $1 AND network = $2`,
+      [l.metricoolPostId, l.network, p.uuid, p.createdAt])).rowCount || 0;
+  }
+  return n;
+}
+
+/**
+ * Rewrite each link to its new id (state stays); an id-less send gets a new scheduled link. Never
+ * overwrites a row that already holds the target (post id, network): that entry is skipped.
+ * Returns the rows actually written.
+ */
 export async function applyRelink(db: Pool, plan: RelinkEntry[]): Promise<number> {
   const client = await db.connect();
+  let written = 0;
   try {
     await client.query("BEGIN");
     for (const e of plan) {
       if (e.link) {
-        await client.query(
+        written += (await client.query(
           `UPDATE metricool_links SET metricool_post_id = $3, metricool_uuid = $4, metricool_created = $5, last_seen_at = now()
-            WHERE metricool_post_id = $1 AND network = $2`,
-          [e.link.metricoolPostId, e.network, e.toPostId, e.uuid, e.created]);
+            WHERE metricool_post_id = $1 AND network = $2
+              AND NOT EXISTS (SELECT 1 FROM metricool_links WHERE metricool_post_id = $3 AND network = $2)`,
+          [e.link.metricoolPostId, e.network, e.toPostId, e.uuid, e.created])).rowCount || 0;
       } else {
-        await addLinks(client as any, e.itemId, e.toPostId, [e.network], e.scheduledFor, "scheduled", { uuid: e.uuid, created: e.created });
+        written += (await client.query(
+          `INSERT INTO metricool_links (content_item_id, metricool_post_id, network, scheduled_for, state, last_seen_at, metricool_uuid, metricool_created)
+           VALUES ($1,$2,$3,$4,'scheduled', now(), $5, $6) ON CONFLICT (metricool_post_id, network) DO NOTHING`,
+          [e.itemId, e.toPostId, e.network, e.scheduledFor.slice(0, 16), e.uuid, e.created])).rowCount || 0;
       }
     }
     await client.query("COMMIT");
@@ -79,5 +108,5 @@ export async function applyRelink(db: Pool, plan: RelinkEntry[]): Promise<number
   } finally {
     client.release();
   }
-  return plan.length;
+  return written;
 }
