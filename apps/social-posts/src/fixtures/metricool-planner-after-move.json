@@ -1,0 +1,310 @@
+{
+ "data": [
+  {
+   "id": 403208800,
+   "publicationDate": {
+    "dateTime": "2026-10-22T10:23:00",
+    "timezone": "America/New_York"
+   },
+   "creationDate": {
+    "dateTime": "2026-10-22T10:23:00",
+    "timezone": "America/New_York"
+   },
+   "text": "When Sarah and her husband were new to GRMC, they hadn't had much of a chance to connect yet.\n\nThen a handwritten card from Pastor James showed up in the mail. No big occasion. Just a welcome.\n\nThey hung it on the fridge for months.\n\nThat's what stewardship looks like at its heart — giving your time and care to the people right in front of you.",
+   "firstCommentText": "",
+   "providers": [
+    {
+     "network": "facebook",
+     "id": "3363509777193565",
+     "status": "PUBLISHED",
+     "publicUrl": "https://facebook.com/684751397684105/posts/3363509777193565",
+     "detailedStatus": "Published"
+    }
+   ],
+   "media": [
+    "https://media.grmc.app/media/1792678948091-df525a57bb46-1097289028.mp4"
+   ],
+   "autoPublish": true,
+   "saveExternalMediaFiles": false,
+   "mediaAltText": [
+    null
+   ],
+   "shortener": false,
+   "draft": false,
+   "twitterData": {
+    "type": "POST"
+   },
+   "facebookData": {
+    "type": "POST"
+   },
+   "instagramData": {
+    "autoPublish": true,
+    "isAiGenerated": false
+   },
+   "hasNotReadNotes": false,
+   "uuid": "8811792558336527039",
+   "creatorUserMail": "REDACTED",
+   "creatorUserId": 3786559,
+   "brandTags": []
+  },
+  {
+   "id": 403218820,
+   "publicationDate": {
+    "dateTime": "2026-10-22T20:00:00",
+    "timezone": "America/New_York"
+   },
+   "creationDate": {
+    "dateTime": "2026-10-22T10:33:00",
+    "timezone": "America/New_York"
+   },
+   "text": "A handwritten card. That's it.\n\nThat's what made Sarah and her husband know they'd found home.\n\nSmall things done with intention change everything. That's the kind of church we're trying to be.",
+   "firstCommentText": "",
+   "providers": [
+    {
+     "network": "instagram",
+     "status": "PENDING",
+     "detailedStatus": "Pending"
+    }
+   ],
+   "media": [
+    "https://media.grmc.app/media/1792678948091-df525a57bb46-1097289028.mp4"
+   ],
+   "autoPublish": true,
+   "saveExternalMediaFiles": false,
+   "mediaAltText": [
+    null
+   ],
+   "shortener": false,
+   "draft": false,
+   "twitterData": {
+    "type": "POST"
+   },
+   "instagramData": {
+    "autoPublish": true,
+    "type": "REEL",
+    "showReelOnFeed": true,
+    "isAiGenerated": false
+   },
+   "hasNotReadNotes": false,
+   "uuid": "-6352209964798556468",
+   "creatorUserMail": "REDACTED",
+   "creatorUserId": 3786559,
+   "brandTags": []
+  },
+  {
+   "id": 403256726,
+   "publicationDate": {
+    "dateTime": "2026-10-24T11:30:00",
+    "timezone": "America/New_York"
+   },
+   "creationDate": {
+    "dateTime": "2026-10-22T11:10:00",
+    "timezone": "America/New_York"
+   },
+   "text": "This Sunday we're talking about vision — where we're headed and why it matters.\n\nCome hear from Habakkuk 2 and see the story God is writing here. All are welcome, 11am.",
+   "firstCommentText": "",
+   "providers": [
+    {
+     "network": "twitter",
+     "status": "PENDING",
+     "detailedStatus": "Pending"
+    }
+   ],
+   "media": [
+    "https://media.grmc.app/media/1792520525181-84161ea56375-1864796522.png"
+   ],
+   "autoPublish": true,
+   "saveExternalMediaFiles": false,
+   "mediaAltText": [
+    null
+   ],
+   "shortener": false,
+   "draft": false,
+   "twitterData": {
+    "type": "POST"
+   },
+   "instagramData": {
+    "autoPublish": true,
+    "isAiGenerated": false
+   },
+   "hasNotReadNotes": false,
+   "uuid": "8083171125155481163",
+   "creatorUserMail": "REDACTED",
+   "creatorUserId": 3786559,
+   "brandTags": []
+  },
+  {
+   "id": 403256740,
+   "publicationDate": {
+    "dateTime": "2026-10-24T11:30:00",
+    "timezone": "America/New_York"
+   },
+   "creationDate": {
+    "dateTime": "2026-10-22T11:10:00",
+    "timezone": "America/New_York"
+   },
+   "text": "This Sunday we're talking about vision — where we're headed and why it matters.\n\nCome hear from Habakkuk 2 and see the story God is writing here. All are welcome, 11am.",
+   "firstCommentText": "",
+   "providers": [
+    {
+     "network": "facebook",
+     "status": "PENDING",
+     "detailedStatus": "Pending"
+    }
+   ],
+   "media": [
+    "https://media.grmc.app/media/1792520525181-84161ea56375-1864796522.png"
+   ],
+   "autoPublish": true,
+   "saveExternalMediaFiles": false,
+   "mediaAltText": [
+    null
+   ],
+   "shortener": false,
+   "draft": false,
+   "twitterData": {
+    "type": "POST"
+   },
+   "facebookData": {
+    "type": "POST"
+   },
+   "instagramData": {
+    "autoPublish": true,
+    "isAiGenerated": false
+   },
+   "hasNotReadNotes": false,
+   "uuid": "1273683164966308866",
+   "creatorUserMail": "REDACTED",
+   "creatorUserId": 3786559,
+   "brandTags": []
+  },
+  {
+   "id": 403256746,
+   "publicationDate": {
+    "dateTime": "2026-10-24T11:30:00",
+    "timezone": "America/New_York"
+   },
+   "creationDate": {
+    "dateTime": "2026-10-22T11:10:00",
+    "timezone": "America/New_York"
+   },
+   "text": "This Sunday we're talking about vision — where we're headed and why it matters.\n\nCome hear from Habakkuk 2 and see the story God is writing here. All are welcome, 11am.",
+   "firstCommentText": "",
+   "providers": [
+    {
+     "network": "instagram",
+     "status": "PENDING",
+     "detailedStatus": "Pending"
+    }
+   ],
+   "media": [
+    "https://media.grmc.app/media/1792520525181-84161ea56375-1864796522.png"
+   ],
+   "autoPublish": true,
+   "saveExternalMediaFiles": false,
+   "mediaAltText": [
+    null
+   ],
+   "shortener": false,
+   "draft": false,
+   "twitterData": {
+    "type": "POST"
+   },
+   "instagramData": {
+    "autoPublish": true,
+    "type": "POST",
+    "showReelOnFeed": true,
+    "isAiGenerated": false
+   },
+   "hasNotReadNotes": false,
+   "uuid": "-3519558646581867363",
+   "creatorUserMail": "REDACTED",
+   "creatorUserId": 3786559,
+   "brandTags": []
+  },
+  {
+   "id": 403266378,
+   "publicationDate": {
+    "dateTime": "2026-10-23T17:19:00",
+    "timezone": "America/New_York"
+   },
+   "creationDate": {
+    "dateTime": "2026-10-22T11:19:00",
+    "timezone": "America/New_York"
+   },
+   "text": "Metricool API probe — ignore. 2026-10-22T15:19:09.421Z",
+   "firstCommentText": "",
+   "providers": [
+    {
+     "network": "facebook",
+     "status": "PENDING",
+     "detailedStatus": "Pending"
+    }
+   ],
+   "autoPublish": true,
+   "saveExternalMediaFiles": false,
+   "shortener": false,
+   "draft": false,
+   "twitterData": {
+    "type": "POST"
+   },
+   "facebookData": {
+    "type": "POST"
+   },
+   "instagramData": {
+    "autoPublish": true,
+    "isAiGenerated": false
+   },
+   "hasNotReadNotes": false,
+   "uuid": "6952897850155486888",
+   "creatorUserMail": "REDACTED",
+   "creatorUserId": 3786559,
+   "brandTags": []
+  },
+  {
+   "id": 403266388,
+   "publicationDate": {
+    "dateTime": "2026-10-24T17:19:00",
+    "timezone": "America/New_York"
+   },
+   "creationDate": {
+    "dateTime": "2026-10-22T11:19:00",
+    "timezone": "America/New_York"
+   },
+   "text": "Metricool API probe — ignore. 2026-10-22T15:19:09.421Z",
+   "firstCommentText": "",
+   "providers": [
+    {
+     "network": "instagram",
+     "status": "PENDING",
+     "detailedStatus": "Pending"
+    }
+   ],
+   "media": [
+    "https://static.metricool.com/common/202610/4858177-mtr_14330910274208552561.webp"
+   ],
+   "autoPublish": true,
+   "saveExternalMediaFiles": false,
+   "mediaAltText": [
+    null
+   ],
+   "shortener": false,
+   "draft": false,
+   "twitterData": {
+    "type": "POST"
+   },
+   "instagramData": {
+    "autoPublish": true,
+    "type": "POST",
+    "showReelOnFeed": true,
+    "isAiGenerated": false
+   },
+   "hasNotReadNotes": false,
+   "uuid": "8990753926270239577",
+   "creatorUserMail": "REDACTED",
+   "creatorUserId": 3786559,
+   "brandTags": []
+  }
+ ],
+ "_source": "Real GET /v2/scheduler/posts output from the production brand, 2026-10-22 (probe --list). Creator email redacted. The probe post is id 403266041 (before), split into 403266378 FB + 403266388 IG (after-move), then FB edited to 403266648 (after-edit)."
+}
