@@ -9,7 +9,7 @@ import {
 import { BACKFILL_SETTING, backfillOnce, markSentToMetricool } from "./pipeline/sync";
 import { RUN_EVENTS } from "./pipeline/config";
 import { applyImageRule, createRecurrence, deleteRecurrence, getRecurrence, materialize, seedRunRecurrences, updateRecurrence } from "./pipeline/recurring";
-import { duplicateEvent } from "./pipeline/repo";
+import { duplicateEvent, splitContent } from "./pipeline/repo";
 import { Rule } from "./pipeline/recurrence";
 import { addLinks, backfillLinks, hasLiveLinks, LINKS_BACKFILL_SETTING, linksFor } from "./pipeline/metricool-links";
 
@@ -1107,4 +1107,97 @@ test("backfill links a published post's send as published", async () => {
   await backfillLinks(pool, "America/New_York");
   const links = (await linksFor(pool, [id])).get(id)!;
   assert.deepEqual(links.map((l) => [l.metricoolPostId, l.state]), [["8101", "published"]]);
+});
+
+// ── Splitting ──
+
+test("split moves the later group to a new post", async () => {
+  const r = await createContent(pool, { title: "Split me", publishDate: "2026-11-03", publishTime: "09:00", platforms: ["facebook", "instagram"],
+    brief: "b", caption: "hello", ownerEmail: "o@x.org" }, "me@x.org");
+  assert.ok(r.ok);
+  const id = r.value.id;
+  const status = r.value.status;
+  await addLinks(pool, id, "9001", ["facebook"], "2026-11-03T09:00", "scheduled");
+  await addLinks(pool, id, "9002", ["instagram"], "2026-11-04T09:00", "scheduled");
+  const s = await splitContent(pool, id, [
+    { scheduledFor: "2026-11-03T09:00", networks: ["facebook"] },
+    { scheduledFor: "2026-11-04T09:00", networks: ["instagram"] },
+  ]);
+  assert.ok(s.ok);
+  assert.equal(s.value.kept.id, id);
+  assert.deepEqual(s.value.kept.platforms, ["facebook"]);
+  assert.equal(s.value.kept.publishDate, "2026-11-03");
+  assert.equal(s.value.created.length, 1);
+  const n = s.value.created[0];
+  assert.deepEqual(n.platforms, ["instagram"]);
+  assert.equal(n.publishDate, "2026-11-04");
+  assert.equal(n.publishTime, "09:00");
+  assert.equal(n.status, status);
+  assert.equal(n.title, "Split me");
+  assert.equal(n.ownerEmail, "o@x.org");
+  assert.equal(n.recurrenceId, null);
+  const row = (await pool.query("SELECT split_from, split_at FROM content_items WHERE id = $1", [n.id])).rows[0];
+  assert.equal(row.split_from, id);
+  assert.ok(row.split_at);
+  const links = await linksFor(pool, [id, n.id]);
+  assert.deepEqual(links.get(id)!.map((l) => l.metricoolPostId), ["9001"]);
+  assert.deepEqual(links.get(n.id)!.map((l) => [l.metricoolPostId, l.network]), [["9002", "instagram"]]);
+});
+
+test("split copies attachments, not gathering tasks", async () => {
+  const r = await createContent(pool, { title: "Split media", publishDate: "2026-11-03", platforms: ["facebook", "x"], noMediaNeeded: true }, "me@x.org");
+  assert.ok(r.ok);
+  await createMedia(pool, r.value.id, { kind: "attachment", approvalId: 31, approvalTitle: "Card", fileName: "card.png", fileType: "image/png" });
+  await createMedia(pool, r.value.id, { description: "Shoot the hall", type: "photo" });
+  const s = await splitContent(pool, r.value.id, [
+    { scheduledFor: "2026-11-03T09:00", networks: ["facebook"] },
+    { scheduledFor: "2026-11-05T09:00", networks: ["x"] },
+  ]);
+  assert.ok(s.ok);
+  const media = await listMedia(pool, { contentItemId: s.value.created[0].id });
+  assert.deepEqual(media.map((m) => [m.kind, m.approvalId, m.approvalTitle, m.fileName, m.fileType]), [["attachment", 31, "Card", "card.png", "image/png"]]);
+  assert.equal((await listMedia(pool, { contentItemId: r.value.id })).length, 2, "the original keeps both");
+});
+
+test("split with a shared caption copies it", async () => {
+  const r = await createContent(pool, { title: "Split shared", publishDate: "2026-11-03", platforms: ["facebook", "x"], noMediaNeeded: true, caption: "One for all" }, "me@x.org");
+  assert.ok(r.ok);
+  const s = await splitContent(pool, r.value.id, [
+    { scheduledFor: "2026-11-03T09:00", networks: ["facebook"] },
+    { scheduledFor: "2026-11-05T09:00", networks: ["x"] },
+  ]);
+  assert.ok(s.ok);
+  assert.equal(s.value.created[0].caption, "One for all");
+  assert.equal(s.value.created[0].captionMode, "same");
+  assert.equal(s.value.kept.caption, "One for all");
+});
+
+test("split keeps each network's own caption", async () => {
+  const r = await createContent(pool, { title: "Split own", publishDate: "2026-11-03", platforms: ["facebook", "instagram", "x"],
+    captionMode: "separate", captions: { facebook: "FB text", instagram: "IG text", x: "X text" } }, "me@x.org");
+  assert.ok(r.ok);
+  const s = await splitContent(pool, r.value.id, [
+    { scheduledFor: "2026-11-03T09:00", networks: ["facebook", "instagram"] },
+    { scheduledFor: "2026-11-05T09:00", networks: ["x"] },
+  ]);
+  assert.ok(s.ok);
+  assert.equal(s.value.created[0].captionMode, "separate");
+  assert.deepEqual(s.value.created[0].captions, { x: "X text" });
+  assert.deepEqual(s.value.kept.platforms, ["facebook", "instagram"]);
+  assert.equal(s.value.kept.captionMode, "separate");
+});
+
+test("a recurring occurrence that splits is detached and the new post isn't recurring", async () => {
+  const r = await createRecurrence(pool, { title: "Split weekly", platforms: ["facebook", "x"], noMediaNeeded: true, rule: weekly([2]) }, "me@x.org", REF);
+  assert.ok(r.ok);
+  const first = (await occ(r.value.id))[0];
+  const s = await splitContent(pool, first.id, [
+    { scheduledFor: `${first.occurrence_date}T09:00`, networks: ["facebook"] },
+    { scheduledFor: `${first.occurrence_date}T18:00`, networks: ["x"] },
+  ]);
+  assert.ok(s.ok);
+  assert.equal(s.value.kept.detached, true);
+  assert.equal(s.value.kept.recurrenceId, r.value.id);
+  assert.equal(s.value.created[0].recurrenceId, null);
+  assert.equal(s.value.created[0].publishTime, "18:00");
 });

@@ -595,3 +595,66 @@ export async function duplicateEvent(
   }
   return { ok: true, value: { event: created, items: items.rowCount || 0, media: mediaCount } };
 }
+
+// ── Splitting ────────────────────────────────────────────────────────────────
+
+/**
+ * Platforms of one post went out at different times in Metricool, so the post
+ * becomes one post per time. The first (earliest) group stays on `id`; each later
+ * group gets a copy that takes its networks' captions, attachments and links.
+ */
+export async function splitContent(
+  db: Pool, id: string, groups: Array<{ scheduledFor: string; networks: string[] }>,
+): Promise<Result<{ kept: ContentRow; created: ContentRow[] }>> {
+  const item = await getContentRow(db, id);
+  if (!item) return fail("Post not found.");
+  if (groups.length < 2) return fail("Nothing to split.");
+  const split = (scheduledFor: string) => ({ date: scheduledFor.slice(0, 10), time: scheduledFor.slice(11, 16) || null });
+  const captionFor = (networks: string[]) => item.captionMode === "separate"
+    ? Object.fromEntries(Object.entries(item.captions).filter(([n]) => networks.includes(n))) : item.captions;
+  const client = await db.connect();
+  const createdIds: string[] = [];
+  try {
+    await client.query("BEGIN");
+    for (const g of groups.slice(1)) {
+      const when = split(g.scheduledFor);
+      const r = await client.query(
+        `INSERT INTO content_items (title, event_id, platforms, publish_date, publish_time, status, owner_email,
+                                    brief, caption, no_media_needed, caption_mode, captions, drafting, source_ref, phase,
+                                    created_by, split_from, split_at)
+         SELECT title, event_id, $2, $3, $4, status, owner_email, brief, caption, no_media_needed,
+                caption_mode, $5, drafting, source_ref, phase, created_by, id, now()
+           FROM content_items WHERE id = $1 RETURNING id`,
+        [id, g.networks, when.date, when.time, captionFor(g.networks)]);
+      const newId: string = r.rows[0].id;
+      createdIds.push(newId);
+      // Only attachments travel: a gathering task belongs to the post it was set for.
+      await client.query(
+        `INSERT INTO media_assets (content_item_id, description, type, gather_date, gather_location, assignee_email,
+                                   status, file_link, notes, approval_id, approval_title, file_name, file_type,
+                                   kind, position, from_template)
+         SELECT $2, description, type, gather_date, gather_location, assignee_email, status, file_link, notes,
+                approval_id, approval_title, file_name, file_type, kind, position, from_template
+           FROM media_assets WHERE content_item_id = $1 AND kind = 'attachment'`, [id, newId]);
+      await client.query(
+        `UPDATE metricool_links SET content_item_id = $1
+          WHERE content_item_id = $2 AND network = ANY($3) AND scheduled_for = $4`,
+        [newId, id, g.networks, g.scheduledFor.slice(0, 16)]);
+    }
+    const first = groups[0], when = split(first.scheduledFor);
+    await client.query(
+      `UPDATE content_items SET platforms = $2, captions = $3, publish_date = $4, publish_time = $5,
+              detached = detached OR recurrence_id IS NOT NULL, updated_at = now()
+        WHERE id = $1`,
+      [id, first.networks, captionFor(first.networks), when.date, when.time]);
+    await client.query("COMMIT");
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
+  const kept = (await getContentRow(db, id))!;
+  const created = await Promise.all(createdIds.map(async (cid) => (await getContentRow(db, cid))!));
+  return { ok: true, value: { kept, created } };
+}
