@@ -12,6 +12,8 @@ import { applyImageRule, createRecurrence, deleteRecurrence, getRecurrence, mate
 import { duplicateEvent, splitContent } from "./pipeline/repo";
 import { Rule } from "./pipeline/recurrence";
 import { addLinks, backfillLinks, hasLiveLinks, LINKS_BACKFILL_SETTING, linksFor } from "./pipeline/metricool-links";
+import { findSplitOrigin, importPlannerPost, shouldImport } from "./pipeline/metricool-import";
+import { textHash, PlannerPost } from "./metricool-planner";
 
 const pool = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
 const REF = "2026-11-01";
@@ -1216,4 +1218,85 @@ test("split moves and refreshes links whose stored time is stale", async () => {
   const links = await linksFor(pool, [id, s.value.created[0].id]);
   assert.deepEqual(links.get(id)!.map((l) => [l.network, l.scheduledFor]), [["facebook", "2026-11-03T09:15"]]);
   assert.deepEqual(links.get(s.value.created[0].id)!.map((l) => [l.network, l.scheduledFor]), [["x", "2026-11-06T10:30"]]);
+});
+
+// ── Metricool imports ──
+const net = (network: "facebook" | "instagram" | "x", scheduledFor: string, text: string, state: any = "scheduled") =>
+  ({ network, scheduledFor, state, detail: "", publicUrl: "", text });
+
+test("a Metricool-only post is imported with its platforms, time and text", async () => {
+  const post: PlannerPost = { id: "imp1", media: [], networks: [
+    net("facebook", "2026-12-01T09:00", "Christmas Eve service\nJoin us at 6"), net("instagram", "2026-12-01T09:00", "Christmas Eve service\nJoin us at 6")] };
+  const row = await importPlannerPost(pool, post, "America/Chicago");
+  assert.equal(row.title, "Christmas Eve service");
+  assert.deepEqual([...row.platforms].sort(), ["facebook", "instagram"]);
+  assert.equal(row.publishDate, "2026-12-01");
+  assert.equal(row.publishTime, "09:00");
+  assert.equal(row.caption, "Christmas Eve service\nJoin us at 6");
+  assert.equal(row.status, "scheduled");
+  assert.equal(row.eventId, null);
+  assert.equal(row.ownerEmail, "");
+  assert.equal((await pool.query("SELECT from_metricool FROM content_items WHERE id=$1", [row.id])).rows[0].from_metricool, true);
+  const links = (await linksFor(pool, [row.id])).get(row.id)!;
+  assert.deepEqual(links.map((l) => [l.metricoolPostId, l.network, l.scheduledFor, l.state]), [["imp1", "facebook", "2026-12-01T09:00", "scheduled"], ["imp1", "instagram", "2026-12-01T09:00", "scheduled"]]);
+  assert.equal(links[0].textHash, textHash("Christmas Eve service\nJoin us at 6"));
+});
+
+test("an imported post with different times per network is split, with its own captions", async () => {
+  const post: PlannerPost = { id: "imp2", media: [], networks: [
+    net("facebook", "2026-12-02T09:00", "FB words", "published"), net("x", "2026-12-03T10:30", "X words")] };
+  const row = await importPlannerPost(pool, post, "America/Chicago");
+  assert.deepEqual(row.platforms, ["facebook"]);
+  assert.equal(row.status, "published");
+  assert.equal(row.captionMode, "separate");
+  const all = await pool.query("SELECT platforms, publish_date::text d, publish_time::text t FROM content_items WHERE from_metricool AND publish_date IN ('2026-12-02','2026-12-03') ORDER BY publish_date");
+  assert.deepEqual(all.rows.map((r) => [r.platforms, r.d, r.t.slice(0, 5)]), [[["facebook"], "2026-12-02", "09:00"], [["x"], "2026-12-03", "10:30"]]);
+});
+
+test("posts the app sent from any page are never imported", () => {
+  const post: PlannerPost = { id: "s1", media: [], networks: [net("facebook", "2026-12-01T09:00", "t")] };
+  assert.equal(shouldImport(post, new Set(["s1"]), new Set(), "2026-01-01", []), false);
+  assert.equal(shouldImport(post, new Set(), new Set(["s1"]), "2026-01-01", []), false);
+  assert.equal(shouldImport(post, new Set(), new Set(), "2026-01-01", []), true);
+});
+
+test("a post the app sent without getting an id back is not imported", () => {
+  const post: PlannerPost = { id: "s2", media: [], networks: [net("facebook", "2026-12-01T09:00", "Hello\n"), net("x", "2026-12-01T09:00", "Hello")] };
+  const idless = [{ textHash: textHash("Hello"), networks: ["facebook", "x"], date: "2026-12-01" }];
+  assert.equal(shouldImport(post, new Set(), new Set(), "2026-01-01", idless), false);
+  assert.equal(shouldImport(post, new Set(), new Set(), "2026-01-01", [{ ...idless[0], date: "2026-12-02" }]), true);
+  assert.equal(shouldImport(post, new Set(), new Set(), "2026-01-01", [{ ...idless[0], networks: ["facebook"] }]), true);
+  assert.equal(shouldImport(post, new Set(), new Set(), "2026-01-01", [{ ...idless[0], textHash: textHash("Other") }]), true);
+});
+
+test("posts dated before import-since are never imported, nor unreadable ones", () => {
+  const old: PlannerPost = { id: "o1", media: [], networks: [net("facebook", "2026-09-30T09:00", "t")] };
+  assert.equal(shouldImport(old, new Set(), new Set(), "2026-10-01", []), false);
+  const mixed: PlannerPost = { id: "o2", media: [], networks: [net("facebook", "2026-09-30T09:00", "t"), net("x", "2026-10-05T09:00", "t")] };
+  assert.equal(shouldImport(mixed, new Set(), new Set(), "2026-10-01", []), false, "earliest date counts");
+  const unreadable: PlannerPost = { id: "o3", media: [], networks: [net("facebook", "", "t"), net("x", "2026-12-05T09:00", "t", "unknown")] };
+  assert.equal(shouldImport(unreadable, new Set(), new Set(), "2026-01-01", []), false);
+});
+
+test("import is idempotent", async () => {
+  const post: PlannerPost = { id: "imp3", media: [], networks: [net("facebook", "2026-12-04T09:00", "Once only")] };
+  const first = await importPlannerPost(pool, post, "America/Chicago");
+  const linked = new Set<string>();
+  for (const ls of (await linksFor(pool, [first.id])).values()) for (const l of ls) linked.add(l.metricoolPostId);
+  assert.equal(shouldImport(post, linked, new Set(), "2026-01-01", []), false);
+});
+
+test("a split that made a new id is matched back to its post, not imported", async () => {
+  const r = await createContent(pool, { title: "Orig", publishDate: "2026-12-06", platforms: ["facebook", "x"], noMediaNeeded: true }, "me@x.org");
+  assert.ok(r.ok);
+  await addLinks(pool, r.value.id, "orig1", ["facebook", "x"], "2026-12-06T09:00", "scheduled");
+  await pool.query("UPDATE metricool_links SET text_hash = $1 WHERE metricool_post_id = 'orig1'", [textHash("Same words")]);
+  const vanished = (await linksFor(pool, [r.value.id])).get(r.value.id)!.filter((l) => l.network === "x");
+  const xOnly: PlannerPost = { id: "new9", media: [], networks: [net("x", "2026-12-07T09:00", "Same words\n")] };
+  assert.deepEqual(findSplitOrigin(xOnly, vanished)?.map((l) => l.network), ["x"]);
+  assert.equal(findSplitOrigin({ ...xOnly, networks: [net("x", "2026-12-07T09:00", "Different")] }, vanished), null);
+  assert.equal(findSplitOrigin({ ...xOnly, networks: [net("x", "2026-12-07T09:00", "Different")], media: ["a.jpg"] }, vanished, ["a.jpg"])?.length, 1, "media can match instead");
+  assert.equal(findSplitOrigin({ ...xOnly, networks: [net("facebook", "2026-12-07T09:00", "Same words")] }, vanished), null, "network set must match");
+  const blank = vanished.map((l) => ({ ...l, textHash: "" }));
+  assert.equal(findSplitOrigin(xOnly, blank), null, "empty stored hash can't match on text");
 });
