@@ -10,23 +10,31 @@ function fixture(name: string): unknown {
 }
 const TZ = "America/New_York";
 
-test("parsePlanner reads the before payload", () => {
-  const posts = parsePlanner(fixture("metricool-planner-before.provisional.json"), TZ);
-  assert.equal(posts.length, 1);
-  const p = posts[0];
-  assert.deepEqual(p.networks.map((n) => n.network), ["facebook", "instagram"]);
-  assert.ok(p.networks.every((n) => n.state === "scheduled"));
-  assert.equal(p.networks[0].scheduledFor, p.networks[1].scheduledFor);
-  assert.equal(p.networks[0].scheduledFor, "2026-11-03T09:00");
-  assert.ok(p.networks.every((n) => n.text.length > 0));
+test("parsePlanner reads the real before payload", () => {
+  const posts = parsePlanner(fixture("metricool-planner-before.json"), TZ);
+  assert.equal(posts.length, 6);
+  const probe = posts.find((p) => p.id === "403266041")!;
+  assert.deepEqual(probe.networks.map((n) => n.network), ["facebook", "instagram"]);
+  assert.ok(probe.networks.every((n) => n.state === "scheduled" && n.scheduledFor === "2026-10-23T17:19"));
+  assert.equal(probe.uuid, "3714024336334799271");
+  assert.equal(probe.createdAt, "2026-10-22T11:19");
+  assert.ok(probe.creatorId);
+  const pub = posts.find((p) => p.id === "403208800")!.networks[0];
+  assert.equal(pub.state, "published");
+  assert.match(pub.publicUrl, /^https:\/\/facebook\.com\//);
 });
 
-test("parsePlanner reads the after-move payload", () => {
-  const posts = parsePlanner(fixture("metricool-planner-after-move.provisional.json"), TZ);
-  const all = posts.flatMap((p) => p.networks);
-  const fb = all.find((n) => n.network === "facebook")!;
-  const ig = all.find((n) => n.network === "instagram")!;
-  assert.notEqual(fb.scheduledFor, ig.scheduledFor);
+test("parsePlanner reads the real after-move payload", () => {
+  const posts = parsePlanner(fixture("metricool-planner-after-move.json"), TZ);
+  assert.equal(posts.find((p) => p.id === "403266041"), undefined);
+  assert.equal(posts.find((p) => p.id === "403266378")!.networks.find((n) => n.network === "facebook")!.scheduledFor, "2026-10-23T17:19");
+  assert.equal(posts.find((p) => p.id === "403266388")!.networks.find((n) => n.network === "instagram")!.scheduledFor, "2026-10-24T17:19");
+});
+
+test("a draft post is a draft whatever its status says", () => {
+  assert.equal(mapState("PENDING", "", true, true), "draft");
+  const row = { id: 1, publicationDate: { dateTime: "2026-11-03T09:00:00", timezone: TZ }, text: "t", autoPublish: true, draft: true, providers: [{ network: "facebook", status: "PENDING" }] };
+  assert.equal(parsePlanner([row], TZ)[0].networks[0].state, "draft");
 });
 
 test("parsePlanner accepts a bare array and rejects other shapes", () => {

@@ -238,6 +238,8 @@ CREATE TABLE IF NOT EXISTS metricool_links (
   PRIMARY KEY (metricool_post_id, network)
 );
 CREATE INDEX IF NOT EXISTS metricool_links_item_idx ON metricool_links (content_item_id);
+ALTER TABLE metricool_links ADD COLUMN IF NOT EXISTS metricool_uuid text NOT NULL DEFAULT '';
+ALTER TABLE metricool_links ADD COLUMN IF NOT EXISTS metricool_created text NOT NULL DEFAULT '';
 ALTER TABLE content_items ADD COLUMN IF NOT EXISTS split_from text;
 ALTER TABLE content_items ADD COLUMN IF NOT EXISTS split_at timestamptz;
 ALTER TABLE content_items ADD COLUMN IF NOT EXISTS from_metricool boolean NOT NULL DEFAULT false;

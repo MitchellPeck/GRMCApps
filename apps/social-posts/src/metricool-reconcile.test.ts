@@ -7,11 +7,11 @@ import type { Link } from "./pipeline/metricool-links";
 const covered = { from: "2026-10-01", to: "2026-10-31" };
 const link = (o: Partial<Link>): Link => ({
   contentItemId: "i1", metricoolPostId: "p1", network: "instagram", scheduledFor: "2026-10-25T09:00",
-  state: "scheduled", detail: "", publicUrl: "", textHash: "", goneAt: null, ...o });
+  state: "scheduled", detail: "", publicUrl: "", textHash: "", goneAt: null, metricoolUuid: "", metricoolCreated: "", ...o });
 const net = (network: PlannerNetwork["network"], o: Partial<PlannerNetwork> = {}): PlannerNetwork => ({
   network, scheduledFor: "2026-10-25T09:00", state: "scheduled", detail: "", publicUrl: "", text: "hi", ...o });
 const planner = (...posts: PlannerPost[]) => new Map(posts.map((p) => [p.id, p]));
-const post = (id: string, networks: PlannerNetwork[]): PlannerPost => ({ id, networks, media: [] });
+const post = (id: string, networks: PlannerNetwork[]): PlannerPost => ({ id, uuid: "", createdAt: "", creatorId: "", networks, media: [] });
 
 test("a move of every network is one group at the new time", () => {
   const links = [link({ network: "instagram" }), link({ network: "facebook" })];

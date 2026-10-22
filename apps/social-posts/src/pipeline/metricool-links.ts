@@ -7,6 +7,7 @@ export const LINKS_BACKFILL_SETTING = "metricool_links_backfill";
 export interface Link {
   contentItemId: string; metricoolPostId: string; network: string; scheduledFor: string;
   state: LinkState; detail: string; publicUrl: string; textHash: string; goneAt: string | null;
+  metricoolUuid: string; metricoolCreated: string;
 }
 
 export async function linksFor(db: Pool, itemIds: string[]): Promise<Map<string, Link[]>> {
@@ -20,6 +21,7 @@ export async function linksFor(db: Pool, itemIds: string[]): Promise<Map<string,
       contentItemId: r.content_item_id, metricoolPostId: r.metricool_post_id, network: r.network,
       scheduledFor: r.scheduled_for || "", state: r.state, detail: r.detail || "", publicUrl: r.public_url || "",
       textHash: r.text_hash || "", goneAt: r.gone_at ? new Date(r.gone_at).toISOString() : null,
+      metricoolUuid: r.metricool_uuid || "", metricoolCreated: r.metricool_created || "",
     });
     out.set(r.content_item_id, list);
   }
@@ -29,15 +31,18 @@ export async function linksFor(db: Pool, itemIds: string[]): Promise<Map<string,
 /** Text hash stays empty: the first sync sets the baseline from what Metricool holds. */
 export async function addLinks(
   db: Pool, itemId: string, postId: string, networks: string[], scheduledFor: string, state: "draft" | "scheduled",
+  ident?: { uuid: string; created: string },
 ): Promise<void> {
   for (const network of networks) {
     await db.query(
-      `INSERT INTO metricool_links (content_item_id, metricool_post_id, network, scheduled_for, state, last_seen_at)
-       VALUES ($1,$2,$3,$4,$5, now())
+      `INSERT INTO metricool_links (content_item_id, metricool_post_id, network, scheduled_for, state, last_seen_at, metricool_uuid, metricool_created)
+       VALUES ($1,$2,$3,$4,$5, now(), $6, $7)
        ON CONFLICT (metricool_post_id, network) DO UPDATE
          SET content_item_id = EXCLUDED.content_item_id, scheduled_for = EXCLUDED.scheduled_for,
-             state = EXCLUDED.state, gone_at = NULL, last_seen_at = now()`,
-      [itemId, postId, network, scheduledFor.slice(0, 16), state]);  // YYYY-MM-DDTHH:MM, no seconds
+             state = EXCLUDED.state, gone_at = NULL, last_seen_at = now(),
+             metricool_uuid = CASE WHEN $6 <> '' THEN $6 ELSE metricool_links.metricool_uuid END,
+             metricool_created = CASE WHEN $7 <> '' THEN $7 ELSE metricool_links.metricool_created END`,
+      [itemId, postId, network, scheduledFor.slice(0, 16), state, ident?.uuid || "", ident?.created || ""]);  // YYYY-MM-DDTHH:MM, no seconds
   }
 }
 

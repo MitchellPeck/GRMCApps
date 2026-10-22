@@ -1,5 +1,5 @@
 import { Pool } from "pg";
-import { PlannerPost, PlannerNetwork, textHash } from "../metricool-planner";
+import { PlannerPost, PlannerNetwork, textHash, wallIn } from "../metricool-planner";
 import { addLinks } from "./metricool-links";
 import { overallStatus } from "./metricool-reconcile";
 import { getContentRow, ContentRow } from "./repo";
@@ -12,8 +12,9 @@ const readable = (n: PlannerNetwork) => !!n.scheduledFor && n.state !== "unknown
 
 export function shouldImport(
   post: PlannerPost, linkedIds: Set<string>, sentIds: Set<string>, importSince: string, idlessSends: IdlessSend[],
+  claimedIds: Set<string> = new Set(),  // posts a relink plan already follows
 ): boolean {
-  if (linkedIds.has(post.id) || sentIds.has(post.id)) return false;
+  if (linkedIds.has(post.id) || sentIds.has(post.id) || claimedIds.has(post.id)) return false;
   const nets = post.networks.filter(readable);
   if (!nets.length) return false;
   const date = nets.map((n) => n.scheduledFor).sort()[0].slice(0, 10);
@@ -31,6 +32,17 @@ export async function idlessSends(db: Pool): Promise<IdlessSend[]> {
     `SELECT text, networks, left(scheduled_for, 10) AS d FROM metricool_sends WHERE status = 'sent' AND metricool_post_id = ''`)).rows;
   return rows.map((r) => ({
     textHash: textHash(r.text), date: r.d,
+    networks: String(r.networks).split(",").map((n) => n.trim()).filter(Boolean).map((n) => (n === "twitter" ? "x" : n)),
+  }));
+}
+
+/** Id-less content sends shaped for relinkPlan: the item, and the send time on the church's clock. */
+export async function idlessSendsForRelink(db: Pool, timezone: string) {
+  const rows = (await db.query(
+    `SELECT source_ref, text, networks, created_at FROM metricool_sends
+      WHERE status = 'sent' AND metricool_post_id = '' AND source_type = 'content' AND source_ref <> ''`)).rows;
+  return rows.map((r) => ({
+    itemId: String(r.source_ref), textHash: textHash(r.text), sentAt: wallIn(timezone, new Date(r.created_at)),
     networks: String(r.networks).split(",").map((n) => n.trim()).filter(Boolean).map((n) => (n === "twitter" ? "x" : n)),
   }));
 }
@@ -65,7 +77,7 @@ export async function importPlannerPost(db: Pool, post: PlannerPost, _timezone: 
       const id: string = r.rows[0].id;
       ids.push(id);
       for (const n of group) {
-        await addLinks(client as any, id, post.id, [n.network], when, n.state === "draft" ? "draft" : "scheduled");
+        await addLinks(client as any, id, post.id, [n.network], when, n.state === "draft" ? "draft" : "scheduled", { uuid: post.uuid, created: post.createdAt });
         await client.query(
           `UPDATE metricool_links SET state = $3, detail = $4, public_url = $5, text_hash = $6
             WHERE metricool_post_id = $1 AND network = $2`,

@@ -1,9 +1,6 @@
 // Metricool's planner list, read into one typed shape that sync reconciles
-// against. PROVISIONAL — replace with real probe output: the fixtures this was
-// written against are invented, so which case Metricool really uses when one
-// network of a multi-network post is moved (a: that network reappears under a
-// new post id; b: the same post id carries a different time per network) is
-// not recorded yet. parsePlanner handles both, since it reads per network.
+// against. Real payloads show Metricool gives a post a new id whenever one of its
+// networks is moved or edited, so uuid/createdAt/creatorId are kept for relinking.
 import { createHash } from "node:crypto";
 import { fetchSchedulerPostsRaw, MetricoolCreds } from "./metricool";
 
@@ -16,14 +13,18 @@ export interface PlannerNetwork {
   publicUrl: string;
   text: string;
 }
-export interface PlannerPost { id: string; networks: PlannerNetwork[]; media: string[] }
+export interface PlannerPost {
+  id: string; uuid: string;
+  createdAt: string; // creationDate in the church's zone, YYYY-MM-DDTHH:MM, "" if unreadable
+  creatorId: string; networks: PlannerNetwork[]; media: string[];
+}
 
 const UNREADABLE = "Metricool's planner list wasn't readable.";
 
-export function mapState(status: string, publicUrl: string, autoPublish: boolean): LinkState | "unknown" {
+export function mapState(status: string, publicUrl: string, autoPublish: boolean, draft = false): LinkState | "unknown" {
   if (publicUrl || /^PUBLISHED$/i.test(status || "")) return "published";
   if (/ERROR|FAIL|REJECT/i.test(status || "")) return "failed";
-  if (!autoPublish) return "draft";
+  if (draft || !autoPublish) return "draft";
   if (/PENDING|SCHEDULED|QUEUED|PROCESSING/i.test(status || "")) return "scheduled";
   return "unknown";
 }
@@ -40,7 +41,7 @@ function networkOf(raw: unknown): PlannerNetwork["network"] | null {
 }
 
 // "YYYY-MM-DDTHH:MM" for an instant, as the wall clock reads in `tz`.
-function wallIn(tz: string, instant: Date): string {
+export function wallIn(tz: string, instant: Date): string {
   const parts: Record<string, string> = {};
   for (const p of new Intl.DateTimeFormat("en-CA", { timeZone: tz, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).formatToParts(instant)) parts[p.type] = p.value;
   return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
@@ -78,6 +79,7 @@ export function parsePlanner(body: unknown, timezone: string): PlannerPost[] {
   return rows.map((row) => {
     const when = scheduledFor(row?.publicationDate, timezone);
     const autoPublish = row?.autoPublish !== false;
+    const draft = row?.draft === true;
     const networks: PlannerNetwork[] = [];
     for (const p of Array.isArray(row?.providers) ? row.providers : []) {
       const network = networkOf(p?.network);
@@ -86,14 +88,17 @@ export function parsePlanner(body: unknown, timezone: string): PlannerPost[] {
       networks.push({
         network,
         scheduledFor: when,
-        state: mapState(String(p.status || ""), publicUrl, autoPublish),
+        state: mapState(String(p.status || ""), publicUrl, autoPublish, draft),
         detail: String(p.detailedStatus || p.status || ""),
         publicUrl,
         text: String(p.text ?? row?.text ?? ""),
       });
     }
     const media = Array.isArray(row?.media) ? row.media.map((m: any) => String(typeof m === "string" ? m : m?.url || "")).filter(Boolean) : [];
-    return { id: String(row?.id ?? ""), networks, media };
+    return {
+      id: String(row?.id ?? ""), uuid: String(row?.uuid ?? ""), createdAt: scheduledFor(row?.creationDate, timezone),
+      creatorId: String(row?.creatorUserId ?? ""), networks, media,
+    };
   });
 }
 
