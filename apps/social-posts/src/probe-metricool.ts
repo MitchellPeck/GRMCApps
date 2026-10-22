@@ -9,11 +9,15 @@
  *   docker compose exec social-posts node dist/probe-metricool.js --upload
  *   docker compose exec social-posts node dist/probe-metricool.js --networks instagram --upload --send
  *
+ * To see the planner list exactly as Metricool returns it (no other steps run):
+ *   docker compose exec social-posts node dist/probe-metricool.js --list 2026-11-03 2026-11-04 --list-raw-out /tmp/before.json
+ *
  * Without --send it stops before scheduling and just prints the payload, so it
  * is safe to run against the live brand.
  */
+import { writeFileSync } from "node:fs";
 import { pool } from "./db";
-import { getMetricoolCreds, listBrands, normalizeMedia, schedulePost, buildSchedulerPayload } from "./metricool";
+import { getMetricoolCreds, listBrands, normalizeMedia, schedulePost, fetchSchedulerPostsRaw, buildSchedulerPayload } from "./metricool";
 import { getR2Creds, uploadPublic, decodeImageDataUrl } from "./r2";
 
 // A 1x1 gif, so the upload check needs no fixture file on disk.
@@ -38,6 +42,18 @@ async function main(): Promise<void> {
 
   const creds = await getMetricoolCreds(pool);
   console.log(`Credentials: userId=${creds.userId} blogId=${creds.blogId || "(none set)"} token=${creds.token ? `${creds.token.slice(0, 6)}…` : "(missing)"}`);
+
+  // --list <from> <to>: print the planner's raw body and stop. Dates are YYYY-MM-DD.
+  const li = process.argv.indexOf("--list");
+  if (li >= 0) {
+    const [from, to] = [process.argv[li + 1], process.argv[li + 2]];
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from || "") || !/^\d{4}-\d{2}-\d{2}$/.test(to || "")) throw new Error("usage: --list <from YYYY-MM-DD> <to YYYY-MM-DD> [--list-raw-out <file>]");
+    const body = await fetchSchedulerPostsRaw(creds, from, to, arg("timezone", "America/New_York"));
+    const out = arg("list-raw-out");
+    if (out) { writeFileSync(out, body); console.log(`Wrote ${body.length} bytes to ${out}`); } else console.log(body);
+    await pool.end();
+    process.exit(0);
+  }
 
   await step("1. Brands — proves the token and userId are accepted", async () => {
     const brands = await listBrands(creds);

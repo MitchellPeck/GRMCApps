@@ -148,12 +148,18 @@ export function publicationState(post: { providers?: McProvider[] }): { state: "
 }
 
 /** Posts in Metricool's planner between two dates (YYYY-MM-DD), published or not. */
-export async function listSchedulerPosts(c: MetricoolCreds, start: string, end: string, timezone: string): Promise<Array<{ id: string; providers: McProvider[] }>> {
+/** The planner list's body exactly as Metricool sent it, unparsed (the probe saves it as a fixture). */
+export async function fetchSchedulerPostsRaw(c: MetricoolCreds, start: string, end: string, timezone: string): Promise<string> {
   if (!c.blogId) throw new Error("No Metricool brand picked — open Settings, load brands, and choose one.");
   const qs = new URLSearchParams({ userId: c.userId, blogId: c.blogId, start: `${start}T00:00:00`, end: `${end}T23:59:59`, timezone, extendedRange: "true" });
   const res = await fetch(`${BASE}/v2/scheduler/posts?${qs}`, { headers: mcHeaders(c) });
   const text = await res.text();
   if (!res.ok) throw new Error(`Metricool answered ${res.status}: ${text.trim().slice(0, 200)}`);
+  return text;
+}
+
+export async function listSchedulerPosts(c: MetricoolCreds, start: string, end: string, timezone: string): Promise<Array<{ id: string; providers: McProvider[] }>> {
+  const text = await fetchSchedulerPostsRaw(c, start, end, timezone);
   let data: any = {};
   try { data = JSON.parse(text); } catch { throw new Error("Metricool's planner list wasn't readable."); }
   const rows: any[] = Array.isArray(data) ? data : Array.isArray(data.data) ? data.data : [];
