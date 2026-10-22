@@ -2864,7 +2864,7 @@ function renderReportState(){
     : 'Click any line to change it. Changes save as you go.';
   var ed=document.getElementById('report-editor'); if(ed) ed.classList.toggle('editable', reportEditable());
   var ub=document.getElementById('btn-report-undo');
-  if(ub) ub.disabled = !(state.reportUndoable || (r && r.edited)) || r.status==='pending';
+  if(ub) ub.hidden = !(state.reportUndoable || (r && r.edited)) || r.status==='pending';
   renderMeetingNav();
   applyReadOnly();
 }

@@ -1497,6 +1497,15 @@ test("a topic edit the server refuses says why", { skip }, async () => {
   assert.match(doc.getElementById("imsg-1").textContent, /comes from the recording/);
 });
 
+test("Undo last edit stays out of the toolbar until there is an edit to take back", { skip }, async () => {
+  const { w, doc } = bootMinutes((p, o) => o.method === "PUT"
+    ? { ok: true, changeId: 5, report: { status: "idle", changes: [] } } : { ok: true });
+  assert.equal(doc.getElementById("btn-report-undo").hidden, true);
+  editLine(w, doc, 2, "Edited.");
+  await new Promise((r) => setTimeout(r, 950));
+  assert.equal(doc.getElementById("btn-report-undo").hidden, false);
+});
+
 test("Undo last edit takes back the most recent save of the minutes", { skip }, async () => {
   const { w, doc, calls } = bootMinutes((p, o) => p.endsWith("/report/undo")
     ? { ok: true, report: "# Board\n\n## Summary\nUndone text.", state: { status: "idle", changes: [], pages: 1 } }
@@ -1504,7 +1513,7 @@ test("Undo last edit takes back the most recent save of the minutes", { skip }, 
   editLine(w, doc, 2, "Edited.");
   await new Promise((r) => setTimeout(r, 950));
   const btn = doc.getElementById("btn-report-undo");
-  assert.equal(btn.disabled, false);
+  assert.equal(btn.hidden, false);
   btn.dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
   await flush();
   assert.ok(calls.some((c) => c.method === "POST" && c.path === "/api/meetings/42/report/undo"));
