@@ -26,7 +26,7 @@ export type ChatCard =
   // Something that can't easily be undone: the page shows a Confirm button,
   // and only the person pressing it makes it happen (through the page's own
   // route). The model can't do it on its own.
-  | { kind: "confirm"; id: string; action: "remove_topic" | "regenerate_report" | "reprocess_recording"; itemId?: number; recordingId?: number; label: string; done?: boolean }
+  | { kind: "confirm"; id: string; action: "remove_topic" | "regenerate_report" | "reprocess_recording"; fresh?: boolean; itemId?: number; recordingId?: number; label: string; done?: boolean }
   | { kind: "clip"; source: "m" | "i"; recordingId: number; start: number; end: number; quote: string; topic: string };
 
 export interface ToolOutcome { content: string; isError?: boolean; card?: ChatCard }
@@ -69,7 +69,8 @@ export const CHAT_TOOLS: Anthropic.Tool[] = [
   tool("remove_topic", "Offer to remove an agenda topic and everything recorded under it. This shows the person a Confirm button; it only happens if they press it.",
     { item_id: int }),
   tool("resummarize_topic", "Write a topic's summary again from its transcript and notes.", { item_id: int }),
-  tool("regenerate_report", "Offer to write the minutes again from scratch, replacing every edit made to them. This shows the person a Confirm button; it only happens if they press it."),
+  tool("regenerate_report", "Offer to write the minutes again from the meeting's record. Edits made to the minutes are kept: unchanged where their topic hasn't changed, merged with the new text where it has. Set start_fresh only when the person asks to throw their edits away. This shows the person a Confirm button; it only happens if they press it.",
+    { start_fresh: { type: "boolean", description: "Discard every edit and write the minutes from scratch." } }),
   tool("reprocess_recording", "Offer to transcribe the whole-meeting recording again, replacing every topic's transcript, speaker names and summary. Shows a Confirm button; it only happens if they press it."),
   tool("fix_words", "Correct a misheard name or word everywhere at once: transcripts, summaries, action items, speaker names, guests and the minutes. Matching is whole-word and case-sensitive. item_id limits it to one topic.",
     { from: str, to: str, item_id: nint }),
@@ -319,7 +320,9 @@ export async function runChatTool(
       case "regenerate_report": {
         if (!(await listAgendaItems(pool, meetingId)).length) fail("Add agenda topics before generating minutes.");
         return ok({ shown: "A Confirm button. Nothing happens unless they press it." },
-          { kind: "confirm", id: cardId(), action: "regenerate_report", label: "Write the minutes again from scratch, replacing every edit made to them" });
+          input.start_fresh === true
+            ? { kind: "confirm", id: cardId(), action: "regenerate_report", fresh: true, label: "Write the minutes again from scratch, throwing away every edit made to them" }
+            : { kind: "confirm", id: cardId(), action: "regenerate_report", label: "Write the minutes again, keeping your edits where they still fit" });
       }
       case "reprocess_recording": {
         const rec = need(await latestMeetingRecording(pool, meetingId), "This meeting has no whole-meeting recording.");

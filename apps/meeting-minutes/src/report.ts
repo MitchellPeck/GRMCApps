@@ -348,3 +348,100 @@ export function reportHtml(markdown: string, title: string): string {
   closeList();
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title></head><body>${out.join("")}</body></html>`;
 }
+
+// ── Regenerating around edits ────────────────────────────────────────────────
+// The minutes in parts: the header and attendance ("head"), then one part per
+// "##" or "###" heading, running to the next one. A topic's part is keyed by
+// its agenda item, so renumbering doesn't lose it.
+export interface ReportPart { key: string; text: string }
+
+export function reportParts(markdown: string, items: { id: number; title: string }[]): ReportPart[] {
+  const lines = markdown.replace(/\s+$/, "").split(/\r?\n/);
+  const start = reportBodyStart(lines);
+  const parts: ReportPart[] = [];
+  const seen = new Map<string, number>();
+  const push = (key: string, from: number, to: number) => {
+    const n = (seen.get(key) ?? 0) + 1;
+    seen.set(key, n);
+    parts.push({ key: n > 1 ? `${key}#${n}` : key, text: lines.slice(from, to).join("\n").trim() });
+  };
+  if (start > 0) push("head", 0, start);
+  let from = start;
+  for (let i = start + 1; i <= lines.length; i++) {
+    if (i < lines.length && !/^#{2,3}\s/.test(lines[i])) continue;
+    const heading = stripRangeMarkers(lines[from]).trim();
+    const topic = /^###\s/.test(heading) ? (topicByTitle(heading, items) ?? topicFor(heading, items)) : null;
+    push(topic ? `item:${topic.id}` : `${/^###\s/.test(heading) ? "h3" : "h2"}:${normTitle(heading.replace(/^#+\s*/, ""))}`, from, i);
+    from = i;
+  }
+  return parts;
+}
+
+export interface KeepEditsInput {
+  baseline: string | null; // the minutes as last generated; null when unknown
+  edited: string;          // the minutes now, with the person's edits
+  fresh: string;           // the minutes just written from the meeting's record
+  items: { id: number; title: string }[];
+  savedSources: ReportSources;   // what the last generation was written from
+  currentSources: ReportSources; // what this one was written from
+}
+export type MergeSection = (s: { original: string | null; edited: string; fresh: string }) => Promise<string>;
+
+// The new minutes, keeping the person's edits. A part nobody edited takes the
+// new text. An edited part whose record hasn't changed stays as edited. An
+// edited part whose record changed is merged: the edit against the new text.
+// A part the person added stays after the part it followed. A merge that fails
+// keeps the edit: edits are never lost to a regeneration.
+export async function keepReportEdits(o: KeepEditsInput, merge: MergeSection): Promise<string> {
+  const freshParts = reportParts(o.fresh, o.items);
+  const editedParts = reportParts(o.edited, o.items);
+  const baseParts = o.baseline === null ? null : reportParts(o.baseline, o.items);
+  const byKey = (ps: ReportPart[] | null) => new Map((ps ?? []).map((p) => [p.key, p.text]));
+  const E = byKey(editedParts), O = byKey(baseParts), F = byKey(freshParts);
+  const s = o.savedSources, c = o.currentSources;
+  const itemKeys = new Set([...Object.keys(s), ...Object.keys(c)].filter((k) => k.startsWith("item:")));
+  const anyItem = s.order !== c.order || [...itemKeys].some((k) => s[k] !== c[k]);
+  const changed = (key: string) => {
+    const k = key.replace(/#\d+$/, "");
+    if (k === "head") return s.header !== c.header || s.attendance !== c.attendance;
+    if (k.startsWith("item:")) return s[k] !== c[k];
+    return anyItem;
+  };
+
+  const out = new Map<string, string | null>();
+  for (const f of freshParts) {
+    const e = E.get(f.key), orig = O.get(f.key);
+    if (e === undefined) {
+      // Deleted by the person: stays deleted unless its record changed.
+      out.set(f.key, baseParts && orig !== undefined && !changed(f.key) ? null : f.text);
+    } else if (e === f.text || (baseParts && orig !== undefined && e === orig)) {
+      out.set(f.key, f.text);
+    } else if (!changed(f.key)) {
+      out.set(f.key, e);
+    } else {
+      let merged: string;
+      try { merged = (await merge({ original: orig ?? null, edited: e, fresh: f.text })).trim(); } catch { merged = ""; }
+      if (!merged) out.set(f.key, e);
+      else {
+        // The heading, with its time on the recording, is the new one.
+        const body = /^#{2,3}\s/.test(merged) ? merged.split("\n").slice(1).join("\n") : merged;
+        out.set(f.key, f.key === "head" ? merged : [f.text.split("\n")[0], body.replace(/^\n+/, "")].filter(Boolean).join("\n"));
+      }
+    }
+  }
+  // Parts only the person wrote, placed after the part they followed.
+  const order = freshParts.map((p) => p.key);
+  if (baseParts) {
+    let after: string | null = null;
+    for (const p of editedParts) {
+      if (!F.has(p.key) && !O.has(p.key)) {
+        const at = after === null ? 0 : order.indexOf(after) + 1;
+        order.splice(at, 0, p.key);
+        out.set(p.key, p.text);
+      }
+      after = p.key;
+    }
+  }
+  return order.map((k) => out.get(k)).filter((t): t is string => t !== null && t !== undefined)
+    .join("\n\n") + "\n";
+}

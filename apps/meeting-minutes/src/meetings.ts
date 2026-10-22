@@ -21,6 +21,7 @@ export interface MeetingRow {
   report: string;
   report_generated_at: string | null;
   report_updated_at: string | null;
+  report_generated: string;
   recording_status: MeetingRecordingStatus;
   recording_error: string;
   speaker_map: SpeakerMap;
@@ -499,15 +500,40 @@ export async function saveReport(
   pool: Pool,
   meetingId: number,
   report: string,
-  sources: Record<string, string> = {}
+  sources: Record<string, string> = {},
+  generated: string = report // as written, before edits kept from the last version
 ): Promise<void> {
+  // Minutes that kept earlier edits count as edited.
   await pool.query(
     `UPDATE meetings
-        SET report = $2, report_sources = $3, report_generated_at = now(), report_updated_at = now(), status = 'completed',
+        SET report = $2, report_sources = $3, report_generated = $4, report_generated_at = now(),
+            report_updated_at = CASE WHEN $2 = $4 THEN now() ELSE now() + interval '1 millisecond' END, status = 'completed',
             report_status = 'idle', report_error = '', updated_at = now()
       WHERE id = $1`,
-    [meetingId, report, JSON.stringify(sources)]
+    [meetingId, report, JSON.stringify(sources), generated]
   );
+}
+
+// The minutes as last generated, to tell what has been edited since. Reports
+// from before that was kept use the first edit's "before"; null when even
+// that is gone.
+export async function reportBaseline(
+  pool: Pool, m: Pick<MeetingRow, "id" | "report" | "report_generated" | "report_generated_at" | "report_updated_at">
+): Promise<string | null> {
+  if (m.report_generated) return m.report_generated;
+  if (!reportEdited(m)) return m.report;
+  const r = await pool.query(
+    `SELECT before->'meeting'->>'report' AS report FROM meeting_changes
+      WHERE meeting_id = $1 AND created_at >= $2 AND before->'meeting' ? 'report'
+      ORDER BY id LIMIT 1`,
+    [m.id, m.report_generated_at]
+  );
+  return r.rows[0]?.report ?? null;
+}
+
+// Regenerate from scratch: count the minutes as they stand as unedited.
+export async function forgetReportEdits(pool: Pool, meetingId: number): Promise<void> {
+  await pool.query("UPDATE meetings SET report_generated = report WHERE id = $1", [meetingId]);
 }
 
 // Save a topic's summary only if its transcript and notes are still the ones it

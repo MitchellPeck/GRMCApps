@@ -2,7 +2,7 @@ import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import {
   attachRanges, buildReport, joinReportLines, replaceLine, reportLines, consolidateActionItems, estimatePages, presentedBy, reportBodyInput, reportChanges,
-  reportHtml, ReportInput, ReportItemInput, reportSources,
+  reportHtml, ReportInput, ReportItemInput, reportSources, keepReportEdits,
 } from "./report";
 
 function item(over: Partial<ReportItemInput> & Pick<ReportItemInput, "id" | "title">): ReportItemInput {
@@ -259,4 +259,77 @@ test("report lines on the server work like the page editor's", () => {
   assert.match(joinReportLines(replaceLine(lines, 3, "### 1. Budget and Finance")), /### 1\. Budget and Finance <!--t:m12:600\.0-1200\.0-->/);
   assert.doesNotMatch(joinReportLines(replaceLine(lines, 2, " ")), /The board met/);
   assert.match(joinReportLines(replaceLine(lines, 2, "One.\n\nTwo.")), /## Summary\nOne\.\nTwo\./);
+});
+
+// ── Regenerating keeps edits ────────────────────────────────────────────────
+const KITEMS = [{ id: 1, title: "Budget" }, { id: 2, title: "Roof" }];
+const doc = (budget: string, roof: string, summary = "Old summary.") =>
+  `# Board\n\n**Present:** Alice\n\n## Summary\n${summary}\n\n## Agenda\n### 1. Budget <!--t:m1:0.0-60.0-->\n${budget}\n\n### 2. Roof\n${roof}\n\n## Action Items\n- [ ] Call — **Bob** (Roof)\n`;
+const SRC = { header: "h", attendance: "a", "item:1": "b1", "item:2": "r1", order: "o" };
+
+test("regenerating takes the new text for every section nobody edited", async () => {
+  const out = await keepReportEdits({
+    baseline: doc("Old budget.", "Old roof."), edited: doc("Old budget.", "Old roof."),
+    fresh: doc("New budget.", "New roof.", "New summary."), items: KITEMS,
+    savedSources: SRC, currentSources: { ...SRC, "item:1": "b2" },
+  }, async () => { throw new Error("no merge needed"); });
+  const lines = (t: string) => t.split("\n").filter((l) => l.trim());
+  assert.deepEqual(lines(out), lines(doc("New budget.", "New roof.", "New summary.")));
+});
+
+test("an edited section whose topic hasn't changed is kept as edited", async () => {
+  const out = await keepReportEdits({
+    baseline: doc("Old budget.", "Old roof."), edited: doc("Old budget.", "Roof by Jon."),
+    fresh: doc("New budget.", "New roof."), items: KITEMS,
+    savedSources: SRC, currentSources: { ...SRC, "item:1": "b2" },
+  }, async () => { throw new Error("no merge needed"); });
+  assert.match(out, /Roof by Jon\./);
+  assert.match(out, /New budget\./);
+});
+
+test("an edited section whose topic changed is merged from the original, the edit and the new text", async () => {
+  const seen: any[] = [];
+  const out = await keepReportEdits({
+    baseline: doc("Old budget.", "Old roof."), edited: doc("Budget, Jon's version.", "Old roof."),
+    fresh: doc("New budget.", "Old roof."), items: KITEMS,
+    savedSources: SRC, currentSources: { ...SRC, "item:1": "b2" },
+  }, async (s) => { seen.push(s); return "### 1. Budget [merged heading dropped]\nMerged budget."; });
+  assert.equal(seen.length, 1);
+  assert.match(seen[0].original, /Old budget\./);
+  assert.match(seen[0].edited, /Jon's version/);
+  assert.match(seen[0].fresh, /New budget\./);
+  assert.match(out, /### 1\. Budget <!--t:m1:0\.0-60\.0-->\nMerged budget\./, "the new heading, with its time, stays");
+});
+
+test("a merge that fails keeps the person's edit", async () => {
+  const out = await keepReportEdits({
+    baseline: doc("Old budget.", "Old roof."), edited: doc("Budget, Jon's version.", "Old roof."),
+    fresh: doc("New budget.", "Old roof."), items: KITEMS,
+    savedSources: SRC, currentSources: { ...SRC, "item:1": "b2" },
+  }, async () => { throw new Error("down"); });
+  assert.match(out, /Budget, Jon's version\./);
+});
+
+test("the summary is merged when any topic changed, and a section the person added stays where they put it", async () => {
+  const edited = doc("Old budget.", "Old roof.", "Summary, edited.").replace("## Agenda", "## Notes\nBring coffee.\n\n## Agenda");
+  let merged = 0;
+  const out = await keepReportEdits({
+    baseline: doc("Old budget.", "Old roof."), edited,
+    fresh: doc("New budget.", "Old roof.", "New summary."), items: KITEMS,
+    savedSources: SRC, currentSources: { ...SRC, "item:1": "b2" },
+  }, async (s) => { merged++; return "## Summary\nMerged summary."; });
+  assert.equal(merged, 1);
+  assert.match(out, /## Summary\nMerged summary\.\n\n## Notes\nBring coffee\.\n\n## Agenda/);
+});
+
+test("without a record of the first version, edited sections are merged where they changed and kept where they didn't", async () => {
+  const seen: any[] = [];
+  const out = await keepReportEdits({
+    baseline: null, edited: doc("Budget, Jon's version.", "Roof by Jon."),
+    fresh: doc("New budget.", "New roof."), items: KITEMS,
+    savedSources: SRC, currentSources: { ...SRC, "item:1": "b2" },
+  }, async (s) => { seen.push(s); return s.fresh; });
+  assert.equal(seen.filter((x) => /Budget/.test(x.fresh)).length, 1);
+  assert.equal(seen[0].original, null);
+  assert.match(out, /Roof by Jon\./);
 });

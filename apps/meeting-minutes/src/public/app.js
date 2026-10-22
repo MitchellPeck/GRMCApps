@@ -950,7 +950,7 @@ function chatCardHtml(c){
     return '<div class="chat-card confirm'+(c.done?' undone':'')+'"><span>'+esc(c.label)+'</span>'
       +(c.done ? '<span class="hint">Done</span>'
         : '<button type="button" class="btn-sm chat-confirm" data-action="'+esc(c.action)+'"'+(c.id?' data-card="'+esc(c.id)+'"':'')
-          +(c.itemId!=null?' data-item="'+esc(c.itemId)+'"':'')+(c.recordingId!=null?' data-rec="'+esc(c.recordingId)+'"':'')+'>Confirm</button>')
+          +(c.itemId!=null?' data-item="'+esc(c.itemId)+'"':'')+(c.fresh?' data-fresh="1"':'')+(c.recordingId!=null?' data-rec="'+esc(c.recordingId)+'"':'')+'>Confirm</button>')
       +'</div>';
   }
   return '<div class="chat-card change'+(c.undone?' undone':'')+'"><span>'+esc(c.summary)+'</span>'
@@ -1044,7 +1044,7 @@ document.addEventListener('click', function(e){
   var item=btn.getAttribute('data-item'), rec=btn.getAttribute('data-rec');
   btn.disabled=true;
   var go = action==='remove_topic' ? api('/api/items/'+item, { method:'DELETE' })
-    : action==='regenerate_report' ? flushReportSave().then(function(){ return api('/api/meetings/'+mid+'/report', { method:'POST', body:{ replaceEdits:true } }); })
+    : action==='regenerate_report' ? flushReportSave().then(function(){ return api('/api/meetings/'+mid+'/report', { method:'POST', body: btn.getAttribute('data-fresh') ? { startFresh:true } : undefined }); })
     : action==='reprocess_recording' ? api('/api/meeting-recordings/'+rec+'/reprocess', { method:'POST' })
     : Promise.resolve({ ok:false, error:'Unknown action.' });
   go.then(function(res){
@@ -2735,20 +2735,16 @@ function afterPollRound(){
 // summarize any pending items, then write the report.
 function generateReport(){
   if(state.openItemId){ var open=state.items.filter(function(x){return x.id===state.openItemId;})[0]; if(open) collapseItem(open); }
-  flushReportSave().then(function(){ postReport(false); });
+  flushReportSave().then(function(){ postReport(); });
 }
 
-// The server refuses to replace edited minutes unless asked to; ask first.
-function postReport(replaceEdits){
+// Edits to the minutes are kept: unchanged where their topic is, merged with
+// the new text where it changed.
+function postReport(){
   setBtn('btn-report', true, 'Starting…');
   var mid=state.meeting.id;
-  api('/api/meetings/'+mid+'/report', { method:'POST', body: replaceEdits ? { replaceEdits:true } : undefined }).then(function(res){
+  api('/api/meetings/'+mid+'/report', { method:'POST' }).then(function(res){
     if(!state.meeting || state.meeting.id!==mid) return;
-    if(!res.ok && res.edited && !replaceEdits){
-      setBtn('btn-report', false);
-      if(confirm("Regenerating replaces the edits you've made to these minutes. Regenerate anyway?")) postReport(true);
-      return;
-    }
     if(!res.ok){ setBtn('btn-report', false); msg('report-msg','err',res.error); return; }
     state.report=res.report;
     if(typeof res.markdown==='string'){ showReport(res.markdown); msg('report-msg','ok','Report generated.'); }

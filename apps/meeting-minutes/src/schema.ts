@@ -142,6 +142,9 @@ ALTER TABLE meetings ADD COLUMN IF NOT EXISTS report_sources jsonb NOT NULL DEFA
 -- When the report text last changed: written, or edited by hand or by chat.
 -- Later than report_generated_at means the minutes have been edited.
 ALTER TABLE meetings ADD COLUMN IF NOT EXISTS report_updated_at timestamptz;
+-- The minutes exactly as last generated, before anyone edited them: what
+-- regenerating compares against to tell which parts were edited.
+ALTER TABLE meetings ADD COLUMN IF NOT EXISTS report_generated text NOT NULL DEFAULT '';
 
 -- The recording a topic's transcript_segments are timed against: a
 -- meeting_recordings id for whole-meeting topics, an item_recordings id

@@ -1,16 +1,16 @@
 import { Pool } from "pg";
 import { pool } from "./db";
-import { generateReportBody, summarizeItem } from "./claude";
+import { generateReportBody, mergeReportSection, summarizeItem } from "./claude";
 import { listPeople, peopleNamedIn } from "./people";
 import { createQueue } from "./queue";
 import { transcriptForAi } from "./transcript";
 import { AudioRange, segmentsRange } from "./ranges";
 import { latestMeetingRecording, listRecordings } from "./recordings";
 import { chronologicalSpeakerOrder } from "./segmentation";
-import { buildReport, estimatePages, reportBodyInput, reportChanges, ReportInput, reportSources, ReportSources } from "./report";
+import { buildReport, estimatePages, keepReportEdits, reportBodyInput, reportChanges, ReportInput, reportSources, ReportSources } from "./report";
 import {
   AgendaItem, MeetingRow, getAgendaItem, getAttendeeIds, getMeeting, itemPresenterNames, listAgendaItems, listGuests,
-  listPendingReports, listUnfinishedSummaries, reportEdited, saveReport, saveSummaryIfUnchanged, setAttendees, setReportStatus,
+  listPendingReports, listUnfinishedSummaries, reportBaseline, reportEdited, saveReport, saveSummaryIfUnchanged, setAttendees, setReportStatus,
   setSummarizeStatus, updateAgendaItem,
 } from "./meetings";
 
@@ -282,7 +282,19 @@ function enqueueReport(meetingId: number): void {
         const input = await reportInput(pool, meeting, items);
         const body = await generateReportBody(pool, reportBodyInput(input));
         const built = buildReport(input, body);
-        await saveReport(pool, meetingId, built.markdown, built.sources);
+        // Edits to the minutes carry over: kept where the record behind them
+        // hasn't changed, merged with the new text where it has.
+        let markdown = built.markdown;
+        if (meeting.report.trim()) {
+          const baseline = await reportBaseline(pool, meeting);
+          if (baseline !== meeting.report) {
+            markdown = await keepReportEdits({
+              baseline, edited: meeting.report, fresh: built.markdown, items,
+              savedSources: meeting.report_sources, currentSources: built.sources,
+            }, (s) => mergeReportSection(pool, s));
+          }
+        }
+        await saveReport(pool, meetingId, markdown, built.sources, built.markdown);
         log(`report written for meeting ${meetingId}`);
       } finally {
         writing.delete(meetingId);

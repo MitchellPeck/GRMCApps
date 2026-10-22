@@ -490,26 +490,15 @@ function bootWithReport(answers: any[]) {
 
 const flush = () => new Promise((r) => setTimeout(r, 20));
 
-test("regenerating edited minutes asks first and sends replaceEdits", { skip }, async () => {
-  const edited = { status: 409, body: { ok: false, edited: true, error: "Regenerating replaces the edits you've made to these minutes." } };
-  const { w, doc, sent } = bootWithReport([edited]);
-  let asked = "";
-  w.confirm = (q: string) => { asked = q; return true; };
+test("regenerating edited minutes goes ahead without asking: the edits are kept", { skip }, async () => {
+  const { w, doc, sent } = bootWithReport([]);
+  let asked = false;
+  w.confirm = () => { asked = true; return false; };
   doc.getElementById("btn-report").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
   await flush();
-  assert.match(asked, /replaces the edits/);
-  assert.equal(sent.length, 2);
-  assert.equal(sent[1].replaceEdits, true);
-});
-
-test("declining keeps the edited minutes", { skip }, async () => {
-  const edited = { status: 409, body: { ok: false, edited: true, error: "Regenerating replaces the edits you've made to these minutes." } };
-  const { w, doc, sent } = bootWithReport([edited]);
-  w.confirm = () => false;
-  doc.getElementById("btn-report").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
-  await flush();
+  assert.equal(asked, false);
   assert.equal(sent.length, 1);
-  assert.equal(doc.getElementById("btn-report").disabled, false);
+  assert.equal(sent[0].startFresh, undefined);
 });
 
 test("the report shows its approximate length", { skip }, () => {

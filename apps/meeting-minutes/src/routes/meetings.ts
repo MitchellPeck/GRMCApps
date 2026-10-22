@@ -30,7 +30,7 @@ import {
   listAgendaItems, getAgendaItem, updateAgendaItem, deleteAgendaItem,
   setTranscribeStatus, listItemStatuses, reportFileName,
   setMeetingRecordingStatus, addTopicMarker, rewriteMeetingSpeakerMap,
-  listGuests, addGuest, removeGuest, reportEdited, saveReportEdit, cancelReport,
+  listGuests, addGuest, removeGuest, saveReportEdit, cancelReport, forgetReportEdits,
 } from "../meetings";
 import { enqueueTranscription, enqueueStoredRecording, enqueueMeetingProcessing } from "../transcribeQueue";
 import {
@@ -548,11 +548,9 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
     if (!meeting) { reply.code(404); return { ok: false, error: "Meeting not found." }; }
     const items = await listAgendaItems(pool, id);
     if (!items.length) { reply.code(422); return { ok: false, error: "Add agenda items before generating a report." }; }
-    const b = (req.body ?? {}) as { replaceEdits?: unknown };
-    if (reportEdited(meeting) && b.replaceEdits !== true) {
-      reply.code(409);
-      return { ok: false, edited: true, error: "Regenerating replaces the edits you've made to these minutes." };
-    }
+    // Edits to the minutes are kept unless asked to start fresh.
+    const b = (req.body ?? {}) as { startFresh?: unknown };
+    if (b.startFresh === true) await forgetReportEdits(pool, id);
     await requestReport(id);
     const after = await getMeeting(pool, id);
     if (!after) { reply.code(404); return { ok: false, error: "Meeting not found." }; }

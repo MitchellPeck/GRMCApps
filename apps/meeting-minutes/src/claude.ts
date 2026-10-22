@@ -432,6 +432,36 @@ export async function generateReportBody(pool: Pool, input: ReportBodyInput): Pr
   return condenseIfLong(body, (sys, content) => callClaude(pool, sys, content, 16000, REPORT_TIMEOUT_MS));
 }
 
+const MERGE_SYSTEM = `You update one part of a church meeting's minutes after the minutes were
+regenerated. You are given up to three versions of the same part:
+<original> as it was first written (may be missing),
+<edited> after a person edited it by hand,
+<new> freshly written from the meeting's updated record.
+
+The person's edits are deliberate: corrected names and spellings, corrected
+figures, rewording, details they added or removed. Write the part from <new>,
+keeping every one of the person's edits unless the updated record clearly
+replaces it. Where the person corrected something (a name, a figure, a
+wording) and <new> still has the uncorrected form, use the person's version.
+Keep anything <new> adds that the person didn't touch. Never invent anything.
+
+Keep the formatting of <new>: its heading line exactly as written, "####"
+lines with anything at their end exactly as written, "- " bullets and
+**bold**. Reply with the Markdown of the part only, starting with its heading
+line.`;
+
+// One part of the minutes, regenerated around the person's edits to it.
+export async function mergeReportSection(
+  pool: Pool, s: { original: string | null; edited: string; fresh: string }
+): Promise<string> {
+  const content = [
+    s.original === null ? "<original>(not available)</original>" : `<original>\n${s.original}\n</original>`,
+    `<edited>\n${s.edited}\n</edited>`,
+    `<new>\n${s.fresh}\n</new>`,
+  ].join("\n\n");
+  return (await callClaude(pool, MERGE_SYSTEM, content, 8000, REPORT_TIMEOUT_MS)).trim();
+}
+
 // Words above which the written body is shortened once (the prompt asks for
 // about 2,500; header, attendance and action items come on top).
 const CONDENSE_OVER_WORDS = 2800;

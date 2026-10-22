@@ -492,6 +492,35 @@ test("an edited report keeps its generation time and reads as edited", { skip: !
   }
 });
 
+test("regenerated minutes that kept edits read as edited, and remember what was generated", { skip: !url }, async () => {
+  const pool = new Pool({ connectionString: url });
+  await reset(pool);
+  try {
+    const { reportBaseline, forgetReportEdits } = await import("./meetings");
+    const { recordSnapshotChange } = await import("./changes");
+    const m = await createMeeting(pool, { title: "Keep", meetingDate: "", location: "", description: "", email: "", name: "" });
+    assert.ok(m.ok);
+    await saveReport(pool, m.id, "# A kept edit", {}, "# A");
+    const kept = (await getMeeting(pool, m.id))!;
+    assert.equal(reportEdited(kept), true);
+    assert.equal(await reportBaseline(pool, kept), "# A");
+
+    await forgetReportEdits(pool, m.id);
+    assert.equal(await reportBaseline(pool, (await getMeeting(pool, m.id))!), "# A kept edit");
+
+    // A report from before the generated text was kept: its first edit's
+    // "before" is what was generated.
+    await saveReport(pool, m.id, "# Old");
+    await pool.query("UPDATE meetings SET report_generated = '' WHERE id = $1", [m.id]);
+    assert.equal(await reportBaseline(pool, (await getMeeting(pool, m.id))!), "# Old", "unedited: the minutes themselves");
+    await saveReportEdit(pool, m.id, "# Old, edited");
+    await recordSnapshotChange(pool, m.id, "edit", "Minutes edited by hand", { meeting: { report: "# Old" } }, { meeting: { report: "# Old, edited" } });
+    assert.equal(await reportBaseline(pool, (await getMeeting(pool, m.id))!), "# Old");
+  } finally {
+    await pool.end();
+  }
+});
+
 test("a topic's play range is on the recording its segments came from", { skip: !url }, async () => {
   const pool = new Pool({ connectionString: url });
   await reset(pool);
