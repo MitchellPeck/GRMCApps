@@ -646,7 +646,7 @@ function renderDetail(){
 
   // Report
   h+='<section data-sec="minutes" hidden><div class="minutes-layout"><div class="minutes-main">'
-    +'<div class="section-title">Minutes</div>'
+    +'<div class="section-title">Report</div>'
     +'<div id="report-msg"></div>'
     +'<div id="report-stale"></div>'
     +'<div class="btn-row"><button class="btn btn-gold" id="btn-report" data-default="Generate report">Generate report</button>'
@@ -1107,7 +1107,7 @@ document.addEventListener('click', function(e){
 });
 
 // ── Sections and the side menu ──────────────────────────────────────────────
-var SECTIONS=[['details','Details'],['people','People'],['agenda','Agenda'],['recording','Recording'],['speakers','Speakers'],['minutes','Minutes']];
+var SECTIONS=[['details','Details'],['people','People'],['agenda','Agenda'],['recording','Recording'],['speakers','Speakers'],['minutes','Report']];
 function defaultSection(){
   if(state.meeting && state.meeting.report) return 'minutes';
   return state.items && state.items.length ? 'agenda' : 'details';
