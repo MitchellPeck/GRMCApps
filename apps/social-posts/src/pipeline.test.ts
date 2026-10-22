@@ -12,7 +12,7 @@ import { applyImageRule, createRecurrence, deleteRecurrence, getRecurrence, mate
 import { duplicateEvent, splitContent } from "./pipeline/repo";
 import { Rule } from "./pipeline/recurrence";
 import { addLinks, backfillLinks, hasLiveLinks, LINKS_BACKFILL_SETTING, linksFor } from "./pipeline/metricool-links";
-import { findSplitOrigin, importPlannerPost, shouldImport } from "./pipeline/metricool-import";
+import { importPlannerPost, shouldImport } from "./pipeline/metricool-import";
 import { textHash, PlannerPost } from "./metricool-planner";
 
 const pool = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
@@ -1242,13 +1242,13 @@ test("a Metricool-only post is imported with its platforms, time and text", asyn
   assert.equal(links[0].textHash, textHash("Christmas Eve service\nJoin us at 6"));
 });
 
-test("an imported post with different times per network is split, with its own captions", async () => {
+test("an imported post with different times per network is split into one post per time, each with its own caption", async () => {
   const post: PlannerPost = { id: "imp2", media: [], networks: [
     net("facebook", "2026-12-02T09:00", "FB words", "published"), net("x", "2026-12-03T10:30", "X words")] };
   const row = await importPlannerPost(pool, post, "America/Chicago");
   assert.deepEqual(row.platforms, ["facebook"]);
   assert.equal(row.status, "published");
-  assert.equal(row.captionMode, "separate");
+  assert.equal(row.caption, "FB words");
   const all = await pool.query("SELECT platforms, publish_date::text d, publish_time::text t FROM content_items WHERE from_metricool AND publish_date IN ('2026-12-02','2026-12-03') ORDER BY publish_date");
   assert.deepEqual(all.rows.map((r) => [r.platforms, r.d, r.t.slice(0, 5)]), [[["facebook"], "2026-12-02", "09:00"], [["x"], "2026-12-03", "10:30"]]);
 });
@@ -1286,17 +1286,18 @@ test("import is idempotent", async () => {
   assert.equal(shouldImport(post, linked, new Set(), "2026-01-01", []), false);
 });
 
-test("a split that made a new id is matched back to its post, not imported", async () => {
-  const r = await createContent(pool, { title: "Orig", publishDate: "2026-12-06", platforms: ["facebook", "x"], noMediaNeeded: true }, "me@x.org");
-  assert.ok(r.ok);
-  await addLinks(pool, r.value.id, "orig1", ["facebook", "x"], "2026-12-06T09:00", "scheduled");
-  await pool.query("UPDATE metricool_links SET text_hash = $1 WHERE metricool_post_id = 'orig1'", [textHash("Same words")]);
-  const vanished = (await linksFor(pool, [r.value.id])).get(r.value.id)!.filter((l) => l.network === "x");
-  const xOnly: PlannerPost = { id: "new9", media: [], networks: [net("x", "2026-12-07T09:00", "Same words\n")] };
-  assert.deepEqual(findSplitOrigin(xOnly, vanished)?.map((l) => l.network), ["x"]);
-  assert.equal(findSplitOrigin({ ...xOnly, networks: [net("x", "2026-12-07T09:00", "Different")] }, vanished), null);
-  assert.equal(findSplitOrigin({ ...xOnly, networks: [net("x", "2026-12-07T09:00", "Different")], media: ["a.jpg"] }, vanished, ["a.jpg"])?.length, 1, "media can match instead");
-  assert.equal(findSplitOrigin({ ...xOnly, networks: [net("facebook", "2026-12-07T09:00", "Same words")] }, vanished), null, "network set must match");
-  const blank = vanished.map((l) => ({ ...l, textHash: "" }));
-  assert.equal(findSplitOrigin(xOnly, blank), null, "empty stored hash can't match on text");
+test("an imported facebook+instagram post can be edited afterwards", async () => {
+  const post: PlannerPost = { id: "imp4", media: [], networks: [net("facebook", "2026-12-08T09:00", "Edit me"), net("instagram", "2026-12-08T09:00", "Edit me")] };
+  const row = await importPlannerPost(pool, post, "America/Chicago");
+  assert.equal(row.noMediaNeeded, false);
+  const u = await updateContent(pool, row.id, { title: "Edited" });
+  assert.ok(u.ok, u.ok ? "" : u.error);
+  assert.equal(u.value.item.title, "Edited");
+});
+
+test("a failed import leaves nothing behind", async () => {
+  const before = (await pool.query("SELECT count(*)::int n FROM content_items")).rows[0].n;
+  await assert.rejects(importPlannerPost(pool, { id: "imp5", media: [], networks: [net("facebook", "2026-12-09T09:00", "Boom"), net("x", "2026-12-10T09:00", "Boom", "bogus-state")] }, "America/Chicago"));
+  assert.equal((await pool.query("SELECT count(*)::int n FROM content_items")).rows[0].n, before);
+  assert.equal((await pool.query("SELECT count(*)::int n FROM metricool_links WHERE metricool_post_id='imp5'")).rows[0].n, 0);
 });
