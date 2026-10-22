@@ -35,7 +35,8 @@ function loadMetricoolDefaults(){
 }
 
 document.body.insertAdjacentHTML('beforeend', "<div id=\"mc-modal\" style=\"display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:100;align-items:center;justify-content:center\">\n  <div class=\"card\" style=\"max-width:520px;width:92%;max-height:90vh;overflow:auto\">\n    <div class=\"ct\">Send to Metricool</div>\n    <div class=\"field\"><label>Post text</label><textarea id=\"mc-text\" style=\"min-height:120px\"></textarea></div>\n    <div class=\"field\"><label>Networks</label>\n      <label class=\"check\"><input type=\"checkbox\" id=\"mc-fb\" checked onchange=\"renderNetworkTimes()\"> Facebook</label>\n      <label class=\"check\"><input type=\"checkbox\" id=\"mc-ig\" checked onchange=\"renderNetworkTimes()\"> Instagram</label>\n      <label class=\"check\"><input type=\"checkbox\" id=\"mc-x\" checked onchange=\"renderNetworkTimes()\"> X</label>\n    </div>\n    <div class=\"field\"><label>Send as</label>\n      <label class=\"check\"><input type=\"radio\" name=\"mc-publish\" value=\"scheduled\" checked onchange=\"updatePublishHint()\"> Scheduled</label>\n      <label class=\"check\"><input type=\"radio\" name=\"mc-publish\" value=\"draft\" onchange=\"updatePublishHint()\"> Draft</label>\n      <div class=\"hint\" id=\"mc-publish-hint\"></div>\n    </div>\n    <div class=\"row2\">\n      <div class=\"field\"><label>Date</label><input type=\"date\" id=\"mc-date\"><div class=\"hint\" id=\"mc-date-hint\"></div></div>\n      <div class=\"field\"><label>Time</label><input type=\"time\" id=\"mc-time\"></div>\n    </div>\n    <div class=\"field\"><label class=\"check\"><input type=\"checkbox\" id=\"mc-pertime\" onchange=\"renderNetworkTimes()\"> Different time per platform</label></div>\n    <div id=\"mc-times\"></div>\n    <div id=\"mc-image-area\">\n      <div class=\"field\"><label>Image</label>\n        <select id=\"mc-image-source\" onchange=\"switchImageSource()\">\n          <option value=\"none\">No image</option>\n          <option value=\"upload\">Upload an image</option>\n          <option value=\"approved\">Choose an approved image</option>\n          <option value=\"url\">Use an image URL</option>\n        </select>\n      </div>\n      <div class=\"field\" id=\"mc-src-upload\" style=\"display:none\">\n        <label>File</label><input type=\"file\" id=\"mc-file\" accept=\"image/*\">\n        <div class=\"hint\">JPG, PNG, GIF or WebP, up to 10 MB.</div>\n      </div>\n      <div class=\"field\" id=\"mc-src-approved\" style=\"display:none\">\n        <label>Approved image</label><select id=\"mc-approved\"></select>\n      </div>\n      <div class=\"field\" id=\"mc-src-url\" style=\"display:none\">\n        <label>Image URL (must be public)</label><input type=\"text\" id=\"mc-imgurl\" placeholder=\"https://...\">\n      </div>\n    </div>\n    <div id=\"mc-msg\"></div>\n    <div class=\"btn-row\">\n      <button class=\"btn btn-primary\" id=\"mc-send-btn\" data-default=\"Send to Metricool\" onclick=\"submitMetricool()\">Send to Metricool</button>\n      <button class=\"btn btn-secondary\" onclick=\"closeMetricool()\">Cancel</button>\n    </div>\n  </div>\n</div>\n");
-document.getElementById('mc-date').addEventListener('change', function(){ updateDateHint(); });
+document.getElementById('mc-date').addEventListener('change', function(){ updateDateHint(); renderNetworkTimes(); });
+document.getElementById('mc-time').addEventListener('change', function(){ renderNetworkTimes(); });
 // Per-network texts render here, in place of the single text box, when a
 // caller has a different caption for each network.
 document.getElementById('mc-text').closest('.field').insertAdjacentHTML('afterend', '<div id="mc-texts"></div>');
@@ -141,21 +142,34 @@ function mcNetworks(){
     .filter(function(p){ return document.getElementById(p[0]).checked; }).map(function(p){ return p[1]; });
 }
 
-// "Different time per platform": a date and time for each ticked network. Values already
-// typed survive a re-render; a new one starts from the shared date and time.
+// "Different time per platform": a date and time for each ticked network. A field typed in by
+// hand keeps its value; the rest follow the shared date and time.
 function renderNetworkTimes(){
   var box = document.getElementById('mc-times');
   if (!document.getElementById('mc-pertime').checked) { box.innerHTML = ''; return; }
-  var prev = {};
-  box.querySelectorAll('[data-mcnet]').forEach(function(el){ prev[el.getAttribute('data-mcnet') + el.type] = el.value; });
+  var edited = {};
+  box.querySelectorAll('[data-mcnet][data-edited]').forEach(function(el){ edited[el.getAttribute('data-mcnet') + el.type] = el.value; });
   var date = document.getElementById('mc-date').value, time = document.getElementById('mc-time').value;
+  var input = function(n, type, shared, label){
+    var own = edited[n + type];
+    return '<div class="field"><label>'+label+' '+type+'</label><input type="'+type+'" data-mcnet="'+n+'"'
+      + (own != null ? ' data-edited="1"' : '') + ' value="'+mcEsc(own != null ? own : shared)+'"'
+      + ' oninput="this.setAttribute(\'data-edited\',\'1\');updateNetworkDateHints()">'
+      + (type === 'date' ? '<div class="hint" data-mchint="'+n+'"></div>' : '') + '</div>';
+  };
   box.innerHTML = mcNetworks().map(function(n){
     var label = mcEsc(MC_NETWORK_LABELS[n] || n);
-    return '<div class="row2">'
-      + '<div class="field"><label>'+label+' date</label><input type="date" data-mcnet="'+n+'" value="'+mcEsc(prev[n+'date'] || date)+'"></div>'
-      + '<div class="field"><label>'+label+' time</label><input type="time" data-mcnet="'+n+'" value="'+mcEsc(prev[n+'time'] || time)+'"></div>'
-      + '</div>';
+    return '<div class="row2">' + input(n, 'date', date, label) + input(n, 'time', time, label) + '</div>';
   }).join('');
+  updateNetworkDateHints();
+}
+
+// The same weekday hint the shared date shows.
+function updateNetworkDateHints(){
+  document.querySelectorAll('#mc-times input[type="date"]').forEach(function(d){
+    var hint = document.querySelector('[data-mchint="'+d.getAttribute('data-mcnet')+'"]');
+    if (hint) hint.textContent = describeDate(d.value);
+  });
 }
 
 // network → YYYY-MM-DDTHH:MM:SS, only when the sender asked for different times.

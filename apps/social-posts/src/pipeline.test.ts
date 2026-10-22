@@ -1703,7 +1703,7 @@ async function sendablePost(): Promise<string> {
   return r.value.id;
 }
 
-/** Sends with Metricool stubbed: each create returns the next id (or none), and the planner lists `planner`. */
+/** Sends with Metricool stubbed: each create returns the next id (none for null, a 400 for "fail"), and the planner lists `planner`. */
 async function sendWith(body: Record<string, unknown>, o: { ids?: Array<string | null>; planner?: unknown } = {}) {
   const { sendToMetricool } = await import("./pipeline/metricool-send");
   const ids = [...(o.ids || [])];
@@ -1716,6 +1716,7 @@ async function sendWith(body: Record<string, unknown>, o: { ids?: Array<string |
     if (init?.method === "POST") {
       created.push(JSON.parse(init.body));
       const id = ids.shift();
+      if (id === "fail") return new Response(JSON.stringify({ message: "Instagram needs media" }), { status: 400 });
       return new Response(JSON.stringify(id ? { data: { id: Number(id) } } : { data: {} }), { status: 200 });
     }
     listed++;
@@ -1796,5 +1797,53 @@ test("a post whose links are all gone can be sent again", async () => {
     assert.equal(again.res.ok, true, JSON.stringify(again.res));
     assert.equal(again.created.length, 1);
     assert.ok((await linkRows(id)).some((l) => l.metricoolPostId === "7302" && l.state === "scheduled"));
+  } finally { await clearSyncSettings(); }
+});
+
+test("a platform that failed to send moves to its own post, with no links, and can be sent again", async () => {
+  const id = await sendablePost();
+  try {
+    const { res, created } = await sendWith({ contentItemId: id, texts: { facebook: "FB words", instagram: "IG words" } }, { ids: ["7401", "fail"] });
+    assert.equal(created.length, 2);
+    assert.equal(res.ok, false);
+    assert.match((res as any).error, /^Sent Facebook, but Instagram failed: Metricool scheduler failed \(400\)/);
+    const kept = await itemRow(id);
+    assert.deepEqual([kept.status, kept.platforms], ["scheduled", ["facebook"]]);
+    assert.deepEqual((await linkRows(id)).map((l) => [l.metricoolPostId, l.network]), [["7401", "facebook"]]);
+    const rest = (await pool.query(`SELECT id FROM content_items WHERE split_from = $1`, [id])).rows;
+    assert.equal(rest.length, 1);
+    const ig = await itemRow(rest[0].id);
+    assert.deepEqual([ig.platforms, ig.d, ig.t], [["instagram"], "2026-11-05", "10:00"]);
+    assert.equal((await linkRows(rest[0].id)).length, 0, "nothing went, so nothing is linked");
+    const retry = await sendWith({ contentItemId: rest[0].id, networks: ["instagram"], text: "IG words" }, { ids: ["7402"] });
+    assert.equal(retry.res.ok, true, JSON.stringify(retry.res));
+    assert.deepEqual((await linkRows(rest[0].id)).map((l) => [l.metricoolPostId, l.network]), [["7402", "instagram"]]);
+  } finally { await clearSyncSettings(); }
+});
+
+test("an unmatched id-less send stops blocking a resend after 24 hours", async () => {
+  const { ALREADY_SENT } = await import("./pipeline/metricool-send");
+  const id = await sendablePost();
+  try {
+    assert.equal((await sendWith({ contentItemId: id }, { ids: [null] })).res.ok, true);
+    await pool.query(`UPDATE metricool_sends SET created_at = now() - interval '23 hours'`);
+    assert.deepEqual((await sendWith({ contentItemId: id }, { ids: ["7501"] })).res, { ok: false, error: ALREADY_SENT });
+    await pool.query(`UPDATE metricool_sends SET created_at = now() - interval '25 hours' WHERE status = 'sent'`);
+    const again = await sendWith({ contentItemId: id }, { ids: ["7502"] });
+    assert.equal(again.res.ok, true, JSON.stringify(again.res));
+  } finally { await clearSyncSettings(); }
+});
+
+test("a one-post sync ignores an id-less send more than a day old", async () => {
+  const id = await probePost();
+  await pool.query("DELETE FROM metricool_links");
+  await pool.query(
+    `INSERT INTO metricool_sends (source_type, source_ref, text, networks, scheduled_for, timezone, metricool_post_id, status, created_at)
+     VALUES ('content', $1, $2, 'facebook,instagram', '2026-10-23T17:19:00', 'America/New_York', '', 'sent', '2026-10-21T15:19:30Z')`,
+    [id, PROBE_TEXT]);
+  try {
+    // Given up on, so there's no window: Metricool isn't even asked (a listing here would fail).
+    assert.deepEqual(await syncWith("fail", { itemId: id }), NO_CHANGE);
+    assert.equal((await linkRows(id)).length, 0);
   } finally { await clearSyncSettings(); }
 });

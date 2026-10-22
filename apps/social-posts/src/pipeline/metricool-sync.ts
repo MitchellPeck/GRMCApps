@@ -8,7 +8,7 @@ import { getSetting, setSetting } from "../settings";
 import { DEFAULT_TZ, addDays, localDateIn } from "../dates";
 import { getMetricoolCreds } from "../metricool";
 import { listPlanner, PlannerPost, textHash } from "../metricool-planner";
-import { Link, linksFor } from "./metricool-links";
+import { Link, linksFor, pendingIdlessSends } from "./metricool-links";
 import { applyRelink, heldPostIds, refreshIdents, relinkPlan } from "./metricool-relink";
 import { LinkChange, overallStatus, reconcileItem } from "./metricool-reconcile";
 import { idlessSends, idlessSendsForRelink, importPlannerPost, shouldImport } from "./metricool-import";
@@ -58,7 +58,7 @@ async function syncOnce(pool: Pool, o: { itemId?: string; now?: Date }): Promise
     : (await pool.query(`SELECT DISTINCT content_item_id FROM metricool_links WHERE content_item_id IS NOT NULL`)).rows.map((r) => r.content_item_id);
   const links = [...(await linksFor(pool, itemIds)).values()].flat();
   const dates = links.map(dayOf).filter(Boolean);
-  if (o.itemId) dates.push(...await idlessDays(pool, o.itemId));
+  if (o.itemId) dates.push(...await idlessDays(pool, o.itemId, now));
   dates.sort();
   let covered: Covered;
   if (o.itemId) {
@@ -121,15 +121,13 @@ async function syncOnce(pool: Pool, o: { itemId?: string; now?: Date }): Promise
 
 /**
  * A send Metricool gave no id has no link, so a one-post window built from links alone would never
- * list it: add its date and the post's own, so the relink can find it.
+ * list it: add its date and the post's own, so the relink can find it. Only sends still pending count.
  */
-async function idlessDays(pool: Pool, itemId: string): Promise<string[]> {
-  const sends = (await pool.query(
-    `SELECT left(scheduled_for, 10) AS d FROM metricool_sends
-      WHERE status = 'sent' AND metricool_post_id = '' AND source_type = 'content' AND source_ref = $1`, [itemId])).rows;
+async function idlessDays(pool: Pool, itemId: string, now: Date): Promise<string[]> {
+  const sends = await pendingIdlessSends(pool, itemId, now);
   if (!sends.length) return [];
   const item = (await pool.query(`SELECT publish_date::text AS d FROM content_items WHERE id = $1`, [itemId])).rows[0];
-  return [...sends.map((s) => String(s.d)), item?.d].filter((d): d is string => /^\d{4}-\d{2}-\d{2}$/.test(d || ""));
+  return [...sends.map((s) => s.day), item?.d].filter((d): d is string => /^\d{4}-\d{2}-\d{2}$/.test(d || ""));
 }
 
 async function syncItem(

@@ -53,6 +53,19 @@ export async function hasLiveLinks(db: Pool, itemId: string): Promise<boolean> {
 }
 
 /**
+ * The post's id-less sends a sync may still match: made after its links last went, and within a day
+ * of `now`. Older ones are given up on, so an unmatched send can't block a post (or stretch a window) forever.
+ */
+export async function pendingIdlessSends(db: Pool, itemId: string, now: Date = new Date()): Promise<Array<{ day: string }>> {
+  return (await db.query(
+    `SELECT left(scheduled_for, 10) AS day FROM metricool_sends
+      WHERE source_type = 'content' AND source_ref = $1 AND status = 'sent' AND metricool_post_id = ''
+        AND created_at > $2::timestamptz - interval '24 hours'
+        AND created_at > COALESCE((SELECT max(gone_at) FROM metricool_links WHERE content_item_id = $1), '-infinity')`,
+    [itemId, now])).rows;
+}
+
+/**
  * One-time: turn the send log into links. A re-send replaces the earlier send, so
  * only the sends within 10 minutes of the newest count (the rule the publish check used).
  */

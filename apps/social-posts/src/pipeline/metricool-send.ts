@@ -4,7 +4,7 @@
 import { Pool } from "pg";
 import { buildSchedulerPayload, charWarnings, isPublishMode, MetricoolCreds, PublishMode, schedulePost } from "../metricool";
 import { logSend } from "../metricool-sends";
-import { addLinks, hasLiveLinks } from "./metricool-links";
+import { addLinks, hasLiveLinks, pendingIdlessSends } from "./metricool-links";
 import { syncMetricool } from "./metricool-sync";
 import { splitContent } from "./repo";
 import { markSentToMetricool } from "./sync";
@@ -61,16 +61,11 @@ export function groupSends(r: Pick<SendRequest, "text" | "texts" | "networks" | 
 
 /**
  * True when the post is in Metricool already: a live link, or (with none) a send Metricool gave no
- * id that a sync hasn't matched yet, made after the post's links last went. All gone means it can go again.
+ * id that a sync hasn't matched yet (made after the post's links last went, within the last day).
+ * All gone means it can go again.
  */
 export async function alreadyInMetricool(db: Pool, itemId: string): Promise<boolean> {
-  if (await hasLiveLinks(db, itemId)) return true;
-  const r = await db.query(
-    `SELECT 1 FROM metricool_sends
-      WHERE source_type = 'content' AND source_ref = $1 AND status = 'sent' AND metricool_post_id = ''
-        AND created_at > COALESCE((SELECT max(gone_at) FROM metricool_links WHERE content_item_id = $1), '-infinity')
-      LIMIT 1`, [itemId]);
-  return r.rows.length > 0;
+  return await hasLiveLinks(db, itemId) || (await pendingIdlessSends(db, itemId)).length > 0;
 }
 
 export async function sendToMetricool(pool: Pool, r: SendRequest, deps: SendDeps): Promise<SendResult> {
@@ -113,7 +108,8 @@ export async function sendToMetricool(pool: Pool, r: SendRequest, deps: SendDeps
     sent.push({ ...g, postId, logId });
   }
 
-  if (sent.length && r.contentItemId) await afterSend(pool, r, sent, warn);
+  const unsent = groups.slice(sent.length);
+  if (sent.length && r.contentItemId) await afterSend(pool, r, sent, unsent, warn);
   if (failure) return { ok: false, error: failure };
 
   const times = new Set(sent.map((s) => s.dateTime));
@@ -128,21 +124,30 @@ export async function sendToMetricool(pool: Pool, r: SendRequest, deps: SendDeps
   };
 }
 
-/** Split by time, mark each part Scheduled at its time, link what was sent, then sync each part. */
-async function afterSend(pool: Pool, r: SendRequest, sent: Sent[], warn: (e: unknown) => void): Promise<void> {
+/**
+ * Split by time, mark each part Scheduled at its time, link what was sent, then sync each part.
+ * Networks that didn't go (a later group failed) move to a post of their own with no links, so
+ * they can still be sent; the post holding what went keeps its links.
+ */
+async function afterSend(pool: Pool, r: SendRequest, sent: Sent[], unsent: Group[], warn: (e: unknown) => void): Promise<void> {
   const itemId = r.contentItemId!;
   const times = [...new Set(sent.map((s) => s.dateTime))].sort();
   const holder = new Map(times.map((t) => [t, itemId]));  // time → the post that holds it
-  if (times.length > 1) {
+  const nets = (gs: Group[]) => [...new Set(gs.flatMap((g) => g.networks.map(platformOf)))];
+  const unsentTimes = [...new Set(unsent.map((g) => g.dateTime))].sort();
+  const parts = [
+    ...times.map((t) => ({ scheduledFor: t, networks: nets(sent.filter((s) => s.dateTime === t)) })),
+    ...unsentTimes.map((t) => ({ scheduledFor: t, networks: nets(unsent.filter((g) => g.dateTime === t)) })),
+  ];
+  if (parts.length > 1) {
     try {
       const item = (await pool.query(`SELECT platforms FROM content_items WHERE id = $1`, [itemId])).rows[0];
-      const groups = times.map((t) => ({ scheduledFor: t,
-        networks: [...new Set(sent.filter((s) => s.dateTime === t).flatMap((s) => s.networks.map(platformOf)))] }));
-      // Platforms not sent this time stay on the original post rather than being dropped.
-      const sentNets = new Set(groups.flatMap((g) => g.networks));
-      groups[0].networks.push(...((item?.platforms || []) as string[]).filter((p) => !sentNets.has(p)));
-      const split = await splitContent(pool, itemId, groups);
-      if (split.ok) split.value.created.forEach((c, i) => holder.set(times[i + 1], c.id));
+      // Platforms not in this send stay on the original post rather than being dropped.
+      const named = new Set(parts.flatMap((g) => g.networks));
+      parts[0].networks.push(...((item?.platforms || []) as string[]).filter((p) => !named.has(p)));
+      const split = await splitContent(pool, itemId, parts);
+      // Created posts come back in parts order; only the sent times need their holder.
+      if (split.ok) split.value.created.slice(0, times.length - 1).forEach((c, i) => holder.set(times[i + 1], c.id));
       else warn(new Error(split.error));
     } catch (e) { warn(e); }
   }
