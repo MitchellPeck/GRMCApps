@@ -1803,7 +1803,10 @@ function speakerSamplesHtml(st, recId){
 // Whatever is playing — a part of the minutes, a topic, a chat clip or a voice
 // sample — gets the same small player in the bottom-right corner: play/pause,
 // back and forward 15 seconds, stop, a seek bar, speed and volume.
-var mp={ audio:null, onStop:null, offset:function(){ return 0; } };
+// Each clip tells the player where it starts and ends on the recording, where
+// it is now and how to go somewhere else: a clip cut as it streams has no
+// length of its own for the bar to go by.
+var mp={ audio:null, onStop:null, tl:null, dragging:false };
 var MP_SKIP=15, MP_SPEEDS=[1, 1.25, 1.5, 2];
 function miniPlayerEl(){
   var el=document.getElementById('mini-player');
@@ -1829,15 +1832,18 @@ function miniPlayerEl(){
     if(au.paused){ var p=au.play(); if(p && p['catch']) p['catch'](function(){}); } else au.pause();
     miniPlayerUpdate();
   });
-  var skip=function(d){ var au=a(); if(!au) return;
-    var max=isFinite(au.duration) ? au.duration : Infinity;
-    au.currentTime=Math.max(0, Math.min(max, (au.currentTime||0)+d)); miniPlayerUpdate(); };
+  var skip=function(d){ if(!mp.tl) return; miniPlayerSeek(mp.tl.now()+d); };
   el.querySelector('#mp-back').addEventListener('click', function(){ skip(-MP_SKIP); });
   el.querySelector('#mp-fwd').addEventListener('click', function(){ skip(MP_SKIP); });
   el.querySelector('#mp-stop').addEventListener('click', function(){ if(mp.onStop) mp.onStop(); else miniPlayerHide(); });
   el.querySelector('#mp-volume').addEventListener('input', function(){ var au=a(); if(au) au.volume=Number(this.value); });
+  // While dragging, the time shows where it will go; letting go goes there.
+  var seekTo=function(v){ return mp.tl ? mp.tl.start+Number(v)/1000*(mp.tl.end-mp.tl.start) : 0; };
   el.querySelector('#mp-seek').addEventListener('input', function(){
-    var au=a(); if(au && isFinite(au.duration) && au.duration>0) au.currentTime=Number(this.value)/1000*au.duration;
+    mp.dragging=true; miniPlayerTime(seekTo(this.value));
+  });
+  el.querySelector('#mp-seek').addEventListener('change', function(){
+    mp.dragging=false; miniPlayerSeek(seekTo(this.value));
   });
   el.querySelector('#mp-speed').addEventListener('click', function(){
     var au=a(); if(!au) return;
@@ -1846,9 +1852,10 @@ function miniPlayerEl(){
   });
   return el;
 }
-function miniPlayerShow(audio, label, onStop, offset){
+// tl: { start, end } in recording seconds, now() where playback is, seek(t).
+function miniPlayerShow(audio, label, onStop, tl){
   var el=miniPlayerEl();
-  mp.audio=audio; mp.onStop=onStop; mp.offset=offset||function(){ return 0; };
+  mp.audio=audio; mp.onStop=onStop; mp.tl=tl; mp.dragging=false;
   if(!audio._mp){
     audio._mp=true;
     ['timeupdate','play','pause','loadedmetadata','durationchange'].forEach(function(ev){
@@ -1867,7 +1874,7 @@ function miniPlayerHide(audio){
   if(audio && mp.audio!==audio) return;
   var el=document.getElementById('mini-player'); if(el) el.hidden=true;
   document.body.classList.remove('has-mini-player');
-  mp.audio=null; mp.onStop=null;
+  mp.audio=null; mp.onStop=null; mp.tl=null;
   queueFitChat();
 }
 function miniPlayerUpdate(){
@@ -1876,9 +1883,27 @@ function miniPlayerUpdate(){
   t.innerHTML = au.paused ? '&#9654;' : '&#10074;&#10074;';
   t.title = t.getAttribute('aria-label') ? (au.paused ? 'Play' : 'Pause') : '';
   t.setAttribute('aria-label', au.paused ? 'Play' : 'Pause');
-  var cur=au.currentTime||0, dur=isFinite(au.duration) ? au.duration : 0, off=mp.offset();
-  el.querySelector('#mp-time').textContent=fmtSpanTime(off+cur)+(dur ? ' / '+fmtSpanTime(off+dur) : '');
-  el.querySelector('#mp-seek').value = dur ? Math.round(cur/dur*1000) : 0;
+  if(!mp.tl || mp.dragging) return;
+  var t=mp.tl.now(), len=mp.tl.end-mp.tl.start;
+  miniPlayerTime(t);
+  el.querySelector('#mp-seek').value = len>0 ? Math.round(Math.max(0, Math.min(1, (t-mp.tl.start)/len))*1000) : 0;
+}
+// "elapsed / length" of the clip.
+function miniPlayerTime(t){
+  var el=document.getElementById('mini-player'); if(!el || !mp.tl) return;
+  var len=Math.max(0, mp.tl.end-mp.tl.start);
+  el.querySelector('#mp-time').textContent=fmtSpanTime(Math.max(0, Math.min(len, t-mp.tl.start)))+' / '+fmtSpanTime(len);
+}
+function miniPlayerSeek(t){
+  if(!mp.tl) return;
+  mp.tl.seek(Math.max(mp.tl.start, Math.min(mp.tl.end-0.5, t)));
+  miniPlayerUpdate();
+}
+// The end of what has loaded, in the audio's own seconds; null when the
+// element can't say.
+function bufferedEnd(au){
+  var b=au.buffered;
+  return b && b.length ? b.end(b.length-1) : null;
 }
 // What a play button belongs to, for the player's label.
 function audioLabel(btn){
@@ -1914,7 +1939,10 @@ document.addEventListener('click', function(e){
   btn.innerHTML='&#9632;';
   var p=samplePlayer.play();
   if(p && p['catch']) p['catch'](function(){ if(samplePlayingBtn===btn) stopSample(); });
-  miniPlayerShow(samplePlayer, 'Voice sample: '+audioLabel(btn), stopSample, function(){ return start; });
+  var au=samplePlayer;
+  miniPlayerShow(au, 'Voice sample: '+audioLabel(btn), stopSample, { start:start, end:end,
+    now:function(){ return start+(au.currentTime||0); },
+    seek:function(t){ au.currentTime=t-start; } });
 });
 
 // Meeting-wide speaker naming: one set of voices for the whole recording.
@@ -2248,7 +2276,16 @@ document.addEventListener('click', function(e){
   };
   sectionPlayingBtn=btn;
   playSectionPart(Number(btn.getAttribute('data-start')));
-  miniPlayerShow(sectionPlayer, audioLabel(btn), stopSection, function(){ return sectionPart ? sectionPart.from : 0; });
+  var au=sectionPlayer, part=sectionPart;
+  miniPlayerShow(au, audioLabel(btn), stopSection, { start:Number(btn.getAttribute('data-start')), end:part.end,
+    now:function(){ return part.from+(au.currentTime||0); },
+    // Within what has loaded, move there; anywhere else, have the server cut
+    // from that point.
+    seek:function(t){
+      var loaded=bufferedEnd(au), off=t-part.from;
+      if(off>=0 && t<part.to && (loaded===null || off<=loaded)) au.currentTime=off;
+      else playSectionPart(t);
+    } });
 });
 
 function playSectionPart(from){

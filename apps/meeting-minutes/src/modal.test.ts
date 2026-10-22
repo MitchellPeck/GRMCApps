@@ -1391,6 +1391,67 @@ test("one mini player for all audio, with play/pause, skip, stop and volume", { 
   assert.equal(mp.hidden, true);
 });
 
+test("the player's bar runs over the whole clip, even while the audio's own length is unknown", { skip }, () => {
+  const { w, doc } = boot();
+  const players = fakeAudio(w);
+  const box = doc.createElement("div");
+  box.innerHTML = w.eval(`renderMarkdown("### 1. Budget <!--t:m12:600.0-1200.0-->")`);
+  doc.body.appendChild(box);
+  box.querySelector(".sec-play").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  const a = players[0];
+  a.duration = Infinity; a.currentTime = 30; a.fire("timeupdate");
+  assert.equal(doc.getElementById("mp-time").textContent, "0:30 / 10:00");
+  assert.equal(doc.getElementById("mp-seek").value, "50");
+});
+
+test("dragging the bar past what has loaded plays from there", { skip }, () => {
+  const { w, doc } = boot();
+  const players = fakeAudio(w);
+  const box = doc.createElement("div");
+  box.innerHTML = w.eval(`renderMarkdown("### 1. Budget <!--t:m12:600.0-1200.0-->")`);
+  doc.body.appendChild(box);
+  box.querySelector(".sec-play").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  const a = players[0];
+  a.duration = Infinity; a.currentTime = 10;
+  a.buffered = { length: 1, end: () => 40 };
+  const seek = doc.getElementById("mp-seek");
+  seek.value = "500"; seek.dispatchEvent(new w.Event("input", { bubbles: true }));
+  assert.equal(doc.getElementById("mp-time").textContent, "5:00 / 10:00", "shows where it will go while dragging");
+  seek.dispatchEvent(new w.Event("change", { bubbles: true }));
+  assert.match(a.src, /section\?start=900\.00&end=1200\.00/);
+  a.currentTime = 0; a.fire("timeupdate");
+  assert.equal(doc.getElementById("mp-time").textContent, "5:00 / 10:00");
+});
+
+test("a long section's later parts keep their place on the bar", { skip }, () => {
+  const { w, doc } = boot();
+  const players = fakeAudio(w);
+  const box = doc.createElement("div");
+  box.innerHTML = w.eval(`renderMarkdown("### 1. Budget <!--t:m12:0.0-3600.0-->")`);
+  doc.body.appendChild(box);
+  box.querySelector(".sec-play").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  const a = players[0];
+  a.fire("ended");
+  assert.match(a.src, /start=1800\.00/);
+  a.duration = Infinity; a.currentTime = 60; a.fire("timeupdate");
+  assert.equal(doc.getElementById("mp-time").textContent, "31:00 / 1:00:00");
+});
+
+test("a voice sample's bar runs over the sample", { skip }, () => {
+  const { w, doc } = boot();
+  const players = fakeAudio(w);
+  const b = doc.createElement("button");
+  b.className = "spk-play"; b.setAttribute("data-rec", "3"); b.setAttribute("data-start", "100.3"); b.setAttribute("data-end", "109.7");
+  doc.body.appendChild(b);
+  b.dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  const a = players[0];
+  a.currentTime = 5; a.fire("timeupdate");
+  assert.equal(doc.getElementById("mp-time").textContent, "0:05 / 0:10");
+  const seek = doc.getElementById("mp-seek");
+  seek.value = "200"; seek.dispatchEvent(new w.Event("change", { bubbles: true }));
+  assert.equal(a.currentTime, 2);
+});
+
 test("Fix waits for a Check of exactly those words", { skip }, async () => {
   const { w, doc, posts } = bootFix({ "/fix": { ok: true, dry: true, counts, total: 6, changeId: null, libraryMatches: [] } });
   const apply = doc.getElementById("btn-fix-apply");
