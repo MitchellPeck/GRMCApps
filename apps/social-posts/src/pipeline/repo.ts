@@ -14,6 +14,7 @@ import { propagate } from "./recurring";
 import { describeRule } from "./recurrence";
 import { captionWarnings, imageRuleError } from "./platforms";
 import { Override, Profile, SourceRef } from "./drafting";
+import { linksFor } from "./metricool-links";
 
 // Hand `date` columns back as "YYYY-MM-DD" strings. pg's default turns them
 // into a JS Date at local midnight — exactly the one-day drift these calendar
@@ -47,6 +48,11 @@ export interface ContentRow {
   /** Why a Scheduled post hasn't become Published, if the last check found a reason. */
   publishCheck: string;
   recurrenceId: string | null; occurrenceDate: string | null; detached: boolean;
+  /** Where this post stands in Metricool, per platform (gone ones included; the page decides). */
+  links: Array<{ network: string; state: string; scheduledFor: string; publicUrl: string; detail: string }>;
+  /** The post this one was split off from when its platforms went at different times. */
+  splitFrom: { id: string; title: string; at: string } | null;
+  fromMetricool: boolean;
 }
 
 export interface MediaRow {
@@ -84,7 +90,20 @@ function contentOf(r: any): ContentRow {
     draftId: r.draft_id == null ? null : Number(r.draft_id), draftKey: r.draft_key,
     mediaTotal: Number(r.media_total || 0), mediaDone: Number(r.media_done || 0), attachmentCount: Number(r.attachment_count || 0), publishCheck: r.publish_check || "",
     recurrenceId: r.recurrence_id ?? null, occurrenceDate: r.occurrence_date ?? null, detached: !!r.detached,
+    links: [],
+    splitFrom: r.split_from ? { id: r.split_from, title: r.split_from_title || "", at: r.split_at ? new Date(r.split_at).toISOString() : "" } : null,
+    fromMetricool: !!r.from_metricool,
   };
+}
+
+/** One query for every row's links, not one per row. */
+async function withLinks(db: Db, rows: ContentRow[]): Promise<ContentRow[]> {
+  const byId = await linksFor(db as Pool, rows.map((r) => r.id));
+  for (const r of rows) {
+    r.links = (byId.get(r.id) || []).map((l) => ({
+      network: l.network, state: l.state, scheduledFor: l.scheduledFor, publicUrl: l.publicUrl, detail: l.detail }));
+  }
+  return rows;
 }
 
 function mediaOf(r: any): MediaRow {
@@ -101,8 +120,10 @@ function mediaOf(r: any): MediaRow {
 
 const CONTENT_SELECT = `
   SELECT ci.*, e.name AS event_name, e.color AS event_color, e.kind AS event_kind,
-         COALESCE(m.total, 0) AS media_total, COALESCE(m.done, 0) AS media_done, COALESCE(m.attached, 0) AS attachment_count
+         COALESCE(m.total, 0) AS media_total, COALESCE(m.done, 0) AS media_done, COALESCE(m.attached, 0) AS attachment_count,
+         o.title AS split_from_title
     FROM content_items ci
+    LEFT JOIN content_items o ON o.id = ci.split_from
     LEFT JOIN events e ON e.id = ci.event_id
     LEFT JOIN (
       SELECT content_item_id,
@@ -224,12 +245,12 @@ export async function listContent(db: Db, f: ContentFilters): Promise<ContentRow
       ORDER BY ci.publish_date NULLS LAST, ci.publish_time NULLS LAST, ci.created_at`,
     vals,
   );
-  return r.rows.map(contentOf);
+  return withLinks(db, r.rows.map(contentOf));
 }
 
 export async function getContentRow(db: Db, id: string): Promise<ContentRow | null> {
   const r = await db.query(`${CONTENT_SELECT} WHERE ci.id = $1`, [id]);
-  return r.rowCount ? contentOf(r.rows[0]) : null;
+  return r.rowCount ? (await withLinks(db, [contentOf(r.rows[0])]))[0] : null;
 }
 
 export interface ContentDetail {
@@ -594,4 +615,71 @@ export async function duplicateEvent(
     }
   }
   return { ok: true, value: { event: created, items: items.rowCount || 0, media: mediaCount } };
+}
+
+// ── Splitting ────────────────────────────────────────────────────────────────
+
+/**
+ * Platforms of one post went out at different times in Metricool, so the post
+ * becomes one post per time. The first (earliest) group stays on `id`; each later
+ * group gets a copy that takes its networks' captions, attachments and links.
+ */
+export async function splitContent(
+  db: Pool, id: string, groups: Array<{ scheduledFor: string; networks: string[] }>,
+): Promise<Result<{ kept: ContentRow; created: ContentRow[] }>> {
+  const item = await getContentRow(db, id);
+  if (!item) return fail("Post not found.");
+  if (groups.length < 2) return fail("Nothing to split.");
+  const split = (scheduledFor: string) => ({ date: scheduledFor.slice(0, 10), time: scheduledFor.slice(11, 16) || null });
+  const captionFor = (networks: string[]) => item.captionMode === "separate"
+    ? Object.fromEntries(Object.entries(item.captions).filter(([n]) => networks.includes(n))) : item.captions;
+  const client = await db.connect();
+  const createdIds: string[] = [];
+  try {
+    await client.query("BEGIN");
+    for (const g of groups.slice(1)) {
+      const when = split(g.scheduledFor);
+      const r = await client.query(
+        `INSERT INTO content_items (title, event_id, platforms, publish_date, publish_time, status, owner_email,
+                                    brief, caption, no_media_needed, caption_mode, captions, drafting, source_ref, phase,
+                                    created_by, split_from, split_at)
+         SELECT title, event_id, $2, $3, $4, status, owner_email, brief, caption, no_media_needed,
+                caption_mode, $5, drafting, source_ref, phase, created_by, id, now()
+           FROM content_items WHERE id = $1 RETURNING id`,
+        [id, g.networks, when.date, when.time, captionFor(g.networks)]);
+      const newId: string = r.rows[0].id;
+      createdIds.push(newId);
+      // Only attachments travel: a gathering task belongs to the post it was set for.
+      await client.query(
+        `INSERT INTO media_assets (content_item_id, description, type, gather_date, gather_location, assignee_email,
+                                   status, file_link, notes, approval_id, approval_title, file_name, file_type,
+                                   kind, position, from_template)
+         SELECT $2, description, type, gather_date, gather_location, assignee_email, status, file_link, notes,
+                approval_id, approval_title, file_name, file_type, kind, position, from_template
+           FROM media_assets WHERE content_item_id = $1 AND kind = 'attachment'`, [id, newId]);
+      await client.query(
+        // The group's networks identify its links; the stored time may be stale, so refresh it.
+        `UPDATE metricool_links SET content_item_id = $1, scheduled_for = $4
+          WHERE content_item_id = $2 AND network = ANY($3)`,
+        [newId, id, g.networks, g.scheduledFor.slice(0, 16)]);
+    }
+    const first = groups[0], when = split(first.scheduledFor);
+    await client.query(
+      `UPDATE content_items SET platforms = $2, captions = $3, publish_date = $4, publish_time = $5,
+              detached = detached OR recurrence_id IS NOT NULL, updated_at = now()
+        WHERE id = $1`,
+      [id, first.networks, captionFor(first.networks), when.date, when.time]);
+    await client.query(
+      `UPDATE metricool_links SET scheduled_for = $3 WHERE content_item_id = $1 AND network = ANY($2)`,
+      [id, first.networks, first.scheduledFor.slice(0, 16)]);
+    await client.query("COMMIT");
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
+  const kept = (await getContentRow(db, id))!;
+  const created = await Promise.all(createdIds.map(async (cid) => (await getContentRow(db, cid))!));
+  return { ok: true, value: { kept, created } };
 }

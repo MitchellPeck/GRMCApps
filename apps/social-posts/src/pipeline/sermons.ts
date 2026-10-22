@@ -5,6 +5,8 @@
 import { Pool } from "pg";
 import { Readable } from "node:stream";
 import { mkdir } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { createHash } from "node:crypto";
 import { Result } from "./rules";
 import { CHUNK_BYTES, UploadError, appendChunk, finishRecording, receivedBytes, removeSermonFiles, sermonDir } from "./sermon-files";
 import { transcribeRecording } from "./sermon-transcribe";
@@ -85,16 +87,46 @@ export async function completeSermon(
   if (s.status !== "uploading") return { ok: true, value: s };
   const have = await receivedBytes(sermonDir(opts.dataDir, id));
   if (have !== s.size) return fail(`Only ${have} of ${s.size} bytes have arrived. Keep the page open until the upload finishes.`);
-  await finishRecording(sermonDir(opts.dataDir, id), TYPES[s.type]);
+  const file = await finishRecording(sermonDir(opts.dataDir, id), TYPES[s.type]);
   await db.query("UPDATE sermons SET status = 'queued', progress = 'waiting its turn', updated_at = now() WHERE id = $1", [id]);
-  if (o.enqueue !== false) enqueueSermon(db, id, opts);
+  if (!(await reuseTranscript(db, id, await fingerprint(file))) && o.enqueue !== false) enqueueSermon(db, id, opts);
   return { ok: true, value: (await getSermon(db, id))! };
+}
+
+/** The file's SHA-256, read as a stream (a sermon video can be gigabytes). */
+export async function fingerprint(path: string): Promise<string> {
+  const hash = createHash("sha256");
+  for await (const chunk of createReadStream(path)) hash.update(chunk);
+  return hash.digest("hex");
+}
+
+/**
+ * Remember the recording's fingerprint, and if the same file has been
+ * transcribed before, take that transcript instead of transcribing it again.
+ * Returns true when it did.
+ */
+export async function reuseTranscript(db: Pool, id: string, sha256: string): Promise<boolean> {
+  await db.query("UPDATE sermons SET sha256 = $2 WHERE id = $1", [id, sha256]);
+  return reuseKnown(db, id);
+}
+
+async function reuseKnown(db: Pool, id: string): Promise<boolean> {
+  const r = await db.query(
+    `UPDATE sermons s SET status = 'ready', progress = '', error = '', transcript = t.transcript, segments = t.segments,
+            duration_seconds = t.duration_seconds, updated_at = now()
+       FROM (SELECT transcript, segments, duration_seconds FROM sermons
+              WHERE sha256 = (SELECT sha256 FROM sermons WHERE id = $1) AND status = 'ready' AND id <> $1
+              ORDER BY updated_at DESC LIMIT 1) t
+      WHERE s.id = $1 AND s.sha256 IS NOT NULL`, [id]);
+  return (r.rowCount || 0) > 0;
 }
 
 /** Transcribe one recording, recording progress and the outcome on its row. */
 export async function processSermon(db: Pool, id: string, opts: SermonOpts): Promise<void> {
   const s = await getSermon(db, id);
   if (!s || (s.status !== "queued" && s.status !== "transcribing")) return;
+  // The same file may have finished transcribing while this one waited its turn.
+  if (await reuseKnown(db, id)) return;
   const set = (fields: string, vals: unknown[]) => db.query(`UPDATE sermons SET ${fields}, updated_at = now() WHERE id = $1`, [id, ...vals]);
   await set("status = 'transcribing', progress = 'starting', error = ''", []);
   try {

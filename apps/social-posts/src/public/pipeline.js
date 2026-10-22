@@ -93,6 +93,20 @@ function platformChips(list){
     return '<span class="pl-plat" title="'+esc(meta ? meta.label : p)+'">'+esc(PLATFORM_SHORT[p] || p.slice(0,2).toUpperCase())+'</span>';
   }).join('');
 }
+// Where each platform stands in Metricool. Words, not just colour; the time or error is in the tooltip.
+var LINK_WORD = { published: '✓', scheduled: '· scheduled', draft: '· draft', failed: '· failed' };
+function liveLinks(i){ return (i.links || []).filter(function(l){ return l.state !== 'gone'; }); }
+function linkWhen(l){ return l.scheduledFor ? shortDate(l.scheduledFor.slice(0, 10)) + ' ' + timeLabel(l.scheduledFor.slice(11, 16)) : ''; }
+function linkMarks(i, long){
+  var live = liveLinks(i);
+  if (!live.length) return '';
+  return '<span class="pl-lks">' + live.map(function(l){
+    var meta = (S.meta.platforms || []).filter(function(x){ return x.key === l.network; })[0];
+    var name = long ? (meta ? meta.label : l.network) : (PLATFORM_SHORT[l.network] || l.network);
+    var tip = (meta ? meta.label : l.network) + ': ' + label(l.state) + (linkWhen(l) ? ', ' + linkWhen(l) : '') + (l.detail ? ' — ' + l.detail : '');
+    return '<span class="pl-lk pl-lk-'+esc(l.state)+'" title="'+esc(tip)+'">'+esc(name+' '+(LINK_WORD[l.state] || '· '+l.state))+'</span>';
+  }).join('') + '</span>';
+}
 function recMark(i){ return i.recurrenceId ? '<span class="pl-rec" title="Repeats" aria-label="Repeats">↻</span> ' : ''; }
 // Media statuses as people say them: "captured" is shown as Collected, and
 // "edited" as Final file (the finished file is attached).
@@ -244,7 +258,7 @@ function agendaPost(i) {
   S.rows.content[i.id] = i;
   return '<li><button class="pl-row" data-act="open" data-id="'+esc(i.id)+'" style="--ev:'+esc(i.eventColor || 'var(--rule)')+'">'
     + '<span class="pl-when">'+esc(shortDate(i.publishDate))+(i.publishTime ? ' '+esc(timeLabel(i.publishTime)) : '')+'</span>'
-    + '<span class="pl-what"><span class="pl-title">'+esc(i.title)+'</span><span class="pl-sub">'+esc(i.eventName || 'No event')+' '+platformChips(i.platforms)+'</span></span>'
+    + '<span class="pl-what"><span class="pl-title">'+esc(i.title)+'</span><span class="pl-sub">'+esc(i.eventName || 'No event')+' '+platformChips(i.platforms)+linkMarks(i)+'</span></span>'
     + statusBadge(i.status)+'</button></li>';
 }
 function agendaMedia(m) {
@@ -423,7 +437,7 @@ function postCard(i) {
   return '<div class="pl-card'+dim+'" role="button" tabindex="0" draggable="true" data-kind="content" data-id="'+esc(i.id)+'" data-act="open" style="--ev:'+esc(i.eventColor || 'var(--rule)')+'"'
     + ' title="'+esc(i.title + (i.eventName ? ' — ' + i.eventName : ''))+'">'
     + '<span class="pl-card-title">'+recMark(i)+(i.publishTime ? '<span class="pl-time">'+esc(timeLabel(i.publishTime))+'</span> ' : '')+esc(i.title)+'</span>'
-    + '<span class="pl-card-meta">'+platformChips(i.platforms)+statusBadge(i.status)+'</span></div>';
+    + '<span class="pl-card-meta">'+platformChips(i.platforms)+statusBadge(i.status)+'</span>'+linkMarks(i)+'</div>';
 }
 
 function mediaCard(m) {
@@ -562,17 +576,24 @@ function boardCard(i) {
     + '<button class="pl-bcard-open" type="button" data-act="open" data-id="'+esc(i.id)+'">'
     + '<span class="pl-title">'+recMark(i)+esc(i.title)+'</span>'
     + '<span class="pl-sub">'+esc(shortDate(i.publishDate))+(i.eventName ? ' · '+esc(i.eventName) : '')+'</span></button>'
-    + '<div class="pl-bcard-foot">'+platformChips(i.platforms)+mediaProgress(i)+'</div>'
+    + '<div class="pl-bcard-foot">'+platformChips(i.platforms)+mediaProgress(i)+'</div>'+linkMarks(i, true)
     + (i.publishCheck ? '<p class="pl-bcard-warn">'+esc(i.publishCheck)+'</p>' : '')
     + '</article>';
+}
+
+// "2 published, 1 moved…" from a sync's counts; empty when nothing changed.
+function syncSummary(c){
+  return [['published','published'],['moved','moved'],['split','split'],['imported','imported']]
+    .filter(function(p){ return c[p[0]]; })
+    .map(function(p){ return c[p[0]]+' '+p[1]; }).join(', ');
 }
 
 // Scheduled → Published, confirmed with Metricool (it also runs every 30 minutes).
 function checkPublishedNow(btn) {
   btn.disabled = true;
   api('POST', '/api/pipeline/publish-check', {}).then(function(res){
-    toast(res.published ? 'Moved '+res.published+' post'+(res.published === 1 ? '' : 's')+' to Published.' : 'Nothing new has gone out.', 'ok');
-    if (res.failed) toast(res.failed+' post'+(res.failed === 1 ? '' : 's')+' didn’t publish in Metricool. See the note on the card.', 'err');
+    if (res.metricoolError) toast('Couldn’t check Metricool: '+res.metricoolError, 'warn');
+    else toast(syncSummary(res) || 'Nothing new has gone out.', 'ok');
     render();
   }).catch(function(err){ toast(err.message, 'err'); btn.disabled = false; });
 }
@@ -887,8 +908,9 @@ function editorHtml(i) {
   if (!drawer.capTab || i.platforms.indexOf(drawer.capTab) === -1) drawer.capTab = selected.length ? selected[0].key : '';
   return '<form class="pl-drawer-body" data-form="content">'
     + '<div class="pl-drawer-head"><h2>'+(isNew ? 'New post' : 'Edit post')+'</h2><button class="pl-x" type="button" data-act="close" aria-label="Close">×</button></div>'
-    + sourceHtml(drawer.source) + recurrenceBanner() + gatedWarning
+    + sourceHtml(drawer.source) + recurrenceBanner() + splitBanner(i) + gatedWarning
     + (!isNew && i.status === 'scheduled' && i.publishCheck ? '<div class="alert alert-warn">'+esc(i.publishCheck)+'</div>' : '')
+    + metricoolPanel(i, isNew)
     + '<div class="field"><label for="pf-title">Title</label><input id="pf-title" type="text" name="title" required value="'+esc(i.title)+'" placeholder="Kids Camp: first day recap"></div>'
     + '<div class="row2"><div class="field"><label for="pf-date">Publish date</label><input id="pf-date" type="date" name="publishDate" required value="'+esc(i.publishDate || '')+'"></div>'
     + '<div class="field"><label for="pf-time">Time (optional)</label><input id="pf-time" type="time" name="publishTime" value="'+esc(i.publishTime || '')+'"></div></div>'
@@ -939,7 +961,7 @@ function editorHtml(i) {
         + '<label class="check"><input type="radio" name="scope" value="future"> This and later posts in the series</label></fieldset>' : '')
     + '<div class="pl-form-msg" id="pf-msg"></div>'
     + '<div class="btn-row"><button class="btn btn-primary" type="submit">'+(isNew ? 'Create post' : 'Save changes')+'</button>'
-    + '<button class="btn btn-gold" type="button" data-act="send-metricool">Send to Metricool</button>'
+    + (isNew || !liveLinks(i).length ? '<button class="btn btn-gold" type="button" data-act="send-metricool">Send to Metricool</button>' : '')
     + (drawer.recurrence ? '' : '<button class="btn btn-secondary" type="button" data-act="make-recurring">Make it repeat</button>')
     + '<button class="btn btn-secondary" type="button" data-act="close">'+(isNew ? 'Cancel' : 'Close')+'</button>'
     + (isNew ? '' : '<button class="btn btn-danger pl-right" type="button" data-act="delete-post">'+(drawer.recurrence ? 'Skip this date' : 'Delete post')+'</button>')
@@ -961,6 +983,57 @@ function recurrenceBanner() {
   if (!r) return '';
   return '<p class="pl-source pl-rec-banner">↻ '+esc(r.summary)+(drawer.item && drawer.item.detached ? ' (this one has been edited on its own)' : '')
     + ' <button class="pl-link" type="button" data-act="edit-recurrence" data-id="'+esc(r.id)+'">Edit the series</button></p>';
+}
+
+// An instant as the church's calendar day (not UTC's).
+function localDay(iso) {
+  try { return new Date(iso).toLocaleDateString('en-CA', { timeZone: S.meta.timezone }); } catch (e) { return iso.slice(0, 10); }
+}
+
+function splitBanner(i) {
+  var tags = (i.fromMetricool ? '<span class="pl-tag">From Metricool</span> ' : '');
+  if (!i.splitFrom) return tags ? '<p class="pl-source">'+tags+'</p>' : '';
+  return '<p class="pl-source">'+tags+'Split from <button class="pl-link" type="button" data-act="open" data-id="'+esc(i.splitFrom.id)+'">'
+    + esc(i.splitFrom.title || 'the original post')+'</button>'+(i.splitFrom.at ? ' on '+esc(shortDate(localDay(i.splitFrom.at))) : '')+'.</p>';
+}
+
+// The drawer's "In Metricool" section: one line per platform, newest word first, and the manual check.
+function metricoolPanel(i, isNew) {
+  var live = isNew ? [] : liveLinks(i);
+  if (!live.length) return '';
+  return '<section class="pl-mc" aria-label="In Metricool"><h3>In Metricool</h3><ul class="pl-mc-list">'
+    + live.map(function(l){
+        var meta = platformMeta(l.network);
+        return '<li><strong>'+esc(meta ? meta.label : l.network)+'</strong> '
+          + '<span class="pl-lk pl-lk-'+esc(l.state)+'">'+esc(label(l.state))+'</span> '
+          + (linkWhen(l) ? '<span class="pl-mc-when">'+esc(linkWhen(l))+'</span> ' : '')
+          + (/^https?:\/\//i.test(l.publicUrl || '') ? '<a href="'+esc(l.publicUrl)+'" target="_blank" rel="noopener">View post</a>' : '')
+          + (l.detail ? '<span class="pl-mc-err">'+esc(l.detail)+'</span>' : '')
+          + '</li>';
+      }).join('')
+    + '</ul><p class="hint">Already in Metricool. Change it there; it syncs back.</p>'
+    + '<button class="btn-sm" type="button" data-act="metricool-check" data-id="'+esc(i.id)+'">Check Metricool now</button></section>';
+}
+
+function checkMetricoolNow(btn) {
+  var id = btn.getAttribute('data-id');
+  btn.disabled = true;
+  api('POST', '/api/pipeline/content/' + encodeURIComponent(id) + '/metricool-sync', {}).then(function(res){
+    toast(syncSummary(res) || 'Metricool and this post agree.', 'ok');
+    // Refresh only the Metricool panel: a full redraw would throw away edits not yet saved.
+    return api('GET', '/api/pipeline/content/' + encodeURIComponent(id)).then(function(d){
+      var old = drawer.item || {}, cur = d.item;
+      if (drawer.id === id) {
+        var panel = document.querySelector('.pl-mc');
+        if (panel) { var tmp = document.createElement('div'); tmp.innerHTML = metricoolPanel(cur, false); if (tmp.firstChild) panel.replaceWith(tmp.firstChild); else panel.remove(); }
+        if (old.status !== cur.status || old.publishDate !== cur.publishDate || old.publishTime !== cur.publishTime) {
+          toast('This post changed in Metricool (now '+label(cur.status)+', '+shortDate(cur.publishDate)+'). Close and reopen it to see the new details.', 'warn');
+        }
+      }
+      S.rows.content[id] = cur;
+      render();
+    });
+  }).catch(function(err){ toast(err.message, 'err'); btn.disabled = false; });
 }
 
 function isCollected(m){ return m.status === 'captured' || m.status === 'edited'; }
@@ -2127,6 +2200,7 @@ document.addEventListener('click', function(e){
     case 'remove-plan-row': el.closest('.pl-plan-row').remove(); break;
     case 'draft-all': draftAllFor(el.getAttribute('data-ids').split(','), el); break;
     case 'publish-check': checkPublishedNow(el); break;
+    case 'metricool-check': checkMetricoolNow(el); break;
     case 'src-change': showSourceChoices(el.getAttribute('data-kind')); break;
     case 'sermon-upload': document.querySelector('[data-sermon-file]').click(); break;
     case 'sermon-replace': $('pf-source').innerHTML = sermonUploadHtml(null, true); break;

@@ -126,7 +126,11 @@ export async function schedulePost(c: MetricoolCreds, payload: SchedulerPayload)
     const detail = data?.message || data?.error || text.trim().slice(0, 300);
     throw new Error(`Metricool scheduler failed (${res.status})${detail ? `: ${detail}` : ""}`);
   }
-  return String(data.id ?? data.postId ?? "");
+  // The live reply didn't carry the id at the top level, and its real shape is unknown, so try each
+  // likely place. No id is fine: the post-send sync relinks it from the planner.
+  const id = data?.id ?? data?.postId ?? data?.data?.id ?? data?.data?.postId
+    ?? (Array.isArray(data?.data) ? data.data[0]?.id : undefined);
+  return String(id ?? "");
 }
 
 export interface McProvider { network: string; status: string; detailedStatus?: string; publicUrl?: string }
@@ -147,17 +151,18 @@ export function publicationState(post: { providers?: McProvider[] }): { state: "
   return { state: "unknown", detail: "" };
 }
 
-/** Posts in Metricool's planner between two dates (YYYY-MM-DD), published or not. */
 /** The planner list's body exactly as Metricool sent it, unparsed (the probe saves it as a fixture). */
 export async function fetchSchedulerPostsRaw(c: MetricoolCreds, start: string, end: string, timezone: string): Promise<string> {
   if (!c.blogId) throw new Error("No Metricool brand picked — open Settings, load brands, and choose one.");
   const qs = new URLSearchParams({ userId: c.userId, blogId: c.blogId, start: `${start}T00:00:00`, end: `${end}T23:59:59`, timezone, extendedRange: "true" });
-  const res = await fetch(`${BASE}/v2/scheduler/posts?${qs}`, { headers: mcHeaders(c) });
+  // Bounded: the sync runs one at a time, so a stalled call would hold up every later run.
+  const res = await fetch(`${BASE}/v2/scheduler/posts?${qs}`, { headers: mcHeaders(c), signal: AbortSignal.timeout(60_000) });
   const text = await res.text();
   if (!res.ok) throw new Error(`Metricool answered ${res.status}: ${text.trim().slice(0, 200)}`);
   return text;
 }
 
+/** Posts in Metricool's planner between two dates (YYYY-MM-DD), published or not. */
 export async function listSchedulerPosts(c: MetricoolCreds, start: string, end: string, timezone: string): Promise<Array<{ id: string; providers: McProvider[] }>> {
   const text = await fetchSchedulerPostsRaw(c, start, end, timezone);
   let data: any = {};

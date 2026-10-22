@@ -217,4 +217,32 @@ ALTER TABLE content_items ADD COLUMN IF NOT EXISTS publish_check text NOT NULL D
 -- A podcast episode's audio, fetched from Buzzsprout, is a recording too: one per episode.
 ALTER TABLE sermons ADD COLUMN IF NOT EXISTS episode_id text;
 CREATE UNIQUE INDEX IF NOT EXISTS sermons_episode_idx ON sermons (episode_id) WHERE episode_id IS NOT NULL;
+-- The finished file's SHA-256: the same video or audio coming again reuses its transcript.
+ALTER TABLE sermons ADD COLUMN IF NOT EXISTS sha256 text;
+CREATE INDEX IF NOT EXISTS sermons_sha256_idx ON sermons (sha256) WHERE sha256 IS NOT NULL;
+
+-- Which Metricool posts belong to a pipeline post, per network. A post can be
+-- sent more than once and each network has its own state, so the item's own
+-- status isn't enough to say what Metricool holds.
+CREATE TABLE IF NOT EXISTS metricool_links (
+  content_item_id   text REFERENCES content_items(id) ON DELETE CASCADE,
+  metricool_post_id text,
+  network           text,
+  scheduled_for     text,
+  state             text CHECK (state IN ('draft','scheduled','published','failed','gone')),
+  detail            text DEFAULT '',
+  public_url        text DEFAULT '',
+  text_hash         text DEFAULT '',
+  last_seen_at      timestamptz,
+  gone_at           timestamptz,
+  PRIMARY KEY (metricool_post_id, network)
+);
+CREATE INDEX IF NOT EXISTS metricool_links_item_idx ON metricool_links (content_item_id);
+ALTER TABLE metricool_links ADD COLUMN IF NOT EXISTS metricool_uuid text NOT NULL DEFAULT '';
+ALTER TABLE metricool_links ADD COLUMN IF NOT EXISTS metricool_created text NOT NULL DEFAULT '';
+-- When the link was made. Rows from before this column read as made when it was added, i.e. after every older send.
+ALTER TABLE metricool_links ADD COLUMN IF NOT EXISTS created_at timestamptz NOT NULL DEFAULT now();
+ALTER TABLE content_items ADD COLUMN IF NOT EXISTS split_from text;
+ALTER TABLE content_items ADD COLUMN IF NOT EXISTS split_at timestamptz;
+ALTER TABLE content_items ADD COLUMN IF NOT EXISTS from_metricool boolean NOT NULL DEFAULT false;
 `;

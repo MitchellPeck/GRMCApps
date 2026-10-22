@@ -386,3 +386,20 @@ header a.btn-hdr{text-decoration:none}
 /* ---- Sermon upload ---- */
 .pl-sermon-progress{display:flex;flex-direction:column;gap:4px;margin-top:8px}
 .pl-bar-wide{width:100%;height:8px}
+
+/* Per-platform Metricool state: always a word beside the colour. Chips wrap, so 400px never scrolls sideways. */
+.pl-lks{display:flex;flex-wrap:wrap;gap:3px;margin-top:3px;min-width:0}
+.pl-sub .pl-lks{margin-top:0}
+.pl-bcard .pl-lks{margin:0 0 6px}
+.pl-lk{display:inline-block;font-size:10px;font-weight:600;line-height:15px;padding:0 5px;border-radius:4px;max-width:100%;overflow-wrap:anywhere;background:var(--info-bg);color:var(--info-fg)}
+.pl-lk-draft{background:var(--pending-bg);color:var(--pending-fg)}
+.pl-lk-scheduled{background:var(--navy);color:#fff}
+.pl-lk-published{background:var(--ok-bg);color:var(--ok-fg)}
+.pl-lk-failed{background:var(--rej-bg);color:var(--rej-fg)}
+.pl-tag{display:inline-block;font-size:10.5px;font-weight:700;padding:0 6px;border-radius:4px;background:var(--navy);color:#fff;margin-right:4px}
+.pl-mc{border:1px solid var(--rule);border-radius:var(--r);background:var(--paper);padding:10px 12px;margin-bottom:14px}
+.pl-mc h3{font-size:13px;margin:0 0 6px}
+.pl-mc-list{list-style:none;margin:0 0 6px;padding:0}
+.pl-mc-list li{display:flex;flex-wrap:wrap;gap:4px 8px;align-items:center;padding:4px 0;font-size:12.5px}
+.pl-mc-err{flex-basis:100%;color:var(--rej-fg);font-size:12px}
+.pl-mc .hint{margin:0 0 8px}
