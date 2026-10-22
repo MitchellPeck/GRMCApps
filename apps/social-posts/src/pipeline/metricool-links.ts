@@ -37,7 +37,7 @@ export async function addLinks(
        ON CONFLICT (metricool_post_id, network) DO UPDATE
          SET content_item_id = EXCLUDED.content_item_id, scheduled_for = EXCLUDED.scheduled_for,
              state = EXCLUDED.state, gone_at = NULL, last_seen_at = now()`,
-      [itemId, postId, network, scheduledFor, state]);
+      [itemId, postId, network, scheduledFor.slice(0, 16), state]);  // YYYY-MM-DDTHH:MM, no seconds
   }
 }
 

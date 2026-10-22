@@ -1065,6 +1065,7 @@ test("addLinks then linksFor returns one link per network", async () => {
   const links = (await linksFor(pool, [id])).get(id)!;
   assert.deepEqual(links.map((l) => [l.network, l.metricoolPostId, l.state, l.textHash, l.goneAt]),
     [["facebook", "9001", "scheduled", "", null], ["x", "9001", "scheduled", "", null]]);
+  assert.equal(links[0].scheduledFor, "2026-11-03T09:00", "seconds are dropped");
   assert.equal((await linksFor(pool, [])).size, 0);
 });
 
@@ -1093,4 +1094,17 @@ test("backfill turns the latest send into links once", async () => {
   const links = (await linksFor(pool, [id])).get(id)!;
   assert.deepEqual(links.map((l) => [l.metricoolPostId, l.network, l.state]), [["8002", "facebook", "scheduled"], ["8002", "x", "scheduled"]]);
   assert.equal(await backfillLinks(pool, "America/New_York"), 0);
+  assert.equal(links[0].scheduledFor, "2026-11-03T09:00");
+});
+
+test("backfill links a published post's send as published", async () => {
+  await pool.query("DELETE FROM settings WHERE key = $1", [LINKS_BACKFILL_SETTING]);
+  const id = await linkItem("Already out");
+  await pool.query("UPDATE content_items SET status = 'published' WHERE id = $1", [id]);
+  await pool.query(
+    `INSERT INTO metricool_sends (source_type, source_ref, text, networks, scheduled_for, timezone, metricool_post_id, status)
+     VALUES ('content', $1, 'x', 'facebook', '2026-11-03T09:00:00', 'America/New_York', '8101', 'sent')`, [id]);
+  await backfillLinks(pool, "America/New_York");
+  const links = (await linksFor(pool, [id])).get(id)!;
+  assert.deepEqual(links.map((l) => [l.metricoolPostId, l.state]), [["8101", "published"]]);
 });
