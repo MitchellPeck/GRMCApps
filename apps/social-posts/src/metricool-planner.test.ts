@@ -10,6 +10,16 @@ function fixture(name: string): unknown {
 }
 const TZ = "America/New_York";
 
+test("parsePlanner drops a publicUrl that isn't http(s)", () => {
+  const body = fixture("metricool-planner-before.json") as any;
+  const rows = Array.isArray(body) ? body : body.data;
+  rows[0].providers[0].publicUrl = "javascript:alert(1)";
+  rows[1].providers[0].publicUrl = "https://fb.example/ok";
+  const posts = parsePlanner(body, TZ);
+  assert.equal(posts[0].networks[0].publicUrl, "");
+  assert.equal(posts[1].networks[0].publicUrl, "https://fb.example/ok");
+});
+
 test("parsePlanner reads the real before payload", () => {
   const posts = parsePlanner(fixture("metricool-planner-before.json"), TZ);
   assert.equal(posts.length, 6);

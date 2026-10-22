@@ -84,7 +84,8 @@ export function parsePlanner(body: unknown, timezone: string): PlannerPost[] {
     for (const p of Array.isArray(row?.providers) ? row.providers : []) {
       const network = networkOf(p?.network);
       if (!network) continue;
-      const publicUrl = String(p.publicUrl || "");
+      // Rendered as a link on the page, so only web addresses pass.
+      const publicUrl = /^https?:\/\//i.test(String(p.publicUrl || "")) ? String(p.publicUrl) : "";
       networks.push({
         network,
         scheduledFor: when,

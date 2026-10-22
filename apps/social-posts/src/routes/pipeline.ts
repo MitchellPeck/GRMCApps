@@ -99,6 +99,7 @@ export async function pipelineRoutes(app: FastifyInstance): Promise<void> {
   app.get("/api/pipeline/meta", async () => guard(async () => ({
     ok: true,
     today: await referenceDate(pool),
+    timezone: (await getSetting(pool, "default_timezone")) || DEFAULT_TZ,
     contentStatuses: CONTENT_STATUSES, mediaStatuses: MEDIA_STATUSES, mediaTypes: MEDIA_TYPES,
     eventKinds: EVENT_KINDS, platforms: PLATFORMS, gatedStatuses: GATED_STATUSES,
     readyStatuses: READY_STATUSES, thresholds: GAP_THRESHOLDS, upcomingDays: UPCOMING_DAYS,

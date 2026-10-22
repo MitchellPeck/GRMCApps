@@ -985,11 +985,16 @@ function recurrenceBanner() {
     + ' <button class="pl-link" type="button" data-act="edit-recurrence" data-id="'+esc(r.id)+'">Edit the series</button></p>';
 }
 
+// An instant as the church's calendar day (not UTC's).
+function localDay(iso) {
+  try { return new Date(iso).toLocaleDateString('en-CA', { timeZone: S.meta.timezone }); } catch (e) { return iso.slice(0, 10); }
+}
+
 function splitBanner(i) {
   var tags = (i.fromMetricool ? '<span class="pl-tag">From Metricool</span> ' : '');
   if (!i.splitFrom) return tags ? '<p class="pl-source">'+tags+'</p>' : '';
   return '<p class="pl-source">'+tags+'Split from <button class="pl-link" type="button" data-act="open" data-id="'+esc(i.splitFrom.id)+'">'
-    + esc(i.splitFrom.title || 'the original post')+'</button>'+(i.splitFrom.at ? ' on '+esc(shortDate(i.splitFrom.at.slice(0, 10))) : '')+'.</p>';
+    + esc(i.splitFrom.title || 'the original post')+'</button>'+(i.splitFrom.at ? ' on '+esc(shortDate(localDay(i.splitFrom.at))) : '')+'.</p>';
 }
 
 // The drawer's "In Metricool" section: one line per platform, newest word first, and the manual check.
@@ -1002,7 +1007,7 @@ function metricoolPanel(i, isNew) {
         return '<li><strong>'+esc(meta ? meta.label : l.network)+'</strong> '
           + '<span class="pl-lk pl-lk-'+esc(l.state)+'">'+esc(label(l.state))+'</span> '
           + (linkWhen(l) ? '<span class="pl-mc-when">'+esc(linkWhen(l))+'</span> ' : '')
-          + (l.publicUrl ? '<a href="'+esc(l.publicUrl)+'" target="_blank" rel="noopener">View post</a>' : '')
+          + (/^https?:\/\//i.test(l.publicUrl || '') ? '<a href="'+esc(l.publicUrl)+'" target="_blank" rel="noopener">View post</a>' : '')
           + (l.detail ? '<span class="pl-mc-err">'+esc(l.detail)+'</span>' : '')
           + '</li>';
       }).join('')
@@ -1015,8 +1020,19 @@ function checkMetricoolNow(btn) {
   btn.disabled = true;
   api('POST', '/api/pipeline/content/' + encodeURIComponent(id) + '/metricool-sync', {}).then(function(res){
     toast(syncSummary(res) || 'Metricool and this post agree.', 'ok');
-    render();
-    if (drawer.id === id) openPost(id);
+    // Refresh only the Metricool panel: a full redraw would throw away edits not yet saved.
+    return api('GET', '/api/pipeline/content/' + encodeURIComponent(id)).then(function(d){
+      var old = drawer.item || {}, cur = d.item;
+      if (drawer.id === id) {
+        var panel = document.querySelector('.pl-mc');
+        if (panel) { var tmp = document.createElement('div'); tmp.innerHTML = metricoolPanel(cur, false); if (tmp.firstChild) panel.replaceWith(tmp.firstChild); else panel.remove(); }
+        if (old.status !== cur.status || old.publishDate !== cur.publishDate || old.publishTime !== cur.publishTime) {
+          toast('This post changed in Metricool (now '+label(cur.status)+', '+shortDate(cur.publishDate)+'). Close and reopen it to see the new details.', 'warn');
+        }
+      }
+      S.rows.content[id] = cur;
+      render();
+    });
   }).catch(function(err){ toast(err.message, 'err'); btn.disabled = false; });
 }
 
