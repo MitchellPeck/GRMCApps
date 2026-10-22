@@ -4,7 +4,7 @@ import { Pool } from "pg";
 import { SCHEMA_SQL } from "./schema";
 import {
   createContent, createEvent, createMedia, dashboardGaps, deleteContent, deleteEvent, getContent,
-  deleteMedia, getEvent, listContent, listMedia, updateContent, updateEvent, updateMedia,
+  deleteMedia, getContentRow, getEvent, listContent, listMedia, updateContent, updateEvent, updateMedia,
 } from "./pipeline/repo";
 import { BACKFILL_SETTING, backfillOnce, markSentToMetricool } from "./pipeline/sync";
 import { RUN_EVENTS } from "./pipeline/config";
@@ -1055,6 +1055,22 @@ test("addLinks then linksFor returns one link per network", async () => {
   assert.equal((await linksFor(pool, [])).size, 0);
 });
 
+test("listContent returns each post's links", async () => {
+  const id = await linkItem("Shown links");
+  await addLinks(pool, id, "9101", ["facebook"], "2026-11-03T09:00", "scheduled");
+  await addLinks(pool, id, "9102", ["instagram"], "2026-11-03T12:00", "scheduled");
+  await pool.query(`UPDATE metricool_links SET state = 'published', public_url = 'https://fb.example/p/1' WHERE metricool_post_id = '9101'`);
+  const plain = await linkItem("No links");
+  const rows = await listContent(pool, { ids: [id, plain] });
+  const row = rows.find((r) => r.id === id)!;
+  assert.deepEqual(row.links.map((l) => [l.network, l.state, l.scheduledFor, l.publicUrl]),
+    [["facebook", "published", "2026-11-03T09:00", "https://fb.example/p/1"], ["instagram", "scheduled", "2026-11-03T12:00", ""]]);
+  assert.deepEqual(rows.find((r) => r.id === plain)!.links, []);
+  assert.deepEqual((await getContentRow(pool, id))!.links.length, 2);
+  assert.equal(row.fromMetricool, false);
+  assert.equal(row.splitFrom, null);
+});
+
 test("hasLiveLinks is false once every link is gone", async () => {
   const id = await linkItem("Fading");
   assert.equal(await hasLiveLinks(pool, id), false);
@@ -1124,6 +1140,7 @@ test("split moves the later group to a new post", async () => {
   assert.equal(n.recurrenceId, null);
   const row = (await pool.query("SELECT split_from, split_at FROM content_items WHERE id = $1", [n.id])).rows[0];
   assert.equal(row.split_from, id);
+  assert.equal((await getContentRow(pool, n.id))!.splitFrom!.title, "Split me");
   assert.ok(row.split_at);
   const links = await linksFor(pool, [id, n.id]);
   assert.deepEqual(links.get(id)!.map((l) => l.metricoolPostId), ["9001"]);

@@ -14,6 +14,7 @@ import { propagate } from "./recurring";
 import { describeRule } from "./recurrence";
 import { captionWarnings, imageRuleError } from "./platforms";
 import { Override, Profile, SourceRef } from "./drafting";
+import { linksFor } from "./metricool-links";
 
 // Hand `date` columns back as "YYYY-MM-DD" strings. pg's default turns them
 // into a JS Date at local midnight — exactly the one-day drift these calendar
@@ -47,6 +48,11 @@ export interface ContentRow {
   /** Why a Scheduled post hasn't become Published, if the last check found a reason. */
   publishCheck: string;
   recurrenceId: string | null; occurrenceDate: string | null; detached: boolean;
+  /** Where this post stands in Metricool, per platform (gone ones included; the page decides). */
+  links: Array<{ network: string; state: string; scheduledFor: string; publicUrl: string; detail: string }>;
+  /** The post this one was split off from when its platforms went at different times. */
+  splitFrom: { id: string; title: string; at: string } | null;
+  fromMetricool: boolean;
 }
 
 export interface MediaRow {
@@ -84,7 +90,20 @@ function contentOf(r: any): ContentRow {
     draftId: r.draft_id == null ? null : Number(r.draft_id), draftKey: r.draft_key,
     mediaTotal: Number(r.media_total || 0), mediaDone: Number(r.media_done || 0), attachmentCount: Number(r.attachment_count || 0), publishCheck: r.publish_check || "",
     recurrenceId: r.recurrence_id ?? null, occurrenceDate: r.occurrence_date ?? null, detached: !!r.detached,
+    links: [],
+    splitFrom: r.split_from ? { id: r.split_from, title: r.split_from_title || "", at: r.split_at ? new Date(r.split_at).toISOString() : "" } : null,
+    fromMetricool: !!r.from_metricool,
   };
+}
+
+/** One query for every row's links, not one per row. */
+async function withLinks(db: Db, rows: ContentRow[]): Promise<ContentRow[]> {
+  const byId = await linksFor(db as Pool, rows.map((r) => r.id));
+  for (const r of rows) {
+    r.links = (byId.get(r.id) || []).map((l) => ({
+      network: l.network, state: l.state, scheduledFor: l.scheduledFor, publicUrl: l.publicUrl, detail: l.detail }));
+  }
+  return rows;
 }
 
 function mediaOf(r: any): MediaRow {
@@ -101,8 +120,10 @@ function mediaOf(r: any): MediaRow {
 
 const CONTENT_SELECT = `
   SELECT ci.*, e.name AS event_name, e.color AS event_color, e.kind AS event_kind,
-         COALESCE(m.total, 0) AS media_total, COALESCE(m.done, 0) AS media_done, COALESCE(m.attached, 0) AS attachment_count
+         COALESCE(m.total, 0) AS media_total, COALESCE(m.done, 0) AS media_done, COALESCE(m.attached, 0) AS attachment_count,
+         o.title AS split_from_title
     FROM content_items ci
+    LEFT JOIN content_items o ON o.id = ci.split_from
     LEFT JOIN events e ON e.id = ci.event_id
     LEFT JOIN (
       SELECT content_item_id,
@@ -224,12 +245,12 @@ export async function listContent(db: Db, f: ContentFilters): Promise<ContentRow
       ORDER BY ci.publish_date NULLS LAST, ci.publish_time NULLS LAST, ci.created_at`,
     vals,
   );
-  return r.rows.map(contentOf);
+  return withLinks(db, r.rows.map(contentOf));
 }
 
 export async function getContentRow(db: Db, id: string): Promise<ContentRow | null> {
   const r = await db.query(`${CONTENT_SELECT} WHERE ci.id = $1`, [id]);
-  return r.rowCount ? contentOf(r.rows[0]) : null;
+  return r.rowCount ? (await withLinks(db, [contentOf(r.rows[0])]))[0] : null;
 }
 
 export interface ContentDetail {
