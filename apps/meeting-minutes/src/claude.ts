@@ -187,6 +187,13 @@ copying the [mm:ss] stamps at the start of transcript turns exactly as written
 (past the first hour they read h:mm:ss, e.g. 1:10:03); use "" when the
 transcript has no stamps.
 
+In the summary, give every decision its ownership. For a motion, always say
+who moved it, who seconded it and the outcome, e.g. "Alice Smith moved to
+approve the budget; Bob Jones seconded; carried unanimously." Write
+"(not recorded)" for a mover, seconder or outcome the transcript doesn't give;
+never guess one. For any other decision, say who made or announced it, and
+for each next step, who is doing it.
+
 Respond with ONLY a JSON object, no prose around it:
 {
   "summary": "a few sentences and/or short bullet lines covering what was reported and decided (plain text, no markdown headings)",
@@ -313,6 +320,13 @@ main outcomes.
 A bullet for each decision, approval, or vote, naming the agenda item it
 belongs to in parentheses. Write "None recorded." if there were none.
 
+Every decision carries its ownership, here and under each agenda item. A motion
+always reads: who moved it, who seconded it, what it was, and the outcome, e.g.
+"Alice Smith moved to approve the Q3 budget; Bob Jones seconded; carried
+unanimously." Write "(not recorded)" for a mover, seconder or outcome the
+record doesn't give; never guess one. Any other decision says who made or
+announced it.
+
 ## Agenda
 For each agenda item, in the order given, numbered as given:
 ### <n>. <title>
@@ -333,7 +347,7 @@ Then the item's minutes, organized to fit what was actually presented:
   on its own line followed by bullets:
   **Report:** what the presenter reported
   **Discussion:** the main points raised, and by whom where it matters
-  **Decisions:** what was decided or approved
+  **Decisions:** what was decided or approved, with who moved and seconded it
   **Follow-up:** what is to happen next, by whom and by when
 An item with no record gets the single line "No discussion recorded."
 

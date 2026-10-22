@@ -212,3 +212,12 @@ test("minutes over the length limit get one shortening pass", async () => {
   const failed = await condenseIfLong(long, async () => { throw new Error("down"); });
   assert.equal(failed, long, "if shortening fails, the long version stands");
 });
+
+test("decisions name who moved, who seconded and the outcome, and who owns each step", () => {
+  for (const p of [SUMMARIZE_SYSTEM, reportSystemPrompt("", "")]) {
+    assert.match(p, /moved/);
+    assert.match(p, /seconded/);
+    assert.match(p, /not recorded/);
+  }
+  assert.match(reportSystemPrompt("", ""), /Follow-up:\*\*.*by whom/s);
+});
