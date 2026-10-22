@@ -69,10 +69,13 @@ export async function refreshIdents(db: Pool, links: Link[], planner: PlannerPos
   let n = 0;
   for (const l of links) {
     const p = byId.get(l.metricoolPostId);
-    if (!p || (p.uuid === l.metricoolUuid && p.createdAt === l.metricoolCreated)) continue;
+    if (!p) continue;
+    // An unreadable (empty) value never wipes one we already hold: it's what a later relink matches on.
+    const uuid = p.uuid || l.metricoolUuid, created = p.createdAt || l.metricoolCreated;
+    if (uuid === l.metricoolUuid && created === l.metricoolCreated) continue;
     n += (await db.query(
       `UPDATE metricool_links SET metricool_uuid = $3, metricool_created = $4 WHERE metricool_post_id = $1 AND network = $2`,
-      [l.metricoolPostId, l.network, p.uuid, p.createdAt])).rowCount || 0;
+      [l.metricoolPostId, l.network, uuid, created])).rowCount || 0;
   }
   return n;
 }
