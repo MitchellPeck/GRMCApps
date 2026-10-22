@@ -808,6 +808,8 @@ test("a sermon upload is transcribed and drafts from its transcript", async (t) 
   });
   await new Promise<void>((r) => whisper.listen(0, r));
   const dataDir = await mkdtemp(join(tmpdir(), "sermon-data-"));
+  // The test database outlives a run, and ffmpeg's test tone is the same every time.
+  await pool.query("DELETE FROM sermons");
   const opts = { dataDir, whisperUrl: `http://127.0.0.1:${(whisper.address() as { port: number }).port}` };
   try {
     // A 3-second recording made by ffmpeg, uploaded in two pieces.
@@ -834,6 +836,16 @@ test("a sermon upload is transcribed and drafts from its transcript", async (t) 
     assert.equal(ready?.transcript, "Grace is not earned, it is given.");
     assert.ok(ready!.durationSeconds >= 2.5 && ready!.durationSeconds <= 3.5);
     assert.equal(calls, 1);
+
+    // The same file uploaded again takes the transcript it already has.
+    const twin = await sermons.createSermon(pool, { fileName: "Same sermon.mp4", size: bytes.length, type: "video/mp4" }, "me@x.org", opts);
+    assert.ok(twin.ok);
+    await sermons.receiveChunk(pool, twin.value.id, 0, Readable.from([bytes]), opts);
+    const reused = await sermons.completeSermon(pool, twin.value.id, opts, { enqueue: false });
+    assert.ok(reused.ok);
+    assert.equal(reused.value.status, "ready");
+    assert.equal(reused.value.transcript, "Grace is not earned, it is given.");
+    assert.equal(calls, 1, "not transcribed a second time");
 
     const content = await resolveSource(pool, { kind: "sermon" }, { kind: "sermon", id: s.value.id }, "2026-11-01");
     assert.equal(content?.kind, "sermon");
@@ -882,7 +894,7 @@ test("a podcast episode's audio is fetched from Buzzsprout, transcribed once, an
   await pool.query(`INSERT INTO settings (key, value) VALUES ('buzzsprout_api_token','t'), ('buzzsprout_podcast_id','77')
                     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`);
   // The test database outlives a run: start from no recording for this episode.
-  await pool.query("DELETE FROM sermons WHERE episode_id = '31'");
+  await pool.query("DELETE FROM sermons");
   const real = globalThis.fetch;
   let downloads = 0;
   globalThis.fetch = (async (url: unknown) => {
@@ -918,11 +930,17 @@ test("a podcast episode's audio is fetched from Buzzsprout, transcribed once, an
     assert.equal(again.id, first.id, "the same recording is reused");
     assert.equal(again.status, "queued");
     assert.equal(downloads, 2);
+
+    // Another episode with the very same audio file reuses the transcript straight away.
+    await sermons.processSermon(pool, again.id, opts);
+    const same = await startEpisodeTranscript(pool, { ...ep, id: 32 }, opts, { wait: true, enqueue: false });
+    assert.equal(same.status, "ready");
+    assert.equal(same.transcript, "Welcome back to the show.");
   } finally {
     globalThis.fetch = real;
     whisper.close();
     await pool.query("DELETE FROM settings WHERE key IN ('buzzsprout_api_token','buzzsprout_podcast_id')");
-    await pool.query("DELETE FROM sermons WHERE episode_id = '31'");
+    await pool.query("DELETE FROM sermons");
     await rm(dataDir, { recursive: true, force: true });
   }
 });

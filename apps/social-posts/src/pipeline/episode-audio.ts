@@ -8,7 +8,7 @@ import { mkdir, rm, stat } from "node:fs/promises";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { finishRecording, recordingPart, sermonDir } from "./sermon-files";
-import { SermonOpts, SermonRow, TYPES, enqueueSermon, getSermon } from "./sermons";
+import { SermonOpts, SermonRow, TYPES, enqueueSermon, getSermon, fingerprint, reuseTranscript } from "./sermons";
 
 // A download that hasn't moved on in this long was cut off (a restart, say) and is started again.
 const STALE_DOWNLOAD_MINUTES = 15;
@@ -61,9 +61,10 @@ async function downloadAudio(db: Pool, id: string, url: string, opts: SermonOpts
   await pipeline(Readable.fromWeb(res.body as any), createWriteStream(recordingPart(dir)));
   const size = (await stat(recordingPart(dir))).size;
   if (!size) throw new Error("the audio file was empty.");
-  await finishRecording(dir, TYPES[mime]);
+  const file = await finishRecording(dir, TYPES[mime]);
   await db.query(
     "UPDATE sermons SET size = $2, mime = $3, status = 'queued', progress = 'waiting its turn', updated_at = now() WHERE id = $1",
     [id, size, mime]);
-  if (enqueue) enqueueSermon(db, id, opts);
+  // The same audio already transcribed (uploaded as a video, say) is reused, not redone.
+  if (!(await reuseTranscript(db, id, await fingerprint(file))) && enqueue) enqueueSermon(db, id, opts);
 }

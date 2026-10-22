@@ -217,4 +217,7 @@ ALTER TABLE content_items ADD COLUMN IF NOT EXISTS publish_check text NOT NULL D
 -- A podcast episode's audio, fetched from Buzzsprout, is a recording too: one per episode.
 ALTER TABLE sermons ADD COLUMN IF NOT EXISTS episode_id text;
 CREATE UNIQUE INDEX IF NOT EXISTS sermons_episode_idx ON sermons (episode_id) WHERE episode_id IS NOT NULL;
+-- The finished file's SHA-256: the same video or audio coming again reuses its transcript.
+ALTER TABLE sermons ADD COLUMN IF NOT EXISTS sha256 text;
+CREATE INDEX IF NOT EXISTS sermons_sha256_idx ON sermons (sha256) WHERE sha256 IS NOT NULL;
 `;
