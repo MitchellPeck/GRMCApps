@@ -881,6 +881,8 @@ test("a podcast episode's audio is fetched from Buzzsprout, transcribed once, an
 
   await pool.query(`INSERT INTO settings (key, value) VALUES ('buzzsprout_api_token','t'), ('buzzsprout_podcast_id','77')
                     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`);
+  // The test database outlives a run: start from no recording for this episode.
+  await pool.query("DELETE FROM sermons WHERE episode_id = '31'");
   const real = globalThis.fetch;
   let downloads = 0;
   globalThis.fetch = (async (url: unknown) => {
@@ -920,6 +922,7 @@ test("a podcast episode's audio is fetched from Buzzsprout, transcribed once, an
     globalThis.fetch = real;
     whisper.close();
     await pool.query("DELETE FROM settings WHERE key IN ('buzzsprout_api_token','buzzsprout_podcast_id')");
+    await pool.query("DELETE FROM sermons WHERE episode_id = '31'");
     await rm(dataDir, { recursive: true, force: true });
   }
 });
