@@ -141,3 +141,17 @@ test("a same-text post created before the link's post isn't taken for it", () =>
   const late = link({ metricoolPostId: "403353835", network: "facebook", textHash: h, metricoolCreated: "2026-10-22T13:30" });
   assert.deepEqual(relinkPlan([late], split, []), []);
 });
+
+// Production: the post had been sent three times; links to the first two were gone. Those gone
+// links have the same text, so they competed for the halves and made every match look ambiguous.
+test("a post's gone links from earlier sends don't compete with its live one", () => {
+  const split = planner("metricool-planner-after-split.json");
+  const h = textHash(split.find((p) => p.id === "403354656")!.networks[0].text);
+  const live = ["facebook", "instagram"].map((network) => link({ metricoolPostId: "403353835", network, textHash: h,
+    metricoolUuid: "5592638576673181468", metricoolCreated: "2026-10-22T12:48" }));
+  const gone = ["facebook", "instagram"].map((network) => link({ metricoolPostId: "403275561", network, textHash: h,
+    state: "gone", goneAt: "2026-10-22T16:00:00Z", metricoolCreated: "2026-10-22T11:29" }));
+  const r = fullPlan([...gone, ...live], split, []);
+  assert.deepEqual(r.entries.map((e) => [e.network, e.toPostId]).sort(), [["facebook", "403354656"], ["instagram", "403354660"]]);
+  assert.equal(r.unsure.length, 0);
+});

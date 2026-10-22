@@ -42,6 +42,10 @@ export function relinkPlan(links: Link[], planner: PlannerPost[], idless: Relink
 
   for (const link of links) {
     if (present.has(link.metricoolPostId)) continue;
+    // A gone link (an earlier send that was deleted or replaced) never follows anything: with the same
+    // text it would only compete with the post's live link and turn every match ambiguous. If its own
+    // post comes back, that's the same id, which reconcile picks up without relinking.
+    if (link.state === "gone") continue;
     const cands = free.filter((p) => p.networks.some((n) => n.network === link.network));
     const textOf = (p: PlannerPost) => textHash(p.networks.find((n) => n.network === link.network)!.text);
     let found = link.metricoolUuid ? cands.filter((p) => p.uuid === link.metricoolUuid) : [];
