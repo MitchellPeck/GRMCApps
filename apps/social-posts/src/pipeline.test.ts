@@ -1439,7 +1439,12 @@ async function syncWith(body: unknown, o: { itemId?: string } = {}) {
   globalThis.fetch = (async (url: unknown) => {
     const u = String(url);
     if (!/app\.metricool\.com\/api\/v2\/scheduler\/posts\?/.test(u)) throw new Error("Unexpected fetch: " + u);
-    return body === "fail" ? new Response("Server error", { status: 500 }) : new Response(JSON.stringify(body), { status: 200 });
+    if (body === "fail") return new Response("Server error", { status: 500 });
+    // Like the real planner list: only posts publishing inside the asked-for range come back.
+    const q = new URL(u).searchParams, from = String(q.get("start")).slice(0, 10), to = String(q.get("end")).slice(0, 10);
+    const raw = body as { data?: any[] };
+    const inRange = (r: any) => { const d = String(r.publicationDate?.dateTime || "").slice(0, 10); return d >= from && d <= to; };
+    return new Response(JSON.stringify(Array.isArray(raw?.data) ? { ...raw, data: raw.data.filter(inRange) } : body), { status: 200 });
   }) as typeof fetch;
   try { return await syncMetricool(pool, { now: SYNC_NOW, ...o }); }
   finally { globalThis.fetch = real; }
@@ -1459,6 +1464,8 @@ async function probePost(): Promise<string> {
   assert.ok(r.ok);
   await pool.query(`UPDATE content_items SET platforms = '{facebook,instagram}', status = 'scheduled' WHERE id = $1`, [r.value.id]);
   await addLinks(pool, r.value.id, "403266041", ["facebook", "instagram"], "2026-10-23T17:19", "scheduled");
+  // Linked an hour before SYNC_NOW: a link minutes old is held back from reading as gone.
+  await pool.query(`UPDATE metricool_links SET created_at = '2026-10-22T15:00:00Z' WHERE content_item_id = $1`, [r.value.id]);
   return r.value.id;
 }
 const clearSyncSettings = () => pool.query("DELETE FROM settings WHERE key LIKE 'metricool_%' OR key = 'default_timezone'");
@@ -1672,14 +1679,42 @@ test("syncing one post touches only that post and imports nothing", async () => 
   } finally { await clearSyncSettings(); }
 });
 
-test("a one-post sync never marks a link gone: the post may have moved outside its window", async () => {
+test("a link made minutes ago is never marked gone (Metricool's list may not show a new post yet)", async () => {
+  const id = await probePost();
+  try {
+    await syncWith(plannerRaw("before"));
+    await pool.query(`UPDATE metricool_links SET created_at = '2026-10-22T15:55:00Z' WHERE content_item_id = $1`, [id]);
+    assert.deepEqual(await syncWith(probeVariant(() => null), { itemId: id }), NO_CHANGE);
+    assert.deepEqual((await linkRows(id)).map((l) => l.state), ["scheduled", "scheduled"]);
+    assert.equal((await itemRow(id)).publish_check, "", "no 'couldn't tell' note: it's just new");
+  } finally { await clearSyncSettings(); }
+});
+
+test("Check Metricool now follows Instagram moved days away after a split in Metricool", async () => {
+  const id = await probePost();
+  try {
+    await syncWith(plannerRaw("before"));
+    await pool.query("DELETE FROM content_items WHERE from_metricool");
+    // What the owner did: split the post in Metricool and moved Instagram four days out.
+    const moved = plannerRaw("after-move");
+    for (const r of moved.data) if (String(r.id) === "403266388") r.publicationDate.dateTime = "2026-10-27T09:00:00";
+    const out = await syncWith(moved, { itemId: id });
+    assert.equal(out.split, 1, "the post splits");
+    assert.deepEqual((await itemRow(id)).platforms, ["facebook"]);
+    const ig = (await pool.query("SELECT id FROM content_items WHERE split_from = $1", [id])).rows[0];
+    assert.ok(ig, "Instagram is its own post");
+    assert.deepEqual([(await itemRow(ig.id)).d, (await itemRow(ig.id)).t], ["2026-10-27", "09:00"]);
+  } finally { await clearSyncSettings(); }
+});
+
+test("a one-post sync looks as far as the full run, so a post deleted in Metricool reads as removed", async () => {
   const id = await probePost();
   try {
     await syncWith(plannerRaw("before"));
     const out = await syncWith(probeVariant(() => null), { itemId: id });
-    assert.deepEqual(out, NO_CHANGE);
-    assert.deepEqual((await linkRows(id)).map((l) => [l.state, l.goneAt]), [["scheduled", null], ["scheduled", null]]);
-    assert.deepEqual([(await itemRow(id)).status, (await itemRow(id)).publish_check], ["scheduled", ""]);
+    assert.deepEqual(out, { ...NO_CHANGE, gone: 2 });
+    assert.deepEqual((await linkRows(id)).map((l) => l.state), ["gone", "gone"]);
+    assert.deepEqual([(await itemRow(id)).status, (await itemRow(id)).publish_check], ["ready", "Removed from Metricool on 2026-10-22."]);
   } finally { await clearSyncSettings(); }
 });
 

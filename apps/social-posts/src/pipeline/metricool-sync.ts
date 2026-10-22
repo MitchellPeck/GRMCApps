@@ -62,15 +62,12 @@ async function syncOnce(pool: Pool, o: { itemId?: string; now?: Date }): Promise
   const dates = links.map(dayOf).filter(Boolean);
   if (o.itemId) dates.push(...await idlessDays(pool, o.itemId, now));
   dates.sort();
-  let covered: Covered;
-  if (o.itemId) {
-    if (!dates.length) return counts;
-    covered = { from: addDays(dates[0], -1), to: addDays(dates[dates.length - 1], 1) };
-  } else {
-    const last = dates.length ? addDays(dates[dates.length - 1], 1) : "";
-    const ahead = addDays(today, 90);  // far enough out to catch posts made only in Metricool
-    covered = { from: addDays(today, -30), to: last > ahead ? last : ahead };
-  }
+  // One post or all, the same range: Metricool gives a moved post a new id, and that post can now be
+  // on any day, so a window around the post's old date can't find it.
+  if (o.itemId && !dates.length) return counts;
+  const last = dates.length ? addDays(dates[dates.length - 1], 1) : "";
+  const ahead = addDays(today, 90);  // far enough out to catch posts made only in Metricool
+  const covered: Covered = { from: addDays(today, -30), to: last > ahead ? last : ahead };
   const ranged = links.filter((l) => covers(covered, l));
 
   let planner: PlannerPost[];
@@ -105,14 +102,18 @@ async function syncOnce(pool: Pool, o: { itemId?: string; now?: Date }): Promise
   const relinked = !counts.relinkFailed;
   const claimed = new Set([...(plan?.entries || []).map((e) => e.toPostId), ...(plan?.contested || [])]);
   const unsure = new Set((plan?.unsure || []).map((l) => `${l.metricoolPostId}|${l.network}`));
+  // A link made in the last few minutes may not be in Metricool's list yet (right after a send): never gone yet.
+  const young = new Set((await pool.query(
+    `SELECT metricool_post_id, network FROM metricool_links WHERE created_at > $1::timestamptz - interval '10 minutes'`, [now]))
+    .rows.map((r) => `${r.metricool_post_id}|${r.network}`));
 
   const touched = new Set([...ranged.map((l) => l.contentItemId), ...(applied ? plan!.entries.map((e) => e.itemId) : [])]);
   const byId = new Map(planner.map((p) => [p.id, p]));
-  // Only the full run marks links gone; a post moved beyond a one-post window would otherwise read as deleted.
-  const goneRange = o.itemId || !relinked ? NOTHING_COVERED : covered;
+  // A failed relink marks nothing gone: a link it would have followed would read as deleted.
+  const goneRange = !relinked ? NOTHING_COVERED : covered;
   for (const [itemId, itemLinks] of await linksFor(pool, [...touched])) {
     try {
-      await syncItem(pool, itemId, itemLinks, byId, goneRange, tz, now, counts, unsure);
+      await syncItem(pool, itemId, itemLinks, byId, goneRange, tz, now, counts, unsure, young);
     } catch (e) {
       // One broken post mustn't stop the others (or the imports) on every run from now on.
       counts.failed++;
@@ -149,9 +150,9 @@ async function idlessDays(pool: Pool, itemId: string, now: Date): Promise<string
 
 async function syncItem(
   pool: Pool, itemId: string, links: Link[], planner: Map<string, PlannerPost>, covered: Covered, tz: string, now: Date,
-  counts: SyncCounts, unsure: Set<string>,
+  counts: SyncCounts, unsure: Set<string>, young: Set<string>,
 ): Promise<void> {
-  const { changes, groups, unknown } = reconcileItem(links, planner, covered, unsure);
+  const { changes, groups, unknown } = reconcileItem(links, planner, covered, new Set([...unsure, ...young]));
   // A vanished post a relink couldn't place: the link stays as it is, with a note.
   const unplaced = links.filter((l) => unsure.has(`${l.metricoolPostId}|${l.network}`) && !planner.has(l.metricoolPostId));
   const notes = unplaced.length ? [UNPLACED] : [];
