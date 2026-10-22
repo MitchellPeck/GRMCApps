@@ -5,6 +5,7 @@ import { getSetting, setSetting } from "../settings";
 import { buildCaptureIcs, buildPostsIcs } from "../pipeline/ical";
 import { draftAll, draftCaptions, parseDraftRequest, resolveForDraft } from "../pipeline/caption";
 import { checkPublished } from "../pipeline/publish-check";
+import { syncMetricool } from "../pipeline/metricool-sync";
 import { listDraftHistory } from "../pipeline/history";
 import { planFromEpisode, proposeSeriesPlan, saveSeriesPlan } from "../pipeline/planning";
 import { listCampaigns } from "../mailchimp";
@@ -355,8 +356,19 @@ export async function pipelineRoutes(app: FastifyInstance): Promise<void> {
     return { ok: true, ...(await storeUpload(pool, bytes, type, name)) };
   }));
 
-  // Run the Published check now (it also runs every 30 minutes).
-  app.post("/api/pipeline/publish-check", async () => guard(async () => ({ ok: true, ...(await checkPublished(pool)) })));
+  // Run the Published check and the Metricool sync now (they also run every 30 minutes).
+  app.post("/api/pipeline/publish-check", async () => guard(async () => {
+    const hand = await checkPublished(pool);
+    // As before, a Metricool failure isn't the button's failure: the note is on each card it left alone.
+    const { error, ...counts } = await syncMetricool(pool);
+    return { ok: true as const, ...counts, published: counts.published + hand.published, ...(error ? { metricoolError: error } : {}) };
+  }));
+
+  // "Check Metricool now" for one post: only its links, no imports.
+  app.post("/api/pipeline/content/:id/metricool-sync", async (req) => guard(async () => {
+    const { error, ...counts } = await syncMetricool(pool, { itemId: (req.params as { id: string }).id });
+    return error ? { ok: false as const, error: "Couldn't check Metricool: " + error } : { ok: true as const, ...counts };
+  }));
 
   // ── Sermon recordings ──
   // A recording arrives in 8 MB pieces (Cloudflare caps a request at 100 MB),

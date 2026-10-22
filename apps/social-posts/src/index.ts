@@ -14,6 +14,7 @@ import { migrateDrafting } from "./pipeline/migrate-drafting";
 import { recoverSermons, sermonOpts } from "./pipeline/sermons";
 import { backfillLinks } from "./pipeline/metricool-links";
 import { checkPublished } from "./pipeline/publish-check";
+import { syncMetricool } from "./pipeline/metricool-sync";
 import { referenceDate } from "./schedule";
 import { addDays, DEFAULT_TZ } from "./dates";
 import { getSetting, setSetting } from "./settings";
@@ -64,11 +65,20 @@ async function start() {
   await keepRecurrencesAhead();
   // Daily, so the calendar always shows HORIZON_DAYS of recurring posts.
   setInterval(() => { keepRecurrencesAhead().catch((e) => app.log.error(e)); }, 24 * 60 * 60 * 1000).unref();
-  // Scheduled posts become Published: confirmed with Metricool, or once their
-  // time has passed. Once now, then every 30 minutes.
-  const publishCheck = () => checkPublished(pool)
-    .then((r) => { if (r.published || r.failed) app.log.info(r, "publish check"); })
-    .catch((e) => app.log.warn(e, "publish check failed"));
+  // Hand-scheduled posts become Published once their time passes; posts in
+  // Metricool are synced from its planner. Once now, then every 30 minutes.
+  const publishCheck = async () => {
+    // Each step catches its own failure: a bad sync must never take the server down.
+    await checkPublished(pool)
+      .then((r) => { if (r.published) app.log.info(r, "publish check"); })
+      .catch((e) => app.log.warn(e, "publish check failed"));
+    await syncMetricool(pool)
+      .then((r) => {
+        if (r.error) app.log.warn({ error: r.error }, "Metricool sync couldn't read the planner");
+        else if (Object.values(r).some((n) => n)) app.log.info(r, "Metricool sync");
+      })
+      .catch((e) => app.log.warn(e, "Metricool sync failed"));
+  };
   publishCheck();
   setInterval(publishCheck, 30 * 60 * 1000).unref();
   await app.listen({ host: "0.0.0.0", port: config.port });
