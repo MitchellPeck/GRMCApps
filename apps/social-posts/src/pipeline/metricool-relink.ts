@@ -46,9 +46,14 @@ export function relinkPlan(links: Link[], planner: PlannerPost[], idless: Relink
     const textOf = (p: PlannerPost) => textHash(p.networks.find((n) => n.network === link.network)!.text);
     let found = link.metricoolUuid ? cands.filter((p) => p.uuid === link.metricoolUuid) : [];
     if (!found.length) {
-      // No creator check: Link stores no creator id, so createdAt plus text (or created alone) decides.
-      found = cands.filter((p) => p.createdAt && p.createdAt === link.metricoolCreated
-        && (link.textHash ? textOf(p) === link.textHash : true));
+      // A split in Metricool gives each half a new uuid and a new creation time (the minute of the
+      // split), so with the text known it decides: same text on this network, created no earlier than
+      // the post it came from. Without the text, only the same creation minute will do.
+      // No creator check: Link stores no creator id.
+      found = link.textHash
+        ? cands.filter((p) => textOf(p) === link.textHash
+            && (!link.metricoolCreated || !p.createdAt || p.createdAt >= link.metricoolCreated))
+        : cands.filter((p) => p.createdAt && p.createdAt === link.metricoolCreated);
     }
     if (found.length > 1) {
       found.forEach((p) => contested.add(p.id));

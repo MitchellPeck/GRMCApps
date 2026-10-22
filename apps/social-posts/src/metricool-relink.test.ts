@@ -121,3 +121,23 @@ test("an ambiguous relink names its candidates and the link it couldn't follow",
   const r3 = fullPlan([], [mk("a", "same")], [s("1"), s("2")]);
   assert.deepEqual([r3.entries, [...r3.contested]], [[], ["a"]]);
 });
+
+// Real production data: splitting a post in Metricool gives both halves new uuids AND a new creation
+// time (the minute of the split), so only the platform and the text tie them to the post.
+test("a split in Metricool is followed to both halves (new uuids, new creation minute)", () => {
+  const split = planner("metricool-planner-after-split.json");
+  const h = textHash(split.find((p) => p.id === "403354656")!.networks[0].text);
+  const links = ["facebook", "instagram"].map((network) => link({ metricoolPostId: "403353835", network, textHash: h,
+    scheduledFor: "2026-10-22T15:00", metricoolUuid: "5592638576673181468", metricoolCreated: "2026-10-22T12:48" }));
+  const plan = relinkPlan(links, split, []);
+  assert.deepEqual(plan.map((e) => [e.network, e.toPostId, e.scheduledFor]).sort(),
+    [["facebook", "403354656", "2026-10-22T15:00"], ["instagram", "403354660", "2026-10-22T16:30"]]);
+});
+
+test("a same-text post created before the link's post isn't taken for it", () => {
+  const split = planner("metricool-planner-after-split.json");
+  const h = textHash(split.find((p) => p.id === "403354656")!.networks[0].text);
+  // Pretend the link's post was created after the halves were: they can't have come from it.
+  const late = link({ metricoolPostId: "403353835", network: "facebook", textHash: h, metricoolCreated: "2026-10-22T13:30" });
+  assert.deepEqual(relinkPlan([late], split, []), []);
+});

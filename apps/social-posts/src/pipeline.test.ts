@@ -1690,6 +1690,23 @@ test("a link made minutes ago is never marked gone (Metricool's list may not sho
   } finally { await clearSyncSettings(); }
 });
 
+test("Check Metricool now follows a real split: Instagram moved from 3:00 to 4:30 the same day", async () => {
+  const id = await probePost();
+  try {
+    const split = plannerRaw("after-split");
+    const text = split.data.find((r: any) => String(r.id) === "403354656").text;
+    await pool.query(`UPDATE content_items SET caption = $2, publish_date = '2026-10-22', publish_time = '15:00' WHERE id = $1`, [id, text]);
+    await pool.query(`UPDATE metricool_links SET metricool_post_id = '403353835', scheduled_for = '2026-10-22T15:00', text_hash = $2,
+                        metricool_uuid = '5592638576673181468', metricool_created = '2026-10-22T12:48' WHERE content_item_id = $1`, [id, textHash(text)]);
+    const out = await syncWith(split, { itemId: id });
+    assert.equal(out.split, 1);
+    assert.deepEqual([(await itemRow(id)).platforms, (await itemRow(id)).t], [["facebook"], "15:00"]);
+    const ig = (await pool.query("SELECT id FROM content_items WHERE split_from = $1", [id])).rows[0];
+    assert.deepEqual([(await itemRow(ig.id)).platforms, (await itemRow(ig.id)).d, (await itemRow(ig.id)).t], [["instagram"], "2026-10-22", "16:30"]);
+    assert.deepEqual((await linkRows(id)).map((l) => [l.network, l.metricoolPostId]), [["facebook", "403354656"]]);
+  } finally { await clearSyncSettings(); }
+});
+
 test("Check Metricool now follows Instagram moved days away after a split in Metricool", async () => {
   const id = await probePost();
   try {
