@@ -921,15 +921,17 @@ window.addEventListener('resize', queueFitChat);
 function renderChatPanel(){
   var el=document.getElementById('chat-panel'); if(!el || !state.meeting) return;
   el.hidden=false;
-  el.innerHTML='<div class="chat-head"><div class="chat-title"><b>Ask or tell it what to fix</b>'
-    +'<button type="button" class="btn-sm" id="btn-chat-reset" title="Start a new conversation">Start over</button></div>'
-    +'<div class="hint">“It’s Jon, not John”, “Shorten item 3”, “Play where they voted on the budget”.</div></div>'
+  el.innerHTML='<div class="chat-head"><div class="chat-title"><span class="chat-mark" aria-hidden="true">&#10022;</span>'
+    +'<div><b>Assistant</b><div class="chat-sub">Knows this meeting: its recording, topics and minutes</div></div>'
+    +'<button type="button" class="chat-reset" id="btn-chat-reset" title="Start a new conversation">New chat</button></div></div>'
     +'<div class="chat-log" id="chat-log" aria-live="polite"></div>'
-    +'<div class="chat-compose"><textarea id="chat-input" rows="2" placeholder="Type a message…"></textarea>'
-    +'<button class="btn btn-primary" id="btn-chat-send" data-default="Send">Send</button></div>';
+    +'<div class="chat-compose"><textarea id="chat-input" rows="1" placeholder="Ask or tell it what to fix…" aria-label="Message"></textarea>'
+    +'<button type="button" class="chat-send" id="btn-chat-send" title="Send" aria-label="Send">&#8593;</button></div>'
+    +'<div class="chat-keys">Enter to send &middot; Shift+Enter for a new line</div>';
   var input=document.getElementById('chat-input');
   input.value=state.chatDraft||'';
-  input.addEventListener('input', function(){ state.chatDraft=input.value; });
+  growChatInput();
+  input.addEventListener('input', function(){ state.chatDraft=input.value; growChatInput(); });
   input.addEventListener('keydown', function(e){
     if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); sendChat(); }
   });
@@ -938,6 +940,36 @@ function renderChatPanel(){
   queueFitChat();
   renderChatLog();
 }
+// The message box grows with what's typed, up to about six lines.
+function growChatInput(){
+  var input=document.getElementById('chat-input'); if(!input) return;
+  input.style.height='auto';
+  if(input.scrollHeight) input.style.height=Math.min(input.scrollHeight, 140)+'px';
+  syncChatSend();
+}
+function syncChatSend(){
+  var b=document.getElementById('btn-chat-send'), input=document.getElementById('chat-input');
+  if(!b) return;
+  b.disabled=!!state.chatSending;
+  b.classList.toggle('ready', !state.chatSending && !!(input && input.value.trim()));
+  b.classList.toggle('busy', !!state.chatSending);
+}
+// Things to try in a new chat, one naming a real topic of this meeting.
+function chatSuggestions(){
+  var items=(state.items||[]).filter(function(it){ return (it.summary||'').trim(); });
+  var topic=items.length ? items[Math.min(1, items.length-1)].title : '';
+  return ['Fix a misheard name everywhere: it’s Jon, not John',
+    topic ? 'Shorten “'+topic+'” to half a page' : 'Shorten the longest topic to half a page',
+    'Play where they voted on the budget',
+    'What did we decide, and who seconded it?'];
+}
+document.addEventListener('click', function(e){
+  var chip=e.target && e.target.closest ? e.target.closest('.chat-suggest') : null;
+  if(!chip) return;
+  var input=document.getElementById('chat-input'); if(!input) return;
+  input.value=chip.getAttribute('data-text'); state.chatDraft=input.value;
+  growChatInput(); input.focus();
+});
 function chatCardHtml(c){
   if(c.kind==='clip'){
     var span=fmtSpanTime(c.start)+'–'+fmtSpanTime(c.end);
@@ -947,14 +979,14 @@ function chatCardHtml(c){
       +(c.quote?'<span class="chat-quote">“'+esc(c.quote)+'”</span>':'')+'</span></div>';
   }
   if(c.kind==='confirm'){
-    return '<div class="chat-card confirm'+(c.done?' undone':'')+'"><span>'+esc(c.label)+'</span>'
-      +(c.done ? '<span class="hint">Done</span>'
+    return '<div class="chat-card confirm'+(c.done?' done':'')+'"><span class="chat-card-ico" aria-hidden="true">!</span><span>'+esc(c.label)+'</span>'
+      +(c.done ? '<span class="chat-card-state">Done</span>'
         : '<button type="button" class="btn-sm chat-confirm" data-action="'+esc(c.action)+'"'+(c.id?' data-card="'+esc(c.id)+'"':'')
           +(c.itemId!=null?' data-item="'+esc(c.itemId)+'"':'')+(c.fresh?' data-fresh="1"':'')+(c.recordingId!=null?' data-rec="'+esc(c.recordingId)+'"':'')+'>Confirm</button>')
       +'</div>';
   }
-  return '<div class="chat-card change'+(c.undone?' undone':'')+'"><span>'+esc(c.summary)+'</span>'
-    +(c.undone ? '<span class="hint">Undone</span>'
+  return '<div class="chat-card change'+(c.undone?' undone':'')+'"><span class="chat-card-ico" aria-hidden="true">&#10003;</span><span>'+esc(c.summary)+'</span>'
+    +(c.undone ? '<span class="chat-card-state">Undone</span>'
       : c.changeId ? '<button type="button" class="btn-sm chat-undo" data-change="'+esc(c.changeId)+'">Undo</button>' : '')+'</div>';
 }
 function renderChatLog(){
@@ -962,11 +994,14 @@ function renderChatLog(){
   var msgs=state.chat||[];
   log.innerHTML = msgs.length || state.chatSending ? msgs.map(function(m){
     if(m.role==='user') return '<div class="chat-msg user">'+esc(m.text).replace(/\n/g,'<br>')+'</div>';
-    return '<div class="chat-msg assistant'+(m.error?' err':'')+'">'+(m.text?renderMarkdown(m.text):'')
+    return '<div class="chat-msg assistant'+(m.error?' err':'')+'">'+(m.text?'<div class="chat-text">'+renderMarkdown(m.text)+'</div>':'')
       +(m.cards||[]).map(chatCardHtml).join('')+'</div>';
-  }).join('')+(state.chatSending?'<div class="chat-msg assistant working"><span class="spin" style="border-top-color:var(--navy)"></span> Working…</div>':'')
-    : '<div class="empty-hint">Nothing asked yet.</div>';
+  }).join('')+(state.chatSending?'<div class="chat-msg assistant working" role="status"><span class="chat-dots" aria-hidden="true"><i></i><i></i><i></i></span> Working…</div>':'')
+    : '<div class="chat-empty"><p>Ask about the meeting, or tell it what to fix. It can change the minutes, the topics, names and speakers, and play any part of the recording. Every change it makes can be undone.</p>'
+      +'<div class="chat-suggests">'+chatSuggestions().map(function(t){
+        return '<button type="button" class="chat-suggest" data-text="'+esc(t)+'">'+esc(t)+'</button>'; }).join('')+'</div></div>';
   log.scrollTop=log.scrollHeight;
+  syncChatSend();
 }
 var CHAT_POLL_MS=2000;
 function changeCardCount(msgs){
@@ -992,7 +1027,7 @@ function pollChat(mid, cardsBefore){
       if(!state.meeting || state.meeting.id!==mid){ state.chatSending=false; return; }
       if(res.ok && res.working){ pollChat(mid, cardsBefore); return; }
       state.chatSending=false;
-      setBtn('btn-chat-send', false);
+      syncChatSend();
       if(res.ok) state.chat=res.messages||[];
       renderChatLog();
       renderReportEditor();
@@ -1001,7 +1036,7 @@ function pollChat(mid, cardsBefore){
   }, CHAT_POLL_MS);
 }
 function chatFailed(text, error){
-  state.chatSending=false; setBtn('btn-chat-send', false);
+  state.chatSending=false; syncChatSend();
   state.chat.push({ role:'assistant', text:error, cards:[], error:true });
   state.chatDraft=text; var inp=document.getElementById('chat-input'); if(inp) inp.value=text;
   renderChatLog(); renderReportEditor();
@@ -1012,8 +1047,7 @@ function sendChat(){
   if(!text || state.chatSending || readOnly()) return;
   var mid=state.meeting.id, before=changeCardCount(state.chat);
   state.chat=(state.chat||[]).concat([{ role:'user', text:text, cards:[] }]);
-  state.chatDraft=''; input.value='';
-  setBtn('btn-chat-send', true, 'Sending…');
+  state.chatDraft=''; input.value=''; growChatInput();
   // The chat can change the minutes on the server: save any edit first, and
   // keep the editor shut until it's done.
   if(commitOpenLine) commitOpenLine();

@@ -312,21 +312,53 @@ button.roll-row:hover{background:var(--paper)}
 .chat-panel{position:sticky;top:calc(env(safe-area-inset-top,0px) + 12px);display:flex;flex-direction:column;gap:8px;
   background:var(--card);border:1px solid var(--rule);border-radius:var(--r-lg);padding:12px;height:calc(100vh - 220px);box-sizing:border-box}
 body.has-rec-banner .chat-panel{top:64px}
-.chat-head .hint{margin-top:2px}
-.chat-log{flex:1;min-height:160px;overflow-y:auto;display:flex;flex-direction:column;gap:8px;padding-right:2px}
-.chat-msg{border-radius:12px;padding:8px 10px;font-size:13.5px;line-height:1.45;max-width:95%}
-.chat-msg.user{align-self:flex-end;background:var(--navy);color:#fff}
-.chat-msg.assistant{align-self:flex-start;background:var(--paper);border:1px solid var(--rule)}
-.chat-msg.assistant p{margin:2px 0}
-.chat-msg.err{border-color:var(--danger-border);background:var(--rej-bg);color:var(--rej-fg)}
-.chat-msg.working{color:var(--muted)}
-.chat-card{display:flex;align-items:center;gap:8px;margin-top:6px;padding:6px 8px;border-radius:8px;background:var(--ok-bg);color:var(--ok-fg);font-size:12.5px}
-.chat-card.clip{background:var(--info-bg);color:var(--info-fg)}
-.chat-card.undone{opacity:.6;text-decoration:line-through}
-.chat-card > span{flex:1;min-width:0}
+.chat-panel{gap:0;padding:0;overflow:hidden}
+.chat-head{padding:12px 14px;border-bottom:1px solid var(--rule)}
+.chat-title{display:flex;align-items:center;gap:10px}
+.chat-title > div{flex:1;min-width:0}
+.chat-title b{font-size:15px;color:var(--navy)}
+.chat-sub{font-size:12px;color:var(--muted);line-height:1.35}
+.chat-mark{flex:none;display:grid;place-items:center;width:30px;height:30px;border-radius:50%;background:var(--navy);color:var(--gold);font-size:15px}
+.chat-reset{flex:none;background:none;border:1px solid var(--rule);border-radius:999px;padding:4px 11px;font:inherit;font-size:12px;color:var(--navy);cursor:pointer}
+.chat-reset:hover{background:var(--paper)}
+.chat-log{flex:1;min-height:160px;overflow-y:auto;display:flex;flex-direction:column;gap:10px;padding:14px}
+.chat-msg{font-size:13.5px;line-height:1.5;max-width:92%;overflow-wrap:anywhere}
+.chat-msg.user{align-self:flex-end;background:var(--navy);color:#fff;border-radius:14px 14px 4px 14px;padding:8px 12px}
+.chat-msg.assistant{align-self:flex-start;max-width:100%;width:100%}
+.chat-text{background:var(--paper);border-radius:14px 14px 14px 4px;padding:8px 12px;display:inline-block;max-width:92%}
+.chat-text p{margin:2px 0}
+.chat-text ul{margin:4px 0;padding-left:18px}
+.chat-msg.err .chat-text{background:var(--rej-bg);color:var(--rej-fg)}
+.chat-msg.working{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12.5px}
+.chat-dots{display:inline-flex;gap:3px;background:var(--paper);border-radius:12px;padding:8px 10px}
+.chat-dots i{width:6px;height:6px;border-radius:50%;background:var(--muted);animation:chatdot 1.2s infinite ease-in-out}
+.chat-dots i:nth-child(2){animation-delay:.15s}
+.chat-dots i:nth-child(3){animation-delay:.3s}
+@keyframes chatdot{0%,60%,100%{opacity:.25;transform:translateY(0)}30%{opacity:1;transform:translateY(-3px)}}
+@media (prefers-reduced-motion:reduce){ .chat-dots i{animation:none;opacity:.6} }
+.chat-card{display:flex;align-items:center;gap:8px;margin-top:6px;padding:7px 10px;border-radius:10px;
+  border:1px solid var(--rule);background:var(--card);font-size:12.5px;max-width:92%}
+.chat-card > span:not(.chat-card-ico):not(.chat-card-state){flex:1;min-width:0}
+.chat-card-ico{flex:none;display:grid;place-items:center;width:20px;height:20px;border-radius:50%;font-size:11px;font-weight:700;background:var(--ok-bg);color:var(--ok-fg)}
+.chat-card.confirm .chat-card-ico{background:var(--pending-bg);color:var(--pending-fg)}
+.chat-card.confirm{border-color:var(--pending-bg)}
+.chat-card.clip{background:var(--info-bg);border-color:transparent;color:var(--info-fg)}
+.chat-card.undone > span:not(.chat-card-state){text-decoration:line-through;opacity:.6}
+.chat-card.done{opacity:.7}
+.chat-card-state{flex:none;font-size:11.5px;color:var(--muted)}
 .chat-quote{display:block;font-style:italic}
-.chat-compose{display:flex;gap:8px;align-items:flex-end}
-.chat-compose textarea{flex:1;min-width:0;resize:vertical;font:inherit;padding:6px 8px}
+.chat-empty{margin:auto 0;color:var(--muted);font-size:13px;line-height:1.5}
+.chat-empty p{margin:0 0 10px}
+.chat-suggests{display:flex;flex-direction:column;align-items:flex-start;gap:6px}
+.chat-suggest{text-align:left;background:var(--card);border:1px solid var(--rule);border-radius:12px;padding:6px 11px;font:inherit;font-size:12.5px;color:var(--navy);cursor:pointer}
+.chat-suggest:hover{border-color:var(--navy);background:var(--paper)}
+.chat-compose{display:flex;align-items:flex-end;gap:6px;margin:0 12px;padding:6px 6px 6px 12px;border:1px solid var(--rule);border-radius:16px;background:var(--field-bg)}
+.chat-compose:focus-within{border-color:var(--navy);box-shadow:0 0 0 3px var(--gold-ring)}
+.chat-compose textarea{flex:1;min-width:0;border:0;outline:0;resize:none;background:transparent;font:inherit;font-size:13.5px;line-height:1.45;padding:5px 0;min-height:0;max-height:140px;box-shadow:none}
+.chat-send{flex:none;width:32px;height:32px;border-radius:50%;border:0;background:var(--rule);color:#fff;font-size:16px;font-weight:700;cursor:pointer;transition:background .15s}
+.chat-send.ready{background:var(--navy)}
+.chat-send.busy{background:var(--muted);cursor:progress}
+.chat-keys{font-size:11px;color:var(--muted);padding:4px 14px 10px;text-align:right}
 @media (max-width:720px){ .chat-panel{position:static;height:auto} }
 /* The meeting page is wider than the list so the minutes and the chat fit side
    by side; the other sections keep a comfortable reading width. */
@@ -359,5 +391,3 @@ body.has-mini-player .layout{padding-bottom:150px}
   .minutes-layout,.minutes-layout:has(.chat-panel:not([hidden])){display:flex;flex-direction:column}
   .chat-panel{order:-1;max-height:60vh}
 }
-.chat-title{display:flex;align-items:center;gap:8px;justify-content:space-between}
-.chat-card.confirm{background:var(--pending-bg);color:var(--pending-fg)}

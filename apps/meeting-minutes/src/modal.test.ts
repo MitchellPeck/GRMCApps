@@ -1296,6 +1296,17 @@ test("a Confirm card does the action only when pressed, through the page's own r
   assert.ok(calls.some((c) => c.method === "DELETE" && c.path === "/api/items/1"));
 });
 
+test("a new chat offers things to try; picking one fills in the message", { skip }, async () => {
+  const { w, doc } = bootChat(() => ({ ok: true, messages: [] }));
+  w.eval("loadChat()");
+  await flush();
+  const chip = doc.querySelector("#chat-log .chat-suggest");
+  assert.ok(chip);
+  chip.dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  assert.equal(doc.getElementById("chat-input").value, chip.getAttribute("data-text"));
+  assert.ok(doc.getElementById("btn-chat-send").classList.contains("ready"));
+});
+
 test("Start over clears the conversation", { skip }, async () => {
   const { w, doc, calls } = bootChat((p) => p.endsWith("/chat") ? history : { ok: true });
   w.eval("loadChat()");
@@ -1304,7 +1315,7 @@ test("Start over clears the conversation", { skip }, async () => {
   doc.getElementById("btn-chat-reset").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
   await flush();
   assert.ok(calls.some((c) => c.method === "POST" && c.path === "/api/meetings/42/chat/reset"));
-  assert.match(doc.getElementById("chat-log").textContent, /Nothing asked yet/);
+  assert.match(doc.getElementById("chat-log").textContent, /Ask about the meeting/);
 });
 
 test("while the chat is working, lines of the minutes don't open", { skip }, () => {
