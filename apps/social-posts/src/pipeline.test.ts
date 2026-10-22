@@ -11,12 +11,13 @@ import { RUN_EVENTS } from "./pipeline/config";
 import { applyImageRule, createRecurrence, deleteRecurrence, getRecurrence, materialize, seedRunRecurrences, updateRecurrence } from "./pipeline/recurring";
 import { duplicateEvent } from "./pipeline/repo";
 import { Rule } from "./pipeline/recurrence";
+import { addLinks, backfillLinks, hasLiveLinks, LINKS_BACKFILL_SETTING, linksFor } from "./pipeline/metricool-links";
 
 const pool = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
 const REF = "2026-11-01";
 
 before(async () => {
-  await pool.query("DROP TABLE IF EXISTS media_assets, content_items, recurrences, events");
+  await pool.query("DROP TABLE IF EXISTS metricool_links, media_assets, content_items, recurrences, events");
   await pool.query(SCHEMA_SQL);
   await pool.query("DELETE FROM series_posts");
   await pool.query("DELETE FROM series");
@@ -1048,4 +1049,48 @@ test("the connector lists, creates and updates posts through the page's rules", 
   assert.ok(bad.error);
   assert.match(bad.text, /Instagram/);
   assert.ok((await call("list_posts", { from: "soon" })).error);
+});
+
+// ── Metricool links ──
+
+async function linkItem(title: string): Promise<string> {
+  const r = await createContent(pool, { title, publishDate: "2026-11-03", platforms: ["facebook"], noMediaNeeded: true }, "me@x.org");
+  assert.ok(r.ok);
+  return r.value.id;
+}
+
+test("addLinks then linksFor returns one link per network", async () => {
+  const id = await linkItem("Linked");
+  await addLinks(pool, id, "9001", ["facebook", "x"], "2026-11-03T09:00:00", "scheduled");
+  const links = (await linksFor(pool, [id])).get(id)!;
+  assert.deepEqual(links.map((l) => [l.network, l.metricoolPostId, l.state, l.textHash, l.goneAt]),
+    [["facebook", "9001", "scheduled", "", null], ["x", "9001", "scheduled", "", null]]);
+  assert.equal((await linksFor(pool, [])).size, 0);
+});
+
+test("hasLiveLinks is false once every link is gone", async () => {
+  const id = await linkItem("Fading");
+  assert.equal(await hasLiveLinks(pool, id), false);
+  await addLinks(pool, id, "9002", ["facebook", "instagram"], "2026-11-03T09:00:00", "draft");
+  assert.equal(await hasLiveLinks(pool, id), true);
+  await pool.query("UPDATE metricool_links SET state = 'gone', gone_at = now() WHERE metricool_post_id = '9002' AND network = 'facebook'");
+  assert.equal(await hasLiveLinks(pool, id), true);
+  await pool.query("UPDATE metricool_links SET state = 'gone', gone_at = now() WHERE metricool_post_id = '9002'");
+  assert.equal(await hasLiveLinks(pool, id), false);
+});
+
+test("backfill turns the latest send into links once", async () => {
+  await pool.query("DELETE FROM settings WHERE key = $1", [LINKS_BACKFILL_SETTING]);
+  // Earlier tests leave sends of their own; only this post's should be counted.
+  await pool.query("DELETE FROM metricool_sends WHERE source_type = 'content'");
+  const id = await linkItem("Resent");
+  const send = (mcId: string, ago: string, networks: string) => pool.query(
+    `INSERT INTO metricool_sends (source_type, source_ref, text, networks, scheduled_for, timezone, metricool_post_id, status, created_at)
+     VALUES ('content', $1, 'x', $3, '2026-11-03T09:00:00', 'America/New_York', $2, 'sent', now() - $4::interval)`, [id, mcId, networks, ago]);
+  await send("8001", "1 hour", "facebook");
+  await send("8002", "0 minutes", "facebook,twitter");
+  assert.equal(await backfillLinks(pool, "America/New_York"), 2);
+  const links = (await linksFor(pool, [id])).get(id)!;
+  assert.deepEqual(links.map((l) => [l.metricoolPostId, l.network, l.state]), [["8002", "facebook", "scheduled"], ["8002", "x", "scheduled"]]);
+  assert.equal(await backfillLinks(pool, "America/New_York"), 0);
 });

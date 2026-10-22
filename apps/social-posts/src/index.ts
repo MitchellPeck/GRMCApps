@@ -12,9 +12,10 @@ import { mcpRoutes } from "./routes/mcp";
 import { backfillOnce } from "./pipeline/sync";
 import { migrateDrafting } from "./pipeline/migrate-drafting";
 import { recoverSermons, sermonOpts } from "./pipeline/sermons";
+import { backfillLinks } from "./pipeline/metricool-links";
 import { checkPublished } from "./pipeline/publish-check";
 import { referenceDate } from "./schedule";
-import { addDays } from "./dates";
+import { addDays, DEFAULT_TZ } from "./dates";
 import { getSetting, setSetting } from "./settings";
 import {
   HORIZON_DAYS, IMAGE_RULE_SETTING, RUN_RECURRENCES_SETTING, applyImageRule, materialize, seedRunRecurrences,
@@ -54,6 +55,8 @@ async function start() {
     await setSetting(pool, IMAGE_RULE_SETTING, new Date().toISOString());
     app.log.info(fixed, "instagram image rule applied to existing posts");
   }
+  const linked = await backfillLinks(pool, (await getSetting(pool, "default_timezone")) || DEFAULT_TZ);
+  if (linked) app.log.info({ linked }, "Metricool links backfilled from the send log");
   const drafting = await migrateDrafting(pool, await referenceDate(pool));
   if (drafting.ran) app.log.info(drafting, "weekly runs set up as drafting profiles");
   const sermons = await recoverSermons(pool, sermonOpts());
