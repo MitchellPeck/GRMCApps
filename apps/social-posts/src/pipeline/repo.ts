@@ -637,8 +637,9 @@ export async function splitContent(
                 approval_id, approval_title, file_name, file_type, kind, position, from_template
            FROM media_assets WHERE content_item_id = $1 AND kind = 'attachment'`, [id, newId]);
       await client.query(
-        `UPDATE metricool_links SET content_item_id = $1
-          WHERE content_item_id = $2 AND network = ANY($3) AND scheduled_for = $4`,
+        // The group's networks identify its links; the stored time may be stale, so refresh it.
+        `UPDATE metricool_links SET content_item_id = $1, scheduled_for = $4
+          WHERE content_item_id = $2 AND network = ANY($3)`,
         [newId, id, g.networks, g.scheduledFor.slice(0, 16)]);
     }
     const first = groups[0], when = split(first.scheduledFor);
@@ -647,6 +648,9 @@ export async function splitContent(
               detached = detached OR recurrence_id IS NOT NULL, updated_at = now()
         WHERE id = $1`,
       [id, first.networks, captionFor(first.networks), when.date, when.time]);
+    await client.query(
+      `UPDATE metricool_links SET scheduled_for = $3 WHERE content_item_id = $1 AND network = ANY($2)`,
+      [id, first.networks, first.scheduledFor.slice(0, 16)]);
     await client.query("COMMIT");
   } catch (e) {
     await client.query("ROLLBACK");

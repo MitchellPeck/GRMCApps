@@ -1201,3 +1201,19 @@ test("a recurring occurrence that splits is detached and the new post isn't recu
   assert.equal(s.value.created[0].recurrenceId, null);
   assert.equal(s.value.created[0].publishTime, "18:00");
 });
+
+test("split moves and refreshes links whose stored time is stale", async () => {
+  const r = await createContent(pool, { title: "Split stale", publishDate: "2026-11-03", platforms: ["facebook", "x"], noMediaNeeded: true }, "me@x.org");
+  assert.ok(r.ok);
+  const id = r.value.id;
+  await addLinks(pool, id, "9101", ["facebook"], "2026-11-03T09:00", "scheduled");
+  await addLinks(pool, id, "9102", ["x"], "2026-11-03T09:00", "scheduled");  // planner now says 11-06 10:30
+  const s = await splitContent(pool, id, [
+    { scheduledFor: "2026-11-03T09:15", networks: ["facebook"] },
+    { scheduledFor: "2026-11-06T10:30", networks: ["x"] },
+  ]);
+  assert.ok(s.ok);
+  const links = await linksFor(pool, [id, s.value.created[0].id]);
+  assert.deepEqual(links.get(id)!.map((l) => [l.network, l.scheduledFor]), [["facebook", "2026-11-03T09:15"]]);
+  assert.deepEqual(links.get(s.value.created[0].id)!.map((l) => [l.network, l.scheduledFor]), [["x", "2026-11-06T10:30"]]);
+});
