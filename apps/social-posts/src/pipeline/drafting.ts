@@ -29,7 +29,7 @@ const obj = (raw: unknown): Record<string, any> => (raw && typeof raw === "objec
 
 export function parseSource(raw: unknown): Result<SourceConfig> {
   const r = obj(raw);
-  if (!(SOURCE_KINDS as readonly string[]).includes(r.kind)) return fail("Source must be none, Mailchimp, Buzzsprout or a sermon recording.");
+  if (!(SOURCE_KINDS as readonly string[]).includes(r.kind)) return fail("Source must be none, Mailchimp, Buzzsprout or an uploaded video.");
   if (r.kind !== "mailchimp") return { ok: true, value: { kind: r.kind } };
   const subjectContains = String(r.subjectContains ?? "").trim().toLowerCase();
   if (!subjectContains) return fail("Say which Mailchimp campaigns to use: text their subject contains.");

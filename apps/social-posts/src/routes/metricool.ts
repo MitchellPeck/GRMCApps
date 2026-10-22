@@ -2,7 +2,7 @@ import { FastifyInstance } from "fastify";
 import { pool } from "../db";
 import { getIdentity } from "../identity";
 import { getSettingsView } from "../settings";
-import { getMetricoolCreds, listBrands, normalizeMedia, schedulePost, buildSchedulerPayload, charWarnings } from "../metricool";
+import { getMetricoolCreds, isPublishMode, listBrands, normalizeMedia, schedulePost, buildSchedulerPayload, charWarnings } from "../metricool";
 import { logSend } from "../metricool-sends";
 import { listApprovedImages, getApprovedImageBytes } from "../approvals-client";
 import { getR2Creds, uploadPublic } from "../r2";
@@ -11,6 +11,8 @@ import { gatherSendMedia } from "../metricool-media";
 
 interface SendBody {
   text: string; networks: string[]; dateTime: string; timezone: string;
+  /** "scheduled" or "draft" — the sender's choice, never guessed. */
+  publish?: string;
   imageUrl?: string; approvedImageId?: string; sourceType?: string; sourceRef?: string;
   /** A browser-uploaded image, as a `data:image/...;base64,...` URL. */
   imageData?: string;
@@ -54,6 +56,8 @@ export async function metricoolRoutes(app: FastifyInstance): Promise<void> {
     const email = getIdentity(req).email;
     let mediaUrls: string[] = []; // hoisted so the error path can log orphaned R2 urls
     try {
+      if (!isPublishMode(b.publish)) throw new Error("Say whether to schedule it or send it as a draft.");
+      const publish = b.publish;
       const creds = await getMetricoolCreds(pool);
       const networks = Array.isArray(b.networks) ? b.networks : [];
       const warnings = charWarnings(b.text || "", networks);
@@ -64,13 +68,12 @@ export async function metricoolRoutes(app: FastifyInstance): Promise<void> {
         normalize: (url) => normalizeMedia(creds, url),
       });
 
-      // An Instagram post publishes itself at the scheduled time, so a missing
-      // image isn't something a human gets a chance to fix — Instagram rejects
-      // it outright. Say so plainly rather than implying there's time to patch it.
-      const note = networks.includes("instagram") && !mediaUrls.length
+      // A scheduled Instagram post publishes itself, so a missing image isn't
+      // something a human gets a chance to fix — Instagram rejects it outright.
+      const note = publish === "scheduled" && networks.includes("instagram") && !mediaUrls.length
         ? "Instagram won't publish without an image — add one in Metricool before the scheduled time." : "";
 
-      const payload = buildSchedulerPayload({ text: b.text || "", networks, dateTime: b.dateTime, timezone: b.timezone, mediaUrls });
+      const payload = buildSchedulerPayload({ text: b.text || "", networks, dateTime: b.dateTime, timezone: b.timezone, mediaUrls, publish });
       const postId = await schedulePost(creds, payload);
 
       await logSend(pool, {

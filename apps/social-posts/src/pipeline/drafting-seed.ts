@@ -51,8 +51,8 @@ export function SERIES_PLAN_PROMPT(p: { name: string; description: string; conte
     "Cadence: " + (p.cadence || "weekly"),
     "Start date: " + (p.startDate || "TBD"),
     "",
-    "Return ONLY a JSON array of objects, each with: date (YYYY-MM-DD), phase (string, group label or empty), title (short post title), sub (angle/description for this post, 1-2 sentences).",
+    "Return ONLY a JSON object with one key, posts: an array of objects, each with: date (YYYY-MM-DD), phase (string, group label or empty), title (short post title), sub (angle/description for this post, 1-2 sentences).",
     "Plan the arc: build toward a conclusion, group into 2-3 phases if it makes sense.",
-    "No markdown fences, just valid JSON array.",
+    "No markdown fences, just valid JSON.",
   ];
 }

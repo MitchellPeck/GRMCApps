@@ -8,6 +8,10 @@ export interface SourceContent {
   kind: "mailchimp" | "buzzsprout" | "manual" | "sermon";
   id: string; title: string; url: string; date: string; dateLine: string; content: string;
   isDraft?: boolean; notYetPublic?: boolean; durationLabel?: string;
+  /** A podcast episode's transcript, once its audio has been transcribed. */
+  transcript?: string;
+  /** Where the episode's transcription is: its recording's id and state. */
+  audio?: { id: string; status: string; progress: string; error: string };
 }
 
 export interface PromptInput {
@@ -20,7 +24,9 @@ export interface PromptInput {
 }
 
 const SYS = "You draft social media posts for Grace Resurrection Methodist Church (GRMC) in Marietta, GA. "
-  + "Return ONLY a JSON object, no markdown fences, just valid JSON.";
+  + "Return ONLY a JSON object, no markdown fences, just valid JSON. "
+  + "Always write the post, even with little to go on: work from the title, event, source and instructions, "
+  + "and never answer with questions or notes instead of a post.";
 
 export function buildDraftPrompt(p: PromptInput): { system: string; user: string; keys: string[] } {
   const selected = PLATFORMS.filter((x) => p.platforms.includes(x.key));
@@ -42,14 +48,21 @@ export function buildDraftPrompt(p: PromptInput): { system: string; user: string
 
   const s = p.source;
   if (s && s.kind === "sermon") {
-    lines.push("", "--- SOURCE ---", "SERMON RECORDING: " + (s.title || "this Sunday's sermon") + (s.dateLine ? ` (${s.dateLine})` : ""),
+    // Any video: a sermon, a testimony, an event clip. The event's notes and the
+    // instructions say what it is; the file name is only a hint.
+    lines.push("", "--- SOURCE ---", "VIDEO: " + (s.title || "(untitled)") + (s.dateLine ? ` (${s.dateLine})` : ""),
+      "This post goes out with or about this video. The caption should fit what is said in it.",
       "This is an automatic transcript: names, places and scripture references may be misheard. Don't quote a verse reference unless it's clear from the text.",
-      "", "SERMON TRANSCRIPT:", s.content || "(not provided)");
+      "", "VIDEO TRANSCRIPT:", s.content || "(not provided)");
   } else if (s && s.kind === "buzzsprout") {
     lines.push("", "--- SOURCE ---", "EPISODE TITLE: " + (s.title || "(not available)"), "LISTEN URL: " + (s.url || "(not provided)"));
     if (s.durationLabel) lines.push("EPISODE LENGTH: " + s.durationLabel);
     if (s.notYetPublic) lines.push("NOT YET PUBLIC: this episode is " + s.dateLine + ". Write as though it is landing, not as though it is already out.");
     lines.push("", "EPISODE DESCRIPTION:", s.content || "(not provided)");
+    if (s.transcript) {
+      lines.push("", "EPISODE TRANSCRIPT (automatic: names, places and scripture references may be misheard; "
+        + "where the description spells something, trust the description):", s.transcript);
+    }
   } else if (s) {
     lines.push("", "--- SOURCE ---", "SOURCE: " + (s.title || "(untitled)") + (s.isDraft ? " (this issue has not been sent yet; don't describe it as already out)" : ""),
       "SOURCE URL: " + (s.url || "(not provided)"), "", "SOURCE CONTENT:", s.content || "(not provided)");

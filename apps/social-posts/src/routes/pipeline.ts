@@ -1,14 +1,15 @@
-import { FastifyInstance } from "fastify";
+import { FastifyInstance, FastifyRequest } from "fastify";
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import { addDays } from "../dates";
+import { DEFAULT_TZ, addDays } from "../dates";
 import { getSetting, setSetting } from "../settings";
-import { buildCaptureIcs } from "../pipeline/ical";
+import { buildCaptureIcs, buildPostsIcs } from "../pipeline/ical";
 import { draftAll, draftCaptions, parseDraftRequest, resolveForDraft } from "../pipeline/caption";
 import { checkPublished } from "../pipeline/publish-check";
 import { listDraftHistory } from "../pipeline/history";
 import { planFromEpisode, proposeSeriesPlan, saveSeriesPlan } from "../pipeline/planning";
 import { listCampaigns } from "../mailchimp";
-import { listEpisodes } from "../buzzsprout";
+import { getEpisode, listEpisodes } from "../buzzsprout";
+import { startEpisodeTranscript } from "../pipeline/episode-audio";
 import { getApprovedImageBytes } from "../approvals-client";
 import { MAX_UPLOAD_BYTES, storeUpload } from "../pipeline/uploads";
 import { Readable } from "node:stream";
@@ -49,7 +50,15 @@ async function icalToken(): Promise<string> {
   return token;
 }
 
-function sameSecret(a: string, b: string): boolean {
+// Both feeds share the one secret, each as everyone's or just yours.
+async function feedUrls(req: FastifyRequest) {
+  const base = `https://${req.hostname}/ical/${await icalToken()}`;
+  const who = "?who=" + encodeURIComponent(getIdentity(req).email);
+  return { url: `${base}/capture.ics`, mineUrl: `${base}/capture.ics${who}`,
+           postsUrl: `${base}/posts.ics`, postsMineUrl: `${base}/posts.ics${who}` };
+}
+
+export function sameSecret(a: string, b: string): boolean {
   const x = Buffer.from(a), y = Buffer.from(b);
   return x.length === y.length && timingSafeEqual(x, y);
 }
@@ -182,7 +191,7 @@ export async function pipelineRoutes(app: FastifyInstance): Promise<void> {
     if (!input.ok) return input;
     try {
       const { effective, source } = await resolveForDraft(pool, input.value);
-      const { content, ...rest } = source || ({} as Record<string, string>);
+      const { content, transcript, ...rest } = source || ({} as Record<string, string>);
       return { ok: true, effective: { source: effective.source, instructions: effective.instructions, from: effective.from },
                source: source ? { ...rest, excerpt: (content || "").slice(0, 400) } : null };
     } catch (e) {
@@ -291,18 +300,14 @@ export async function pipelineRoutes(app: FastifyInstance): Promise<void> {
     return r.ok ? { ok: true, ...r.value } : r;
   }));
 
-  // ── Capture calendar feed ──
+  // ── Calendar feeds (captures and posts) ──
   // The feed URL is the secret (calendar apps can't sign in), so it can be
   // reset, which breaks every existing subscription at once.
-  app.get("/api/pipeline/ical", async (req) => guard(async () => {
-    const base = `https://${req.hostname}/ical/${await icalToken()}/capture.ics`;
-    return { ok: true, url: base, mineUrl: base + "?who=" + encodeURIComponent(getIdentity(req).email) };
-  }));
+  app.get("/api/pipeline/ical", async (req) => guard(async () => ({ ok: true, ...(await feedUrls(req)) })));
 
   app.post("/api/pipeline/ical/reset", async (req) => guard(async () => {
     await setSetting(pool, ICAL_SETTING, randomBytes(24).toString("base64url"));
-    const base = `https://${req.hostname}/ical/${await icalToken()}/capture.ics`;
-    return { ok: true, url: base, mineUrl: base + "?who=" + encodeURIComponent(getIdentity(req).email) };
+    return { ok: true, ...(await feedUrls(req)) };
   }));
 
   // Reached WITHOUT the hub login (its own Traefik router), so it checks the token itself.
@@ -318,6 +323,23 @@ export async function pipelineRoutes(app: FastifyInstance): Promise<void> {
     return buildCaptureIcs(media, {
       name: who ? "GRMC captures: " + who : "GRMC capture calendar",
       pageUrl: `https://${req.hostname}/pipeline#calendar`, stamp: new Date(),
+    });
+  });
+
+  // Every dated post (not cancelled ones), same token and same ?who= as above.
+  app.get("/ical/:token/posts.ics", async (req, reply) => {
+    const { token } = req.params as { token: string };
+    const stored = await getSetting(pool, ICAL_SETTING);
+    if (!stored || !sameSecret(token, stored)) return reply.code(404).send("Not found");
+    const who = String((req.query as Query).who || "").trim();
+    const today = await referenceDate(pool);
+    const items = await listContent(pool, { from: addDays(today, -30), to: addDays(today, 365), ownerEmail: who || undefined });
+    reply.header("content-type", "text/calendar; charset=utf-8");
+    reply.header("cache-control", "private, max-age=900");
+    return buildPostsIcs(items, {
+      name: who ? "GRMC posts: " + who : "GRMC posts",
+      pageUrl: `https://${req.hostname}/#calendar`, stamp: new Date(),
+      timezone: (await getSetting(pool, "default_timezone")) || DEFAULT_TZ,
     });
   });
 
@@ -375,6 +397,14 @@ export async function pipelineRoutes(app: FastifyInstance): Promise<void> {
     reply.header("content-type", "text/plain; charset=utf-8");
     return s.transcript || "(No transcript yet.)";
   });
+
+  // Transcribe a podcast episode's audio again (it failed, or was re-uploaded to Buzzsprout).
+  app.post("/api/pipeline/episodes/:id/transcribe", async (req) => guard(async () => {
+    const ep = await getEpisode(pool, (req.params as { id: string }).id);
+    if (!ep.audioUrl) return { ok: false, error: "Buzzsprout has no audio for that episode yet." };
+    const s = await startEpisodeTranscript(pool, ep, sermonOpts(), { retry: true });
+    return { ok: true, sermon: sermonSummary(s) };
+  }));
 
   app.post("/api/pipeline/sermons/:id/retry", async (req) => guard(async () => {
     const r = await retrySermon(pool, (req.params as { id: string }).id, sermonOpts());

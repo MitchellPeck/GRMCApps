@@ -6,7 +6,7 @@ import { decodeImageDataUrl } from "./r2";
 test("buildSchedulerPayload shapes the Metricool body", () => {
   const p = buildSchedulerPayload({
     text: "Hello", networks: ["facebook", "instagram"],
-    dateTime: "2026-06-15T09:00:00", timezone: "America/New_York", mediaUrls: [],
+    dateTime: "2026-06-15T09:00:00", timezone: "America/New_York", mediaUrls: [], publish: "scheduled",
   });
   assert.deepEqual(p.publicationDate, { dateTime: "2026-06-15T09:00:00", timezone: "America/New_York" });
   assert.deepEqual(p.providers, [{ network: "facebook" }, { network: "instagram" }]);
@@ -16,28 +16,27 @@ test("buildSchedulerPayload shapes the Metricool body", () => {
 });
 
 // Metricool only publishes a post when autoPublish is true; autoPublish:false is
-// its "draft awaiting approval" state, and the two flags have to agree or the
-// post lands in the planner and never goes anywhere. Instagram has to publish
-// itself, so selecting it turns publishing on for the whole post.
-test("buildSchedulerPayload auto-publishes when Instagram is selected", () => {
-  const ig = buildSchedulerPayload({ text: "x", networks: ["facebook", "instagram"], dateTime: "2026-06-15T09:00:00", timezone: "America/New_York", mediaUrls: [] });
-  assert.equal(ig.autoPublish, true);
-  assert.equal(ig.draft, false);
+// its draft state, and the two flags have to agree or the post lands in the
+// planner and never goes anywhere. The sender picks which, for every network.
+test("buildSchedulerPayload schedules a post to publish itself when asked", () => {
+  const p = buildSchedulerPayload({ text: "x", networks: ["facebook", "twitter"], dateTime: "2026-06-15T09:00:00", timezone: "America/New_York", mediaUrls: [], publish: "scheduled" });
+  assert.equal(p.autoPublish, true);
+  assert.equal(p.draft, false);
 });
 
-test("buildSchedulerPayload leaves non-Instagram sends as approvable drafts", () => {
-  const fb = buildSchedulerPayload({ text: "x", networks: ["facebook", "twitter"], dateTime: "2026-06-15T09:00:00", timezone: "America/New_York", mediaUrls: [] });
-  assert.equal(fb.autoPublish, false);
-  assert.equal(fb.draft, true);
+test("buildSchedulerPayload makes a draft when asked, even with Instagram", () => {
+  const p = buildSchedulerPayload({ text: "x", networks: ["facebook", "instagram"], dateTime: "2026-06-15T09:00:00", timezone: "America/New_York", mediaUrls: [], publish: "draft" });
+  assert.equal(p.autoPublish, false);
+  assert.equal(p.draft, true);
 });
 
 test("buildSchedulerPayload includes media when given a url", () => {
-  const p = buildSchedulerPayload({ text: "x", networks: ["instagram"], dateTime: "2026-06-15T09:00:00", timezone: "America/New_York", mediaUrls: ["https://pub/x.jpg"] });
+  const p = buildSchedulerPayload({ text: "x", networks: ["instagram"], dateTime: "2026-06-15T09:00:00", timezone: "America/New_York", mediaUrls: ["https://pub/x.jpg"], publish: "scheduled" });
   assert.deepEqual(p.media, ["https://pub/x.jpg"]);
 });
 
 test("buildSchedulerPayload carries X through as Metricool's twitter provider", () => {
-  const p = buildSchedulerPayload({ text: "x", networks: ["facebook", "instagram", "twitter"], dateTime: "2026-06-15T09:00:00", timezone: "America/New_York", mediaUrls: [] });
+  const p = buildSchedulerPayload({ text: "x", networks: ["facebook", "instagram", "twitter"], dateTime: "2026-06-15T09:00:00", timezone: "America/New_York", mediaUrls: [], publish: "scheduled" });
   assert.deepEqual(p.providers, [{ network: "facebook" }, { network: "instagram" }, { network: "twitter" }]);
 });
 
@@ -81,7 +80,7 @@ test("decodeImageDataUrl accepts image data urls and rejects anything else", () 
 });
 
 test("buildSchedulerPayload sends every image, in order, for a carousel", () => {
-  const p = buildSchedulerPayload({ text: "x", networks: ["instagram"], dateTime: "2026-06-15T09:00:00", timezone: "America/New_York", mediaUrls: ["https://a/1.jpg", "https://a/2.jpg"] });
+  const p = buildSchedulerPayload({ text: "x", networks: ["instagram"], dateTime: "2026-06-15T09:00:00", timezone: "America/New_York", mediaUrls: ["https://a/1.jpg", "https://a/2.jpg"], publish: "scheduled" });
   assert.deepEqual(p.media, ["https://a/1.jpg", "https://a/2.jpg"]);
 });
 

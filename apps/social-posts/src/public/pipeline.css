@@ -119,6 +119,35 @@ header a.btn-hdr{text-decoration:none}
 .pl-who{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;border-radius:9px;background:var(--navy);color:#fff;font-size:9px;font-weight:700;padding:0 4px}
 .pl-who.none{background:var(--rej-bg);color:var(--rej-fg)}
 
+/* Week of hours: a gutter of hour labels, then seven day columns. Cards are
+   placed by their publish time (--hour px per hour, --card tall), so the columns are
+   positioned containers. Narrow screens scroll it sideways. */
+.pl-wk{border:1px solid var(--rule);border-radius:var(--r-lg);background:var(--card);overflow-x:auto}
+.pl-wk-head,.pl-wk-allday,.pl-wk-body{display:grid;grid-template-columns:52px repeat(7,minmax(96px,1fr));min-width:724px}
+.pl-wk-head{border-bottom:1px solid var(--rule)}
+.pl-wk-dow{font-size:11px;font-weight:600;color:var(--muted);padding:6px 8px;border-left:1px solid var(--rule)}
+.pl-wk-dow strong{font-size:14px;color:var(--ink-soft)}
+.pl-wk-dow.today{box-shadow:inset 0 3px 0 var(--gold)}
+.pl-wk-dow.today strong{color:var(--navy)}
+.pl-wk-allday{border-bottom:1px solid var(--rule)}
+.pl-wk-allday > .pl-wk-gutter{font-size:10px;color:var(--hint);padding:6px 4px;text-align:right}
+.pl-wk-untimed{border-left:1px solid var(--rule);padding:4px;min-height:34px;display:flex;flex-direction:column;gap:4px}
+.pl-wk-scroll{max-height:620px;overflow-y:auto;min-width:724px}
+.pl-wk-body{position:relative}
+.pl-wk-hour{height:var(--hour);position:relative;border-top:1px solid var(--rule)}
+.pl-wk-hour:first-child{border-top-color:transparent}
+.pl-wk-hour span{position:absolute;top:-7px;right:6px;font-size:10px;color:var(--hint);background:var(--card);padding:0 2px}
+.pl-wk-col{position:relative;border-left:1px solid var(--rule);cursor:copy;
+  background:repeating-linear-gradient(to bottom,var(--rule) 0 1px,transparent 1px var(--hour))}
+.pl-wk-col.today{background-color:#fffdf5}
+.pl-wk-item{position:absolute;height:var(--card);z-index:1}
+.pl-wk-item .pl-card{height:100%;overflow:hidden;padding:3px 6px;gap:2px}
+.pl-wk-item .pl-card-title{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11.5px}
+.pl-wk-item .pl-card-meta{flex-wrap:nowrap;overflow:hidden}
+.pl-wk-now{position:absolute;left:0;right:0;height:2px;background:var(--gold);pointer-events:none}
+.pl-wk-ghost{position:absolute;left:2px;right:2px;height:var(--card);border:2px dashed var(--gold);border-radius:5px;background:#fffbea;
+  font-size:11px;font-weight:600;color:var(--navy);padding:2px 6px;z-index:3;pointer-events:none}
+
 .pl-tray{margin-top:14px;background:var(--card);border:1px dashed var(--rule);border-radius:var(--r-lg);padding:14px 16px}
 .pl-tray h3{font-family:var(--font-ui);font-size:13px;font-weight:600;color:var(--ink);display:flex;align-items:center;gap:8px;margin-bottom:10px}
 .pl-tray-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:6px;margin-bottom:6px}
@@ -135,7 +164,6 @@ header a.btn-hdr{text-decoration:none}
 .pl-bcard-foot{display:flex;align-items:center;gap:4px;flex-wrap:wrap;margin:6px 0}
 .pl-bcard-warn{margin:0 0 6px;font-size:12px;line-height:1.35;color:var(--rej-fg)}
 .pl-boardtools{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
-.pl-quick{padding:4px 6px;font-size:11.5px}
 
 /* ---- Event detail ---- */
 .pl-evhead{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;border-left:6px solid var(--ev);padding:4px 0 4px 16px;margin-bottom:14px;flex-wrap:wrap}

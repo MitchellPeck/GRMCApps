@@ -213,4 +213,8 @@ CREATE TABLE IF NOT EXISTS sermons (
 
 -- Why a Scheduled post hasn't become Published (e.g. Metricool's failure reason).
 ALTER TABLE content_items ADD COLUMN IF NOT EXISTS publish_check text NOT NULL DEFAULT '';
+
+-- A podcast episode's audio, fetched from Buzzsprout, is a recording too: one per episode.
+ALTER TABLE sermons ADD COLUMN IF NOT EXISTS episode_id text;
+CREATE UNIQUE INDEX IF NOT EXISTS sermons_episode_idx ON sermons (episode_id) WHERE episode_id IS NOT NULL;
 `;

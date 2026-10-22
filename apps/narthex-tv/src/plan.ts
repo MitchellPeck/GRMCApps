@@ -208,7 +208,7 @@ export type PlanSource = "takeover" | "play_now" | "schedule" | "none";
  */
 export function sourceKeyFor(p: {
   takeoverStartedAt: string | null;
-  playNow: { mediaId: number; startedAt: string } | null;
+  playNow: { mediaId: number; playlistId?: number; startedAt: string } | null;
   powerOn: boolean;
   source: PlanSource;
   entryId: number;
@@ -221,7 +221,9 @@ export function sourceKeyFor(p: {
   const scheduled = p.source === "schedule" || p.source === "none";
   return (
     (p.takeoverStartedAt ? `TAKEOVER:${p.takeoverStartedAt}` : "") +
-    (p.playNow ? `PLAYNOW:${p.playNow.mediaId}:${p.playNow.startedAt}:` : "") +
+    (p.playNow
+      ? `PLAYNOW:${p.playNow.playlistId ? `p${p.playNow.playlistId}` : p.playNow.mediaId}:${p.playNow.startedAt}:`
+      : "") +
     `${p.powerOn ? "awake" : "dark"}:${p.source}:` +
     (scheduled ? `${p.entryId}:${p.playlistId}:${p.startedAt}` : "")
   );

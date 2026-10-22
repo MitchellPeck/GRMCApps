@@ -96,6 +96,9 @@ export function nextRecurringStart(
   timeZone: string
 ): Date | null {
   let key = localDateKey(now, timeZone);
+  // A slot whose first date is weeks away would otherwise fall past the
+  // horizon and read as finished before it has ever run.
+  if (entry.effectiveFrom && entry.effectiveFrom > key) key = entry.effectiveFrom;
   for (let i = 0; i <= HORIZON_DAYS; i++) {
     const occ = occurrenceOn(entry, key, timeZone);
     if (occ && ms(occ.start) > ms(now)) return occ.start;

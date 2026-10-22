@@ -216,3 +216,12 @@ test("a schedule boundary does not re-cut Play now or a takeover", () => {
     sourceKeyFor({ ...base, ...to, source: "takeover", entryId: 4, playlistId: 11 })
   );
 });
+
+test("a Play now playlist and a Play now item with the same id are different sources", () => {
+  const base = {
+    takeoverStartedAt: null, powerOn: true, source: "play_now" as const, entryId: 0, playlistId: 0, startedAt: "",
+  };
+  const item = sourceKeyFor({ ...base, playNow: { mediaId: 3, startedAt: "x" } });
+  const list = sourceKeyFor({ ...base, playNow: { mediaId: 0, playlistId: 3, startedAt: "x" } });
+  assert.notEqual(item, list);
+});

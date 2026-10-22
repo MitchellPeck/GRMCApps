@@ -15,7 +15,7 @@ export function sermonOpts(): SermonOpts {
 }
 export const MAX_SERMON_BYTES = (Number(process.env.SOCIALPOSTS_MAX_SERMON_MB) || 4096) * 1024 * 1024;
 
-const TYPES: Record<string, string> = {
+export const TYPES: Record<string, string> = {
   "video/mp4": "mp4", "video/quicktime": "mov", "video/x-m4v": "m4v", "video/webm": "webm",
   "audio/mpeg": "mp3", "audio/mp4": "m4a", "audio/x-m4a": "m4a", "audio/aac": "aac", "audio/wav": "wav", "audio/x-wav": "wav",
 };
@@ -42,9 +42,9 @@ export function durationLabel(seconds: number): string {
 
 /** Why a sermon can't be drafted from yet, for the person waiting on it. */
 export function notReadyMessage(s: SermonRow): string {
-  if (s.status === "uploading") return "The sermon recording hasn't finished uploading.";
-  if (s.status === "error") return "The sermon couldn't be transcribed: " + s.error;
-  return "The sermon is still being transcribed" + (s.progress ? ` (${s.progress})` : "") + ". Try again in a few minutes.";
+  if (s.status === "uploading") return "The video hasn't finished uploading.";
+  if (s.status === "error") return "The video couldn't be transcribed: " + s.error;
+  return "The video is still being transcribed" + (s.progress ? ` (${s.progress})` : "") + ". Try again in a few minutes.";
 }
 
 export async function getSermon(db: Pool, id: string): Promise<SermonRow | null> {
@@ -61,7 +61,7 @@ export async function createSermon(
   const size = Number(f.size);
   if (!Number.isInteger(size) || size <= 0) return fail("That file is empty.");
   if (size > MAX_SERMON_BYTES) return fail(`That file is larger than ${Math.round(MAX_SERMON_BYTES / 1024 / 1024 / 1024)} GB.`);
-  const fileName = String(f.fileName || "Sermon").slice(0, 200);
+  const fileName = String(f.fileName || "Video").slice(0, 200);
   const title = fileName.replace(/\.[a-z0-9]{2,4}$/i, "");
   const r = await db.query(
     `INSERT INTO sermons (title, file_name, size, mime, status, created_by) VALUES ($1,$2,$3,$4,'uploading',$5) RETURNING *`,

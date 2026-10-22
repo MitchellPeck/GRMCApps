@@ -38,6 +38,8 @@ export interface NowPlaying {
   /** Whether the TV should be on at all, and when the schedule next flips that. */
   power: { on: boolean; changesAt: Date | null };
   playNow: PlayNow;
+  /** The playlist a Play now is looping, when it is a playlist rather than one item. */
+  playNowPlaylist: PlaylistRow | null;
   takeover: Takeover;
   /** Something is scheduled, but no covering playlist has anything to show. */
   nothingPlayable: boolean;
@@ -165,10 +167,21 @@ export async function resolveNow(
   const playNow = opts.live ? await getPlayNow(pool) : NO_PLAY_NOW;
   const takeover = opts.live ? await getTakeover(pool) : NO_TAKEOVER;
 
+  let playNowPlaylist: PlaylistRow | null = null;
   if (playNow.active) {
     // Empty while its item is being re-rendered: black for a moment, but it
     // is still Play now that owns the screen, and the admin card says so.
-    frames = await framesForPlayNow(pool, playNow, settings, at);
+    if (playNow.playlistId) {
+      playNowPlaylist = await getPlaylist(pool, playNow.playlistId);
+      // Seeded by when it was started, so a shuffled playlist keeps one order
+      // until somebody presses Play now again.
+      const seedStart = playNow.startedAt ? new Date(playNow.startedAt) : null;
+      frames = playNowPlaylist
+        ? await framesForPlaylist(pool, playNowPlaylist, seedStart, settings, at)
+        : [];
+    } else {
+      frames = await framesForPlayNow(pool, playNow, settings, at);
+    }
     source = "play_now";
     nothingPlayable = false;
   }
@@ -179,7 +192,9 @@ export async function resolveNow(
     changesAt: coverage.changesAt,
   };
 
-  return { resolution, entry, playlist, source, settings, power, playNow, takeover, nothingPlayable, frames };
+  return {
+    resolution, entry, playlist, source, settings, power, playNow, playNowPlaylist, takeover, nothingPlayable, frames,
+  };
 }
 
 export async function buildPlan(
@@ -187,7 +202,7 @@ export async function buildPlan(
   opts: { at: Date; rotation: number }
 ): Promise<Plan> {
   const now = await resolveNow(pool, opts.at, { live: true });
-  const { resolution, entry, playlist, source, settings, power, playNow, takeover } = now;
+  const { resolution, entry, playlist, source, settings, power, playNow, playNowPlaylist, takeover } = now;
   // Its own start and end are known only when it is the winner; a fallback
   // entry borrowed the screen and the plan does not need them to cut.
   const isWinner = entry !== null && entry.id === resolution.entry?.id;
@@ -217,7 +232,8 @@ export async function buildPlan(
         }]
       : [];
 
-  const showingPlaylist = source === "schedule" ? playlist : null;
+  const showingPlaylist =
+    source === "schedule" ? playlist : source === "play_now" ? playNowPlaylist : null;
   const transition =
     showingPlaylist && (showingPlaylist.transition === "none" || showingPlaylist.transition === "fade")
       ? showingPlaylist.transition
@@ -226,7 +242,9 @@ export async function buildPlan(
   const skeleton = {
     sourceKey: sourceKeyFor({
       takeoverStartedAt: takeover.active ? takeover.startedAt : null,
-      playNow: playNow.active ? { mediaId: playNow.mediaId, startedAt: playNow.startedAt ?? "" } : null,
+      playNow: playNow.active
+        ? { mediaId: playNow.mediaId, playlistId: playNow.playlistId, startedAt: playNow.startedAt ?? "" }
+        : null,
       powerOn: power.on,
       source,
       entryId: entry?.id ?? 0,

@@ -8,7 +8,8 @@ import { CampaignSummary, getCampaignText, listCampaigns } from "../mailchimp";
 import { getEpisode } from "../buzzsprout";
 import { Cutoff, SourceConfig, SourceRef } from "./drafting";
 import { SourceContent } from "./prompt";
-import { durationLabel, getSermon, notReadyMessage } from "./sermons";
+import { SermonOpts, durationLabel, getSermon, notReadyMessage, sermonOpts } from "./sermons";
+import { startEpisodeTranscript } from "./episode-audio";
 
 /** The last day an issue may have been created on, or null for "newest". */
 export function cutoffDate(cutoff: Cutoff, postDate: string | null): string | null {
@@ -38,30 +39,39 @@ export function pickCampaign(campaigns: CampaignSummary[], cutoff: Cutoff, postD
  * returns null: the editor asks which episode.
  */
 export async function resolveSource(
-  pool: Pool, source: SourceConfig, ref: SourceRef | null, postDate: string | null,
+  pool: Pool, source: SourceConfig, ref: SourceRef | null, postDate: string | null, opts: SermonOpts = sermonOpts(),
 ): Promise<SourceContent | null> {
   if (ref?.kind === "manual") {
     return { kind: "manual", id: "", title: ref.title || "Pasted content", url: ref.url || "", date: "", dateLine: "", content: ref.content || "" };
   }
-  // "Don't use the event's source for this post" outranks an issue or episode stored earlier.
-  if (source.kind === "none") return null;
-  // A sermon post drafts from the recording uploaded to it; until there is
-  // one there's nothing to draft from, and until it's transcribed, say so.
+  // A video post drafts from the recording uploaded to it (kind "sermon" is
+  // the stored name: it began as sermons only). An upload is this post's own
+  // choice, like pasted text, so it counts whatever the event's source is.
+  // Until there is one there's nothing to draft from; until it's transcribed, say so.
   if (ref?.kind === "sermon" || (!ref && source.kind === "sermon")) {
     if (!ref?.id) return null;
     const s = await getSermon(pool, ref.id);
-    if (!s) throw new Error("That sermon recording is gone. Upload it again.");
+    if (!s) throw new Error("That video is gone. Upload it again.");
     if (s.status !== "ready") throw new Error(notReadyMessage(s));
     return { kind: "sermon", id: s.id, title: s.title, url: "", date: "", dateLine: durationLabel(s.durationSeconds) + " recording",
              content: s.transcript.slice(0, 60000) };
   }
+  // "Don't use the event's source for this post" outranks an issue or episode stored earlier.
+  if (source.kind === "none") return null;
   if (ref?.kind === "buzzsprout" || (!ref && source.kind === "buzzsprout")) {
     if (!ref?.id) return null;
     const ep = await getEpisode(pool, ref.id);
-    return {
+    const out: SourceContent = {
       kind: "buzzsprout", id: String(ep.id), title: ep.title, url: ep.listenUrl, date: ep.publishDate, dateLine: ep.dateLine,
       content: ep.description, notYetPublic: !ep.isPublished, durationLabel: ep.durationLabel,
     };
+    // The audio is transcribed once per episode, starting the first time anyone looks.
+    if (ep.audioUrl) {
+      const rec = await startEpisodeTranscript(pool, ep, opts);
+      out.audio = { id: rec.id, status: rec.status, progress: rec.progress, error: rec.error };
+      if (rec.status === "ready") out.transcript = rec.transcript.slice(0, 60000);
+    }
+    return out;
   }
   if (ref?.kind === "mailchimp" || source.kind === "mailchimp") {
     let summary: CampaignSummary | null = null;

@@ -3,10 +3,12 @@ import assert from "node:assert/strict";
 import { Pool } from "pg";
 import { getPlayNow, parsePlayNow } from "./play-now";
 
-// Answers the two lookups getPlayNow makes: the settings row and the media row.
+// Answers the lookups getPlayNow makes: the settings row, and the media or
+// playlist row it names.
 function fakePool(
   settings: Record<string, string>,
-  media: Record<number, { status: string; title: string } | null>
+  media: Record<number, { status: string; title: string } | null>,
+  playlists: Record<number, { name: string; archived: boolean } | null> = {}
 ): Pool {
   return {
     async query(sql: string, params: unknown[]) {
@@ -16,6 +18,10 @@ function fakePool(
       }
       if (sql.includes("FROM media")) {
         const row = media[Number(params[0])];
+        return { rows: row ? [{ id: Number(params[0]), ...row }] : [] };
+      }
+      if (sql.includes("FROM playlists")) {
+        const row = playlists[Number(params[0])];
         return { rows: row ? [{ id: Number(params[0]), ...row }] : [] };
       }
       throw new Error(`unexpected query: ${sql}`);
@@ -36,7 +42,7 @@ test("a row without a usable media id is no Play now", () => {
 
 test("a good row is read back", () => {
   const p = parsePlayNow(JSON.stringify({ active: true, mediaId: 7, startedAt: "2026-10-20T15:00:00.000Z", startedBy: "Pat" }));
-  assert.deepEqual(p, { active: true, mediaId: 7, title: "", startedAt: "2026-10-20T15:00:00.000Z", startedBy: "Pat" });
+  assert.deepEqual(p, { active: true, mediaId: 7, playlistId: 0, title: "", startedAt: "2026-10-20T15:00:00.000Z", startedBy: "Pat" });
 });
 
 test("Play now of a deleted or failed item is inactive", async () => {
@@ -59,4 +65,24 @@ test("Play now of a ready item carries its title", async () => {
   const p = await getPlayNow(fakePool({ play_now: row }, { 7: { status: "ready", title: "Harvest supper" } }));
   assert.equal(p.active, true);
   assert.equal(p.title, "Harvest supper");
+});
+
+test("a playlist row is read back as a playlist Play now", () => {
+  const p = parsePlayNow(JSON.stringify({ active: true, playlistId: 4, startedAt: "2026-10-21T15:00:00.000Z", startedBy: "Pat" }));
+  assert.equal(p.active, true);
+  assert.equal(p.playlistId, 4);
+  assert.equal(p.mediaId, 0);
+});
+
+test("Play now of a playlist carries its name", async () => {
+  const row = JSON.stringify({ active: true, playlistId: 4, startedAt: "2026-10-21T15:00:00.000Z", startedBy: "Pat" });
+  const p = await getPlayNow(fakePool({ play_now: row }, {}, { 4: { name: "Sunday loop", archived: false } }));
+  assert.equal(p.active, true);
+  assert.equal(p.title, "Sunday loop");
+});
+
+test("Play now of a deleted or archived playlist is inactive", async () => {
+  const row = JSON.stringify({ active: true, playlistId: 4, startedAt: "2026-10-21T15:00:00.000Z", startedBy: "Pat" });
+  assert.equal((await getPlayNow(fakePool({ play_now: row }, {}, { 4: null }))).active, false);
+  assert.equal((await getPlayNow(fakePool({ play_now: row }, {}, { 4: { name: "Old", archived: true } }))).active, false);
 });

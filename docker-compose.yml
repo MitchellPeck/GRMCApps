@@ -156,6 +156,14 @@ services:
       - "traefik.http.routers.social-ical.entrypoints=websecure"
       - "traefik.http.routers.social-ical.tls=true"
       - "traefik.http.routers.social-ical.service=social"
+      # The Claude connector (/mcp/<token>, one link per person) skips the hub
+      # login the same way: Claude's servers call it, and can't sign in. The
+      # OAuth discovery paths come along so a client probing them gets a plain
+      # 404 (meaning "no sign-in, use the link") rather than the hub's login page.
+      - "traefik.http.routers.social-mcp.rule=Host(`social.${BASE_DOMAIN}`) && (PathPrefix(`/mcp/`) || PathPrefix(`/.well-known/oauth`))"
+      - "traefik.http.routers.social-mcp.entrypoints=websecure"
+      - "traefik.http.routers.social-mcp.tls=true"
+      - "traefik.http.routers.social-mcp.service=social"
       - "com.centurylinklabs.watchtower.enable=true"
 
   approvals:

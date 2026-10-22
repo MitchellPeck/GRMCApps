@@ -72,11 +72,13 @@ export function durationLabel(seconds: number): string {
 export interface BuzzsproutRow {
   id: number; title: string; description: string; artwork_url?: string;
   custom_url: string | null; published_at: string; duration: number;
+  /** The episode's MP3, hosted by Buzzsprout. */
+  audio_url?: string | null;
   episode_number: number | null; season_number: number | null; private: boolean;
 }
 
 export interface Episode {
-  id: number; title: string; description: string; listenUrl: string; artworkUrl: string;
+  id: number; title: string; description: string; listenUrl: string; artworkUrl: string; audioUrl: string;
   publishedAt: string; publishDate: string; isPublished: boolean; isPrivate: boolean;
   episodeNumber: number | null; seasonNumber: number | null;
   durationLabel: string; dateLine: string; label: string;
@@ -91,6 +93,7 @@ export function toEpisode(raw: BuzzsproutRow, podcastId: string, tz: string, now
     description: htmlToText(raw.description || "").substring(0, 4000),
     listenUrl: listenUrlFor(raw, podcastId),
     artworkUrl: raw.artwork_url || "",
+    audioUrl: raw.audio_url || "",
     publishedAt: raw.published_at || "",
     publishDate: isNaN(at.getTime()) ? "" : localDateIn(tz, at),
     isPublished: isPublished(raw, now),

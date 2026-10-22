@@ -4,7 +4,7 @@
 // Works from the editor's state, saved or not; draftAndSave works from a
 // saved post and stores the result.
 import { Pool } from "pg";
-import { callClaude, stripJsonFences } from "../claude";
+import { callClaude, stringsSchema, stripJsonFences } from "../claude";
 import { getSetting } from "../settings";
 import { formatMonthDayYear } from "../dates";
 import { DEFAULT_PLATFORMS, PLATFORMS, RUN_EVENTS } from "./config";
@@ -74,7 +74,8 @@ function overLimit(key: string, text: string): string {
 
 async function shortenForX(pool: Pool, text: string): Promise<string> {
   const raw = await callClaude(pool, 'Return ONLY a JSON object with key "x", no markdown fences.',
-    `Shorten this X post to at most 250 characters (links count as 23), keeping its point and any link:\n\n${text}`);
+    `Shorten this X post to at most 250 characters (links count as 23), keeping its point and any link:\n\n${text}`,
+    { schema: stringsSchema(["x"]), maxTokens: 1000 });
   try {
     const x = JSON.parse(stripJsonFences(raw)).x;
     return typeof x === "string" && x.trim() ? x.trim() : text;
@@ -87,7 +88,14 @@ export async function draftCaptions(pool: Pool, req: DraftRequest, createdBy: st
   catch (e) { return fail((e as Error).message); }
   const { effective, source, event } = resolved;
   if (effective.source.kind === "buzzsprout" && !source) return fail("Pick the episode this post is about.");
-  if (effective.source.kind === "sermon" && !source) return fail("Upload the sermon recording first.");
+  if (effective.source.kind === "sermon" && !source) return fail("Upload the video first.");
+  // A podcast episode drafts from what was said: wait for its transcript. If
+  // the audio can't be transcribed, draft from the show notes and say so.
+  const audio = source?.kind === "buzzsprout" ? source.audio : undefined;
+  if (audio && audio.status !== "ready" && audio.status !== "error") {
+    return fail("The episode is still being transcribed" + (audio.progress ? ` (${audio.progress})` : "") + ". Try again in a few minutes.");
+  }
+  const audioWarning = audio?.status === "error" ? `Drafted from the show notes only: ${audio.error}` : "";
 
   let seriesPosition: { n: number; of: number } | null = null;
   // Only a real series (an arc of posts) has a position; the weekly runs'
@@ -111,7 +119,9 @@ export async function draftCaptions(pool: Pool, req: DraftRequest, createdBy: st
   });
 
   let parsed: Record<string, unknown>;
-  try { parsed = JSON.parse(stripJsonFences(await callClaude(pool, prompt.system, prompt.user))); }
+  // The schema makes the reply JSON with exactly these keys, even when there's
+  // little to go on (no brief), where Claude used to answer in prose instead.
+  try { parsed = JSON.parse(stripJsonFences(await callClaude(pool, prompt.system, prompt.user, { schema: stringsSchema(prompt.keys) }))); }
   catch (e) {
     const msg = (e as Error).message;
     return fail(e instanceof SyntaxError ? "Claude's reply wasn't readable. Try again." : msg);
@@ -138,6 +148,7 @@ export async function draftCaptions(pool: Pool, req: DraftRequest, createdBy: st
     result.captions = captions;
     result.warnings = Object.entries(captions).map(([k, v]) => overLimit(k, v)).filter(Boolean);
   }
+  if (audioWarning) result.warnings.unshift(audioWarning);
   if (req.contentItemId) {
     await logDraft(pool, req.contentItemId, { captionMode: req.captionMode, caption: result.caption, captions: result.captions }, createdBy);
   }

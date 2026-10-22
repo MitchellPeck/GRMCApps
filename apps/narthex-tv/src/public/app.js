@@ -167,7 +167,8 @@
 
     if (data.source === "play_now" && data.playNow) {
       what.appendChild(el("div", "now-title", data.playNow.title));
-      lines.push("Playing because someone pressed Play now. It stays on until cleared.");
+      lines.push((data.playNow.playlistId ? "Looping this playlist" : "Playing") +
+        " because someone pressed Play now. It stays on until cleared.");
       finish();
       return;
     }
@@ -217,7 +218,8 @@
     alert.style.gap = "12px";
     var text = el("div");
     text.style.flex = "1";
-    text.appendChild(el("strong", null, "Playing now: " + p.title));
+    text.appendChild(el("strong", null, "Playing now: " +
+      (p.playlistId ? "the \u201c" + p.title + "\u201d playlist" : p.title)));
     if (p.startedBy) {
       text.appendChild(el("div", "hint", "Started by " + p.startedBy +
         (p.startedAt ? " " + fmtWhen(p.startedAt) : "")));
@@ -261,6 +263,69 @@
     }
     box.appendChild(alert);
   }
+
+  // ── play now ─────────────────────────────────────────────────────────────
+  function fillPlayNowPicker() {
+    var kind = $("pn-kind").value;
+    var sel = $("pn-pick");
+    var current = sel.value;
+    sel.innerHTML = "";
+    $("pn-pick-label").textContent = kind === "playlist" ? "Playlist" : "Media item";
+    var options = kind === "playlist"
+      ? playlists.map(function (pl) { return [pl.id, pl.name]; })
+      : mediaList
+          .filter(function (m) { return m.status === "ready"; })
+          .map(function (m) { return [m.id, m.title]; });
+    if (!options.length) {
+      var none = el("option", null, kind === "playlist" ? "No playlists yet" : "Nothing ready to play yet");
+      none.value = "";
+      sel.appendChild(none);
+      return;
+    }
+    options.forEach(function (o) {
+      var opt = el("option", null, o[1]);
+      opt.value = o[0];
+      sel.appendChild(opt);
+    });
+    if (current) sel.value = current;
+    if (sel.selectedIndex < 0) sel.selectedIndex = 0;
+  }
+  $("pn-kind").addEventListener("change", fillPlayNowPicker);
+
+  // Straight onto the screen, over the schedule, until somebody clears it.
+  // Turns the TV on if it was off. `target` is {mediaId} or {playlistId}.
+  async function startPlayNow(target, title, msgBox) {
+    try {
+      var current = (await api("GET", "/api/play-now")).playNow;
+      var same = current && current.active && (target.playlistId
+        ? current.playlistId === target.playlistId
+        : current.mediaId === target.mediaId);
+      if (current && current.active && !same &&
+          !confirm("Replace \u201c" + current.title + "\u201d with \u201c" + title + "\u201d on the screen?")) {
+        return false;
+      }
+      await api("POST", "/api/play-now", target);
+      return true;
+    } catch (e) {
+      msg(msgBox, e.message, "err");
+      return false;
+    }
+  }
+
+  $("pn-start").addEventListener("click", async function () {
+    var id = Number($("pn-pick").value);
+    if (!id) { msg("pn-msg", "Pick something to play.", "err"); return; }
+    var sel = $("pn-pick");
+    var title = sel.options[sel.selectedIndex].textContent;
+    var target = $("pn-kind").value === "playlist" ? { playlistId: id } : { mediaId: id };
+    msg("pn-msg", "");
+    busy("pn-start", true);
+    try {
+      if (await startPlayNow(target, title, "pn-msg")) loadNow();
+    } finally {
+      busy("pn-start", false);
+    }
+  });
 
   $("to-start").addEventListener("click", async function () {
     var headline = $("to-headline").value.trim();
@@ -403,6 +468,55 @@
     disabled: ["pill pill-rejected", "Off"]
   };
 
+  // The id of the entry the form is changing, or null when it is adding one.
+  var editingEntry = null;
+
+  function resetScheduleForm() {
+    editingEntry = null;
+    $("s-form-title").textContent = "Put a playlist on the screen";
+    $("s-save").setAttribute("data-default", "Add to the schedule");
+    $("s-save").textContent = "Add to the schedule";
+    $("s-cancel").hidden = true;
+    $("s-label").value = "";
+    renderSchedule();
+  }
+  $("s-cancel").addEventListener("click", resetScheduleForm);
+
+  function editEntry(entry) {
+    editingEntry = entry.id;
+    var sel = $("s-playlist");
+    // An archived playlist is not in the list, but it is still what this entry
+    // plays; offer it so saving a time change does not quietly swap playlists.
+    if (!Array.prototype.some.call(sel.options, function (o) { return Number(o.value) === entry.playlistId; })) {
+      var o = el("option", null, entry.playlistName + " (archived)");
+      o.value = entry.playlistId;
+      sel.appendChild(o);
+    }
+    sel.value = entry.playlistId;
+    $("s-mode").value = entry.mode;
+    syncModeFields();
+    if (entry.mode === "recurring") {
+      chosenDays = (entry.days || []).slice();
+      renderDayPicker();
+      $("s-start-time").value = (entry.startTime || "").slice(0, 5);
+      $("s-end-time").value = (entry.endTime || "").slice(0, 5);
+      $("s-from").value = entry.effectiveFrom || "";
+      $("s-to").value = entry.effectiveTo || "";
+    } else {
+      $("s-start").value = entry.startsAt ? toLocalInput(entry.startsAt) : "";
+      $("s-end").value = entry.endsAt ? toLocalInput(entry.endsAt) : "";
+    }
+    $("s-label").value = entry.label || "";
+    $("s-priority").value = entry.priority || 0;
+    $("s-form-title").textContent = "Change " + (entry.label ? "\u201c" + entry.label + "\u201d" : "this schedule entry");
+    $("s-save").setAttribute("data-default", "Save changes");
+    $("s-save").textContent = "Save changes";
+    $("s-cancel").hidden = false;
+    msg("schedule-msg", "");
+    renderSchedule();
+    $("s-form-title").scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
   function renderSchedule() {
     var box = $("schedule-list");
     box.innerHTML = "";
@@ -415,7 +529,7 @@
 
     scheduleEntries.forEach(function (entry) {
       var row = el("div", "row" + (entry.state === "active" ? " is-active" : "") +
-        (entry.enabled ? "" : " is-off"));
+        (entry.enabled ? "" : " is-off") + (entry.id === editingEntry ? " selected" : ""));
       var main = el("div", "row-main");
 
       var title = el("div", "row-title");
@@ -441,6 +555,7 @@
 
       if (can("schedule")) {
         var actions = el("div", "row-actions");
+        actions.appendChild(button("Edit", "btn-sm", function () { editEntry(entry); }));
         actions.appendChild(button(entry.enabled ? "Turn off" : "Turn on", "btn-sm", async function () {
           try {
             await api("PATCH", "/api/schedule/" + entry.id, { enabled: !entry.enabled });
@@ -452,6 +567,7 @@
           if (!confirm("Remove this from the schedule?")) return;
           try {
             await api("DELETE", "/api/schedule/" + entry.id);
+            if (editingEntry === entry.id) resetScheduleForm();
             await loadSchedule();
             loadNow();
           } catch (e) { msg("schedule-msg", e.message, "err"); }
@@ -470,22 +586,36 @@
       label: $("s-label").value.trim(),
       priority: Number($("s-priority").value) || 0
     };
+    // Every field, including the other mode's emptied, so an edit that
+    // switches mode leaves nothing of the old one behind.
     if (mode === "recurring") {
       body.days = chosenDays.slice().sort();
       body.startTime = $("s-start-time").value;
       body.endTime = $("s-end-time").value;
       body.effectiveFrom = $("s-from").value || null;
       body.effectiveTo = $("s-to").value || null;
+      body.startsAt = null;
+      body.endsAt = null;
     } else {
       body.startsAt = fromLocalInput($("s-start").value);
       body.endsAt = mode === "window" ? fromLocalInput($("s-end").value) : null;
+      body.days = [];
+      body.startTime = "";
+      body.endTime = "";
+      body.effectiveFrom = null;
+      body.effectiveTo = null;
     }
 
     busy("s-save", true);
     try {
-      await api("POST", "/api/schedule", body);
-      msg("schedule-msg", "Scheduled.", "ok");
-      $("s-label").value = "";
+      if (editingEntry) {
+        await api("PATCH", "/api/schedule/" + editingEntry, body);
+        msg("schedule-msg", "Saved.", "ok");
+      } else {
+        await api("POST", "/api/schedule", body);
+        msg("schedule-msg", "Scheduled.", "ok");
+      }
+      resetScheduleForm();
       await loadSchedule();
       loadNow();
     } catch (e) {
@@ -545,6 +675,7 @@
     playlists = data.playlists || [];
     renderPlaylists();
     fillPlaylistSelects();
+    fillPlayNowPicker();
   }
 
   $("pl-create").addEventListener("click", async function () {
@@ -899,18 +1030,10 @@
     return tile;
   }
 
-  // Straight onto the screen, over the schedule, until somebody clears it.
-  // Turns the TV on if it was off.
   async function playNow(m) {
-    try {
-      var current = (await api("GET", "/api/play-now")).playNow;
-      if (current && current.active && current.mediaId !== m.id &&
-          !confirm("Replace \u201c" + current.title + "\u201d with \u201c" + m.title + "\u201d on the screen?")) {
-        return;
-      }
-      await api("POST", "/api/play-now", { mediaId: m.id });
+    if (await startPlayNow({ mediaId: m.id }, m.title, "media-msg")) {
       document.querySelector('.tab[data-tab="now"]').click();
-    } catch (e) { msg("media-msg", e.message, "err"); }
+    }
   }
 
   async function deleteMedia(m, force) {
@@ -948,6 +1071,7 @@
     var data = await api("GET", "/api/media");
     mediaList = data.media || [];
     renderMedia();
+    fillPlayNowPicker();
     // Anything still converting: look again shortly, so the grid settles on
     // its own rather than needing a refresh.
     if (mediaList.some(function (m) { return m.status === "pending" || m.status === "processing"; })) {

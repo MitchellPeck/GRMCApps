@@ -8,7 +8,11 @@ export interface PayloadInput {
   timezone: string;
   /** Every image (or video) to attach, in order; several make a carousel. */
   mediaUrls: string[];
+  /** "scheduled" publishes itself at dateTime; "draft" waits in Metricool for a human. */
+  publish: PublishMode;
 }
+export type PublishMode = "scheduled" | "draft";
+export function isPublishMode(v: unknown): v is PublishMode { return v === "scheduled" || v === "draft"; }
 export interface SchedulerPayload {
   publicationDate: { dateTime: string; timezone: string };
   text: string;
@@ -21,11 +25,9 @@ export interface SchedulerPayload {
 
 export function buildSchedulerPayload(i: PayloadInput): SchedulerPayload {
   // Metricool publishes a post only when autoPublish is true; autoPublish:false
-  // is its "draft awaiting approval" state, and `draft` has to agree with it or
-  // the post sits in the planner forever. Instagram can't be published by hand
-  // from Metricool, so picking it turns publishing on for the whole post —
-  // anything else it's grouped with goes out automatically too.
-  const autoPublish = i.networks.includes("instagram");
+  // is its draft state, and `draft` has to agree with it or the post sits in
+  // the planner forever. The sender chooses, and it holds for every network.
+  const autoPublish = i.publish === "scheduled";
   const payload: SchedulerPayload = {
     publicationDate: { dateTime: i.dateTime, timezone: i.timezone },
     text: i.text,

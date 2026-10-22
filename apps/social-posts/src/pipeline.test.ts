@@ -483,6 +483,31 @@ test("a bad reply from Claude saves nothing, and Draft all carries on past it", 
   } finally { f.restore(); await pool.query("DELETE FROM settings WHERE key = 'anthropic_api_key'"); }
 });
 
+test("a post with no brief drafts through a schema, and a busy Claude is tried again", async () => {
+  const { draftCaptions, parseDraftRequest } = await import("./pipeline/caption");
+  await pool.query("INSERT INTO settings (key, value) VALUES ('anthropic_api_key','t') ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value");
+  const real = globalThis.fetch;
+  const sent: any[] = [];
+  const answers: Array<() => Response> = [
+    () => new Response("<html>overloaded</html>", { status: 529 }),
+    () => Response.json({ stop_reason: "end_turn", content: [{ type: "text", text: JSON.stringify({ facebook: "FB", x: "X" }) }] }),
+    () => new Response("<html>bad gateway</html>", { status: 400 }),
+  ];
+  globalThis.fetch = (async (_u: unknown, init?: any) => { sent.push(JSON.parse(init.body)); return answers.shift()!(); }) as typeof fetch;
+  try {
+    const req = parseDraftRequest({ title: "Fall picnic", platforms: ["facebook", "x"], captionMode: "separate", publishDate: "2026-11-01" });
+    assert.ok(req.ok);
+    const r = await draftCaptions(pool, req.value, "me@x.org");
+    assert.ok(r.ok, !r.ok ? r.error : "");
+    assert.deepEqual(r.value.captions, { facebook: "FB", x: "X" });
+    assert.equal(sent.length, 2, "the 529 was tried again");
+    assert.deepEqual(sent[1].output_config.format.schema.required, ["facebook", "x"]);
+    const page = await draftCaptions(pool, req.value, "me@x.org");
+    assert.ok(!page.ok);
+    assert.match(page.error, /answered 400/, "an error page says what happened, not 'not readable'");
+  } finally { globalThis.fetch = real; await pool.query("DELETE FROM settings WHERE key = 'anthropic_api_key'"); }
+});
+
 test("a podcast post can't draft until its episode is picked", async () => {
   const { draftCaptions, parseDraftRequest } = await import("./pipeline/caption");
   const ev = await createEvent(pool, { name: "Pod test", kind: "series" });
@@ -599,7 +624,8 @@ test("Draft all carries on when a post throws partway (e.g. the X shorten call f
   assert.ok(a.ok && b.ok && c.ok);
   const replies: Array<() => unknown> = [
     () => ({ content: [{ text: JSON.stringify({ post: "Too long ".repeat(50) }) }] }),
-    () => { throw new Error("429 Too Many Requests"); },
+    // A network failure is tried again, so this one fails every try.
+    ...Array(3).fill(() => { throw new Error("429 Too Many Requests"); }),
     () => ({ content: [{ text: "null" }] }),
     () => ({ content: [{ text: JSON.stringify({ post: "C drafted" }) }] }),
   ];
@@ -812,15 +838,88 @@ test("a sermon upload is transcribed and drafts from its transcript", async (t) 
     const content = await resolveSource(pool, { kind: "sermon" }, { kind: "sermon", id: s.value.id }, "2026-11-01");
     assert.equal(content?.kind, "sermon");
     assert.match(content!.content, /Grace is not earned/);
+    // A video uploaded to one post counts even when its event drafts from nothing.
+    const own = await resolveSource(pool, { kind: "none" }, { kind: "sermon", id: s.value.id }, "2026-11-01");
+    assert.match(own!.content, /Grace is not earned/);
 
     // A sermon-sourced post with no recording yet asks for one.
     const req = parseDraftRequest({ title: "Sunday recap", platforms: ["facebook"], publishDate: "2026-11-01", drafting: { source: { kind: "sermon" } } });
     assert.ok(req.ok);
     const r = await draftCaptions(pool, req.value, "me@x.org");
     assert.ok(!r.ok);
-    assert.match(r.error, /Upload the sermon recording first/);
+    assert.match(r.error, /Upload the video first/);
   } finally {
     whisper.close();
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("a podcast episode's audio is fetched from Buzzsprout, transcribed once, and drafted from", async (t) => {
+  const { execFileSync } = await import("node:child_process");
+  try { execFileSync("ffmpeg", ["-version"], { stdio: "ignore" }); } catch { t.skip("ffmpeg isn't installed here"); return; }
+  const http = await import("node:http");
+  const { mkdtemp, rm, readFile } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const sermons = await import("./pipeline/sermons");
+  const { startEpisodeTranscript } = await import("./pipeline/episode-audio");
+  const { resolveSource } = await import("./pipeline/sources");
+  const { buildDraftPrompt } = await import("./pipeline/prompt");
+
+  const whisper = http.createServer((req, res) => {
+    req.resume(); req.on("end", () => {
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ text: "Welcome back to the show.", segments: [{ start: 0, end: 2, text: "Welcome back to the show." }] }));
+    });
+  });
+  await new Promise<void>((r) => whisper.listen(0, r));
+  const dataDir = await mkdtemp(join(tmpdir(), "episode-data-"));
+  const opts = { dataDir, whisperUrl: `http://127.0.0.1:${(whisper.address() as { port: number }).port}` };
+  const mp3 = join(dataDir, "ep.mp3");
+  execFileSync("ffmpeg", ["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=3", "-f", "mp3", mp3]);
+  const audio = await readFile(mp3);
+
+  await pool.query(`INSERT INTO settings (key, value) VALUES ('buzzsprout_api_token','t'), ('buzzsprout_podcast_id','77')
+                    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`);
+  const real = globalThis.fetch;
+  let downloads = 0;
+  globalThis.fetch = (async (url: unknown) => {
+    const u = String(url);
+    if (/\/api\/77\/episodes\/31\.json/.test(u)) {
+      return Response.json({ id: 31, title: "Small faith", description: "<p>Notes</p>", custom_url: null, published_at: "2026-10-20T10:00:00Z",
+        duration: 3, private: false, audio_url: "https://www.buzzsprout.com/77/31-small-faith.mp3" });
+    }
+    if (/31-small-faith\.mp3$/.test(u)) { downloads++; return new Response(audio, { headers: { "content-type": "audio/mpeg" } }); }
+    throw new Error("Unexpected fetch: " + u);
+  }) as typeof fetch;
+  try {
+    const ep = { id: 31, title: "Small faith", audioUrl: "https://www.buzzsprout.com/77/31-small-faith.mp3" };
+    const first = await startEpisodeTranscript(pool, ep, opts, { wait: true, enqueue: false });
+    assert.equal(first.status, "queued", "downloaded and waiting for Whisper");
+    const pending = await resolveSource(pool, { kind: "buzzsprout" }, { kind: "buzzsprout", id: "31" }, "2026-10-22", opts);
+    assert.equal(pending!.audio!.status, "queued");
+    assert.equal(pending!.transcript, undefined);
+
+    await sermons.processSermon(pool, first.id, opts);
+    const ready = await resolveSource(pool, { kind: "buzzsprout" }, { kind: "buzzsprout", id: "31" }, "2026-10-22", opts);
+    assert.equal(ready!.audio!.status, "ready");
+    assert.equal(ready!.transcript, "Welcome back to the show.");
+    assert.equal(downloads, 1, "each episode is fetched once, however many posts look at it");
+
+    const prompt = buildDraftPrompt({ voice: "", context: "", instructions: "Announce it.", eventName: "", eventKind: "", eventDates: "",
+      title: "New episode", brief: "", phase: "", publishDate: null, seriesPosition: null, source: ready,
+      platforms: ["facebook"], captionMode: "same", caption: "", captions: {} });
+    assert.match(prompt.user, /EPISODE DESCRIPTION:\nNotes/);
+    assert.match(prompt.user, /EPISODE TRANSCRIPT[^\n]*\nWelcome back to the show\./);
+
+    const again = await startEpisodeTranscript(pool, ep, opts, { retry: true, wait: true, enqueue: false });
+    assert.equal(again.id, first.id, "the same recording is reused");
+    assert.equal(again.status, "queued");
+    assert.equal(downloads, 2);
+  } finally {
+    globalThis.fetch = real;
+    whisper.close();
+    await pool.query("DELETE FROM settings WHERE key IN ('buzzsprout_api_token','buzzsprout_podcast_id')");
     await rm(dataDir, { recursive: true, force: true });
   }
 });
@@ -899,4 +998,33 @@ test("Scheduled posts become Published from Metricool, or once their time has pa
   const w = (await pool.query("SELECT status, publish_check FROM content_items WHERE id = $1", [waiting])).rows[0];
   assert.equal(w.status, "scheduled");
   assert.match(w.publish_check, /Couldn't check Metricool/);
+});
+
+// ── The Claude connector ──
+
+test("the connector lists, creates and updates posts through the page's rules", async () => {
+  const { handleMessage } = await import("./mcp");
+  const ctx = { db: pool, email: "claude-user@x.org" };
+  const call = async (name: string, args: object) => {
+    const r = (await handleMessage({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }, ctx)) as any;
+    return { error: !!r.result.isError, text: r.result.content[0].text as string };
+  };
+  const made = await call("create_post", { title: "Advent kickoff", publishDate: "2026-11-29", platforms: ["facebook"], brief: "Week one." });
+  assert.ok(!made.error, made.text);
+  const post = JSON.parse(made.text).post;
+  assert.equal(post.status, "planned", "a brief moves it on, as on the page");
+  const row = await pool.query("SELECT created_by FROM content_items WHERE id = $1", [post.id]);
+  assert.equal(row.rows[0].created_by, "claude-user@x.org");
+
+  const listed = JSON.parse((await call("list_posts", { from: "2026-11-29", to: "2026-11-29" })).text);
+  assert.ok(listed.posts.some((p: any) => p.id === post.id));
+
+  const changed = await call("update_post", { id: post.id, caption: "Advent starts Sunday." });
+  assert.equal(JSON.parse(changed.text).post.status, "drafted");
+
+  // The page's rules hold: Instagram can't take a text-only post, and bad input says why.
+  const bad = await call("update_post", { id: post.id, platforms: ["instagram"], noMediaNeeded: true });
+  assert.ok(bad.error);
+  assert.match(bad.text, /Instagram/);
+  assert.ok((await call("list_posts", { from: "soon" })).error);
 });

@@ -1,6 +1,6 @@
 // Content Pipeline — one page over the same three records (events, posts,
-// media). Every view below is a filtered read; nothing is cached between views
-// except the shared filter choice, which follows you from screen to screen.
+// media). Every view below is a filtered read; nothing is cached between views.
+// The filters belong to the calendar only; every other screen shows everything.
 (function(){
 'use strict';
 
@@ -108,7 +108,7 @@ function mediaProgress(item){
     + '<span class="pl-bar"><span style="width:'+pct+'%"></span></span>'+item.mediaDone+' of '+item.mediaTotal+' collected</span>';
 }
 
-// ── Filters (shared by every screen) ─────────────────────────────────────────
+// ── Filters (the calendar's) ─────────────────────────────────────────────────
 function eventOptions(selected, opts){
   opts = opts || {};
   var groups = { event: [], department: [], series: [] };
@@ -135,18 +135,6 @@ function renderFilters() {
     +   m.contentStatuses.map(function(s){ return '<option value="'+s+'"'+(s === f.status ? ' selected' : '')+'>'+label(s)+'</option>'; }).join('')+'</select></label>'
     + '<label class="pl-f"><span>Owner</span><select data-filter="owner"><option value="">Anyone</option>'+people+'</select></label>'
     + (f.eventId || f.platform || f.status || f.owner ? '<button class="btn-sm pl-clear" type="button" data-act="clear-filters">Clear filters</button>' : '');
-}
-
-// The dashboard's week lists come pre-built from the server, so the shared
-// filters are applied to them here.
-function matchItem(i) {
-  var f = S.filters;
-  return (!f.eventId || i.eventId === f.eventId) && (!f.platform || i.platforms.indexOf(f.platform) !== -1)
-    && (!f.status || i.status === f.status) && (!f.owner || (i.ownerEmail || '').toLowerCase() === f.owner.toLowerCase());
-}
-function matchMedia(m) {
-  var f = S.filters;
-  return (!f.eventId || m.eventId === f.eventId) && (!f.owner || (m.assigneeEmail || '').toLowerCase() === f.owner.toLowerCase());
 }
 
 function contentFilterQuery(extra) {
@@ -177,9 +165,8 @@ function render() {
     t.classList.toggle('active', on);
     if (on) t.setAttribute('aria-current', 'page'); else t.removeAttribute('aria-current');
   });
-  // The filters only narrow the dashboard, calendar and board; anywhere else
-  // they'd sit there doing nothing. Settings has no use for New post either.
-  $('pl-filters').hidden = !({ dashboard: 1, calendar: 1, board: 1 })[r.view];
+  // The filters only narrow the calendar. Settings has no use for New post either.
+  $('pl-filters').hidden = r.view !== 'calendar';
   document.querySelector('.pl-toolbar').hidden = r.view === 'settings';
   var main = $('pl-main');
   var views = { dashboard: renderDashboard, calendar: renderCalendar, board: renderBoard, events: renderEvents, event: renderEvent,
@@ -195,14 +182,14 @@ function refreshEvents() {
 }
 
 // ── Dashboard ────────────────────────────────────────────────────────────────
-// The board's scope: posts publishing from 30 days ago on, plus undated ones,
-// narrowed by the shared filters. The dashboard counts this same set, so its
-// numbers always match the board's columns.
+// The board's scope: posts publishing from 30 days ago on, plus undated ones.
+// The dashboard counts this same set, so its numbers always match the board's
+// columns.
 function loadBoardItems(includeCancelled) {
   var from = addDays(S.meta.today, -30), c = includeCancelled ? 1 : '';
   return Promise.all([
-    api('GET', '/api/pipeline/content' + contentFilterQuery({ from: from, includeCancelled: c })),
-    api('GET', '/api/pipeline/content' + contentFilterQuery({ undated: 1, includeCancelled: c })),
+    api('GET', '/api/pipeline/content' + qs({ from: from, includeCancelled: c })),
+    api('GET', '/api/pipeline/content' + qs({ undated: 1, includeCancelled: c })),
   ]).then(function(res){ return { from: from, items: res[0].items.concat(res[1].items) }; });
 }
 
@@ -213,8 +200,6 @@ function renderDashboard(main) {
     loadBoardItems(false),
   ]).then(function(res){
     var sum = res[0], gaps = res[1].gaps, board = res[2];
-    sum.posts = sum.posts.filter(matchItem);
-    sum.capture = sum.capture.filter(matchMedia);
     var total = gaps.reduce(function(n, g){ return n + g.count; }, 0);
     var html = '<section class="pl-gaps'+(total ? '' : ' pl-gaps-clear')+'" aria-label="Gaps">'
       + '<h2>'+(total ? 'What’s missing' : 'Nothing is missing')+'</h2>'
@@ -230,10 +215,9 @@ function renderDashboard(main) {
     var flow = S.meta.contentStatuses.filter(function(s){ return s !== 'cancelled'; });
     html += '<section class="card"><h3 class="ct">Pipeline</h3><div class="pl-flow">'
       + flow.map(function(s){
-          return '<a class="pl-flow-step" href="#board" data-act="filter-status" data-status="'+s+'"><strong>'+(by[s] || 0)+'</strong>'+statusBadge(s)+'</a>';
+          return '<a class="pl-flow-step" href="#board"><strong>'+(by[s] || 0)+'</strong>'+statusBadge(s)+'</a>';
         }).join('')
-      + '</div><p class="hint">The same posts as the board: publishing from '+esc(shortDate(board.from))+' on, plus undated ones'
-      + (S.filters.eventId || S.filters.platform || S.filters.status || S.filters.owner ? ', with your filters' : '')+'.</p></section>';
+      + '</div><p class="hint">The same posts as the board: publishing from '+esc(shortDate(board.from))+' on, plus undated ones.</p></section>';
 
     html += '<div class="pl-two">'
       + '<section class="card"><h3 class="ct">Publishing this week</h3>'
@@ -285,8 +269,7 @@ function renderGapList(main, key) {
       : api('GET', '/api/pipeline/media' + qs({ ids: ids }));
     return req.then(function(d){
       var list = gap.kind === 'content' ? d.items.map(agendaPost) : d.media.map(agendaMedia);
-      main.innerHTML = head + '<p class="hint">These ignore the filters above, so nothing hides from the count.</p>'
-        + '<section class="card"><ul class="pl-agenda">'+list.join('')+'</ul></section>';
+      main.innerHTML = head + '<section class="card"><ul class="pl-agenda">'+list.join('')+'</ul></section>';
     });
   });
 }
@@ -340,7 +323,8 @@ function renderCalendar(main) {
 
     var days = [];
     for (var d = r.start; d <= r.end; d = addDays(d, 1)) days.push(d);
-    html += '<div class="pl-cal pl-cal-'+c.view+'" role="grid">'
+    if (publish && c.view === 'week') html += weekGrid(days, byDay);
+    else html += '<div class="pl-cal pl-cal-'+c.view+'" role="grid">'
       + DOW.map(function(n){ return '<div class="pl-dow" role="columnheader">'+n+'</div>'; }).join('')
       + days.map(function(day){
           var dd = parseIso(day), list = byDay[day] || [];
@@ -363,7 +347,74 @@ function renderCalendar(main) {
       + (tray.length ? '<p class="hint">Drag a card onto a day to schedule it'+(publish ? '' : ', or back here to unschedule it')+'.</p>' : '')
       + '</section>';
     main.innerHTML = html;
+    var scroller = main.querySelector('.pl-wk-scroll');
+    if (scroller) {
+      // Stay where you were across a drop; otherwise start at the first post, or 8am.
+      if (weekScroll == null) {
+        var first = rows.filter(function(x){ return x.publishTime; }).map(function(x){ return timeMinutes(x.publishTime); }).sort(function(a, b){ return a - b; })[0];
+        weekScroll = Math.max(0, Math.min(first == null ? 8 * 60 : first, 8 * 60) - 30) / 60 * HOUR_PX;
+      }
+      scroller.scrollTop = weekScroll;
+      scroller.addEventListener('scroll', function(){ weekScroll = scroller.scrollTop; });
+    }
   });
+}
+
+// ── Week of hours (publish dates) ────────────────────────────────────────────
+// Posts sit at their publish time on a 24-hour grid; dragging one to another
+// slot moves its date and time together, to the quarter hour. Posts with no
+// time wait in the row along the top.
+var HOUR_PX = 56, SLOT_MIN = 15, CARD_PX = 50;
+var weekScroll = null;
+function timeMinutes(t){ return Number(t.slice(0,2)) * 60 + Number(t.slice(3,5)); }
+function minutesTime(m){ return String(Math.floor(m / 60)).padStart(2,'0') + ':' + String(m % 60).padStart(2,'0'); }
+function hourLabel(h){ return h === 0 ? '12am' : h === 12 ? '12pm' : (h % 12) + (h < 12 ? 'am' : 'pm'); }
+// The quarter hour at a height in a day column: the one containing it for a
+// click, the nearest for a dragged card's top edge.
+function slotAt(col, clientY, nearest){
+  var y = clientY - col.getBoundingClientRect().top;
+  var m = (nearest ? Math.round : Math.floor)(y / HOUR_PX * 60 / SLOT_MIN) * SLOT_MIN;
+  return Math.max(0, Math.min(24 * 60 - SLOT_MIN, m));
+}
+
+function weekGrid(days, byDay) {
+  var now = new Date(), nowMin = now.getHours() * 60 + now.getMinutes();
+  var head = '<div class="pl-wk-head"><div class="pl-wk-gutter"></div>' + days.map(function(day){
+    var dd = parseIso(day);
+    return '<div class="pl-wk-dow'+(day === S.meta.today ? ' today' : '')+'">'+DOW[dd.getDay()]+' <strong>'+dd.getDate()+'</strong></div>';
+  }).join('') + '</div>';
+  var allDay = '<div class="pl-wk-allday"><div class="pl-wk-gutter">No time</div>' + days.map(function(day){
+    var list = (byDay[day] || []).filter(function(i){ return !i.publishTime; });
+    return '<div class="pl-wk-untimed" data-drop="'+day+'" data-untimed="1">'+list.map(postCard).join('')+'</div>';
+  }).join('') + '</div>';
+  var hours = [];
+  for (var h = 0; h < 24; h++) hours.push(h);
+  var body = '<div class="pl-wk-scroll"><div class="pl-wk-body" style="--hour:'+HOUR_PX+'px;--card:'+CARD_PX+'px">'
+    + '<div class="pl-wk-gutter">' + hours.map(function(h){ return '<div class="pl-wk-hour"><span>'+(h ? hourLabel(h) : '')+'</span></div>'; }).join('') + '</div>'
+    + days.map(function(day){
+        var list = (byDay[day] || []).filter(function(i){ return i.publishTime; })
+          .sort(function(a, b){ return a.publishTime < b.publishTime ? -1 : a.publishTime > b.publishTime ? 1 : 0; });
+        // Posts close together share the width instead of covering each other.
+        var lanes = [];
+        list.forEach(function(i){
+          var top = timeMinutes(i.publishTime) / 60 * HOUR_PX;
+          var lane = 0;
+          while (lanes[lane] != null && lanes[lane] > top) lane++;
+          lanes[lane] = top + CARD_PX;
+          i._top = top; i._lane = lane;
+        });
+        var n = Math.max(1, lanes.length);
+        return '<div class="pl-wk-col'+(day === S.meta.today ? ' today' : '')+'" data-drop="'+day+'" data-timed="1" data-act="new-post-at" data-date="'+day+'"'
+          + ' aria-label="'+esc(shortDate(day))+'">'
+          + (day === S.meta.today ? '<div class="pl-wk-now" style="top:'+(nowMin / 60 * HOUR_PX)+'px"></div>' : '')
+          + list.map(function(i){
+              return '<div class="pl-wk-item" style="top:'+i._top+'px;left:calc('+(i._lane / n * 100)+'% + 2px);width:calc('+(100 / n)+'% - 4px)">'+postCard(i)+'</div>';
+            }).join('')
+          + '<div class="pl-wk-ghost" hidden></div></div>';
+      }).join('')
+    + '</div></div>';
+  return '<div class="pl-wk">' + head + allDay + body + '</div>'
+    + '<p class="hint">Drag a post to another day or hour to reschedule it, or to “No time” to clear its time. Click an empty slot to plan a post there.</p>';
 }
 
 function postCard(i) {
@@ -394,7 +445,8 @@ var dragging = null;
 document.addEventListener('dragstart', function(e){
   var el = e.target.closest && e.target.closest('[draggable="true"]');
   if (!el) return;
-  dragging = { kind: el.getAttribute('data-kind'), id: el.getAttribute('data-id') };
+  // Where on the card it was grabbed, so a card lands where its top edge is, not the pointer.
+  dragging = { kind: el.getAttribute('data-kind'), id: el.getAttribute('data-id'), grabY: e.clientY - el.getBoundingClientRect().top };
   e.dataTransfer.effectAllowed = 'move';
   try { e.dataTransfer.setData('text/plain', dragging.id); } catch (err) { /* old browsers */ }
   el.classList.add('dragging');
@@ -403,6 +455,7 @@ document.addEventListener('dragend', function(e){
   var el = e.target.closest && e.target.closest('[draggable="true"]');
   if (el) el.classList.remove('dragging');
   document.querySelectorAll('.drop-over').forEach(function(x){ x.classList.remove('drop-over'); });
+  hideGhosts();
   dragging = null;
 });
 document.addEventListener('dragover', function(e){
@@ -412,15 +465,29 @@ document.addEventListener('dragover', function(e){
   if (zone.hasAttribute('data-status') && dragging.kind !== 'content') return;
   e.preventDefault();
   document.querySelectorAll('.drop-over').forEach(function(x){ if (x !== zone) x.classList.remove('drop-over'); });
+  if (zone.hasAttribute('data-timed')) return showGhost(zone, slotAt(zone, e.clientY - dragging.grabY, true));
+  hideGhosts();
   zone.classList.add('drop-over');
 });
+// Where the post will land in the week of hours, with its new time.
+function showGhost(col, m) {
+  document.querySelectorAll('.pl-wk-ghost').forEach(function(g){ if (g.parentNode !== col) g.hidden = true; });
+  var g = col.querySelector('.pl-wk-ghost');
+  g.hidden = false;
+  g.style.top = (m / 60 * HOUR_PX) + 'px';
+  g.textContent = timeLabel(minutesTime(m));
+}
+function hideGhosts(){ document.querySelectorAll('.pl-wk-ghost').forEach(function(g){ g.hidden = true; }); }
 document.addEventListener('drop', function(e){
   var zone = dragging && e.target.closest && e.target.closest('[data-drop]');
   if (!zone) return;
   e.preventDefault();
   var d = dragging; dragging = null;
   zone.classList.remove('drop-over');
+  hideGhosts();
   if (zone.hasAttribute('data-status')) return moveStatus(d.id, zone.getAttribute('data-status'));
+  if (zone.hasAttribute('data-timed')) return moveDateTime(d.id, zone.getAttribute('data-drop'), minutesTime(slotAt(zone, e.clientY - d.grabY, true)));
+  if (zone.hasAttribute('data-untimed')) return moveDateTime(d.id, zone.getAttribute('data-drop'), null);
   moveDate(d.kind, d.id, zone.getAttribute('data-drop') || null);
 });
 
@@ -453,6 +520,23 @@ function moveDate(kind, id, date) {
   });
 }
 
+// A post dropped on the week of hours: its day and time move together.
+function moveDateTime(id, date, time) {
+  var row = S.rows.content[id];
+  if (!row) return;
+  if (row.publishDate === date && (row.publishTime || null) === time) return;
+  var el = document.querySelector('[data-kind="content"][data-id="'+CSS.escape(id)+'"]');
+  if (el) el.classList.add('saving');
+  api('PATCH', '/api/pipeline/content/' + encodeURIComponent(id), { publishDate: date, publishTime: time }).then(function(res){
+    toast('Moved to ' + shortDate(date) + (time ? ' at ' + timeLabel(time) : ', no time') + '.', 'ok');
+    warnAll(res.warnings);
+    render();
+  }).catch(function(err){
+    toast('Couldn’t move it: ' + err.message, 'err');
+    render();
+  });
+}
+
 // ── Board ────────────────────────────────────────────────────────────────────
 function renderBoard(main) {
   var showCancelled = !!storeGet('pipeline.boardCancelled');
@@ -460,7 +544,7 @@ function renderBoard(main) {
   return loadBoardItems(showCancelled).then(function(res){
     var items = res.items, from = res.from;
     var cols = S.meta.contentStatuses.filter(function(s){ return s !== 'cancelled' || showCancelled; });
-    var html = '<div class="pl-boardhead"><p class="hint">Posts publishing from '+esc(shortDate(from))+' on, plus undated ones. Drag a card to another column, or change its status on the card.</p>'
+    var html = '<div class="pl-boardhead"><p class="hint">Posts publishing from '+esc(shortDate(from))+' on, plus undated ones. Drag a card to another column to change its status.</p>'
       + '<div class="pl-boardtools"><button class="btn-sm" type="button" data-act="publish-check">Check what’s published</button>'
       + '<label class="check"><input type="checkbox" data-act="toggle-cancelled"'+(showCancelled ? ' checked' : '')+'> Show cancelled</label></div></div>'
       + '<div class="pl-board">' + cols.map(function(s){
@@ -480,9 +564,7 @@ function boardCard(i) {
     + '<span class="pl-sub">'+esc(shortDate(i.publishDate))+(i.eventName ? ' · '+esc(i.eventName) : '')+'</span></button>'
     + '<div class="pl-bcard-foot">'+platformChips(i.platforms)+mediaProgress(i)+'</div>'
     + (i.publishCheck ? '<p class="pl-bcard-warn">'+esc(i.publishCheck)+'</p>' : '')
-    + '<select class="pl-quick" data-act="quick-status" data-id="'+esc(i.id)+'" aria-label="Status of '+esc(i.title)+'">'
-    + S.meta.contentStatuses.map(function(s){ return '<option value="'+s+'"'+(s === i.status ? ' selected' : '')+'>'+label(s)+'</option>'; }).join('')
-    + '</select></article>';
+    + '</article>';
 }
 
 // Scheduled → Published, confirmed with Metricool (it also runs every 30 minutes).
@@ -504,7 +586,7 @@ function moveStatus(id, status) {
     render();
   }).catch(function(err){
     toast(err.message, 'err');
-    render(); // puts the card and its select back
+    render(); // puts the card back
   });
 }
 
@@ -688,7 +770,7 @@ function draftingCardHtml(e) {
     + '<p class="hint pl-under">How Draft with Claude writes this event’s posts. A recurring post or a single post can override the instructions.'
     + ' Background comes from the event’s notes'+(e.notes ? '' : ' (empty: <button class="pl-link" type="button" data-act="edit-event" data-id="'+esc(e.id)+'">add some</button>)')+'.</p>'
     + '<div class="row2"><div class="field"><label for="dr-kind">Source</label><select id="dr-kind" name="kind" data-act="dr-kind">'
-    +   opt('none', 'None', src.kind) + opt('mailchimp', 'A Mailchimp newsletter', src.kind) + opt('buzzsprout', 'A podcast episode (Buzzsprout)', src.kind) + opt('sermon', 'A sermon recording (uploaded to each post)', src.kind) + '</select></div>'
+    +   opt('none', 'None', src.kind) + opt('mailchimp', 'A Mailchimp newsletter', src.kind) + opt('buzzsprout', 'A podcast episode (Buzzsprout)', src.kind) + opt('sermon', 'A video (uploaded to each post)', src.kind) + '</select></div>'
     + '<div class="field" data-dr="mailchimp"><label for="dr-subject">Campaigns whose subject contains</label>'
     +   '<input id="dr-subject" type="text" name="subjectContains" value="'+esc(src.subjectContains || '')+'" placeholder="grace notes"></div></div>'
     + '<div class="field" data-dr="mailchimp"><label for="dr-cutoff">Which issue</label><select id="dr-cutoff" name="cutoff">'
@@ -749,10 +831,11 @@ function closeDrawer() {
 function newPost(defaults) {
   drawer.id = null; drawer.item = null; drawer.media = []; drawer.source = null; drawer.recurrence = null; drawer.capTab = '';
   drawer.sourceRef = null;
-  var f = S.filters;
+  // Only the calendar is filtered, so only a post started there takes its filters.
+  var f = route().view === 'calendar' ? S.filters : {};
   var item = {
     title: '', eventId: defaults.eventId || f.eventId || '', platforms: f.platform ? [f.platform] : ['instagram','facebook'],
-    publishDate: defaults.date || '', publishTime: '', status: 'idea', ownerEmail: f.owner || '', brief: '', caption: '',
+    publishDate: defaults.date || '', publishTime: defaults.time || '', status: 'idea', ownerEmail: f.owner || '', brief: '', caption: '',
     noMediaNeeded: false, captionMode: 'same', captions: {},
   };
   openDrawer(editorHtml(item));
@@ -1307,7 +1390,7 @@ function applyImageRule(changed) {
 // ── Source panel: what Draft with Claude will work from ──
 var sourceTimer;
 function loadSourcePanel() {
-  clearTimeout(sourceTimer);
+  clearTimeout(sourceTimer); clearTimeout(episodePoll);
   if (drawer.sourceRef && drawer.sourceRef.kind === 'sermon') return loadSermonPanel(drawer.sourceRef.id);
   sourceTimer = setTimeout(function(){
     var form = document.querySelector('form[data-form=content]'), panel = $('pf-source');
@@ -1329,9 +1412,11 @@ function sourcePanelHtml(res) {
     return '<div class="alert alert-warn">Couldn’t reach the source: '+esc(res.error)+' <a href="#settings">Settings</a></div>' + paste;
   }
   var kind = ref ? ref.kind : (eff ? eff.source.kind : 'none');
-  if (kind === 'none') return '';
+  // Any post can draft from a video, whatever its event's source.
+  var video = '<button class="btn-sm" type="button" data-act="video-start">Draft from a video</button>';
+  if (kind === 'none') return '<div class="pl-label-row"><span class="lbl">Drafts from</span><span>'+video+'</span></div>';
   var head = '<div class="pl-label-row"><span class="lbl">Drafts from</span>'
-    + '<span>'+(kind !== 'manual' ? '<button class="btn-sm" type="button" data-act="src-change" data-kind="'+kind+'">Change</button> ' : '')+paste+'</span></div>';
+    + '<span>'+(kind !== 'manual' ? '<button class="btn-sm" type="button" data-act="src-change" data-kind="'+kind+'">Change</button> ' : '')+video+' '+paste+'</span></div>';
   if (kind === 'sermon' && !s) return sermonUploadHtml();
   if (kind === 'buzzsprout' && !s) return head + '<p class="pl-gaptext">Pick the episode this post is about.</p><div id="pf-src-list"></div>';
   if (!s) return head + '<p class="hint">Nothing found to draft from.</p>' + reset;
@@ -1342,19 +1427,40 @@ function sourcePanelHtml(res) {
     + (s.dateLine ? '<p class="hint">'+esc(s.dateLine)+'</p>' : '')
     + (s.url ? '<p class="hint"><a href="'+esc(s.url)+'" target="_blank" rel="noopener">'+esc(s.url)+'</a></p>' : '')
     + (s.excerpt ? '<p class="pl-src-excerpt">'+esc(s.excerpt)+'…</p>' : '')
+    + (s.audio ? episodeAudioHtml(s) : '')
     + (ref ? '<p class="hint">Picked for this post.'+reset+'</p>' : '')
     + '<div id="pf-src-list"></div>';
 }
 
-// ── Sermon recordings ──
+// A podcast episode's audio is transcribed on the church's server; drafting waits for it.
+var episodePoll;
+function episodeAudioHtml(s) {
+  var a = s.audio, again = '<button class="btn-sm" type="button" data-act="episode-transcribe" data-id="'+esc(s.id)+'">Transcribe again</button>';
+  if (a.status === 'ready') {
+    return '<p class="hint"><span class="pl-status pl-s-ready">Transcript ready</span> Claude drafts from what was said and the show notes. '
+      + '<a href="/api/pipeline/sermons/'+encodeURIComponent(a.id)+'/transcript" target="_blank" rel="noopener">Read the transcript</a> '+again+'</p>';
+  }
+  if (a.status === 'error') {
+    return '<div class="alert alert-warn">The episode’s audio couldn’t be transcribed, so drafts use the show notes only: '+esc(a.error)+' '+again+'</div>';
+  }
+  // Still going: look again shortly, while this post is open.
+  clearTimeout(episodePoll);
+  episodePoll = setTimeout(function(){ if ($('pf-source')) loadSourcePanel(); }, 5000);
+  return '<p class="pl-src-title"><span class="spin pl-spin-dark"></span> Transcribing the episode'+(a.progress ? ' ('+esc(a.progress)+')' : '')+'…</p>'
+    + '<p class="hint">This runs on the church’s server and takes a while for a long episode. You can close this; it carries on.</p>';
+}
+
+// ── Videos (stored as "sermon" recordings: they began as sermons only) ──
 var SERMON_TYPES = { mp4: 'video/mp4', mov: 'video/quicktime', m4v: 'video/x-m4v', webm: 'video/webm',
   mp3: 'audio/mpeg', m4a: 'audio/mp4', aac: 'audio/aac', wav: 'audio/wav' };
 
-function sermonUploadHtml(note) {
-  return '<div class="pl-label-row"><span class="lbl">Drafts from the sermon</span>'
-    + '<button class="btn-sm" type="button" data-act="src-paste">Paste content instead</button></div>'
-    + (note || '<p class="hint">Upload this Sunday’s sermon (video or audio). It’s transcribed on the church’s server, and Draft with Claude writes from what was said.</p>')
-    + '<div class="btn-row"><button class="btn btn-gold" type="button" data-act="sermon-upload">Upload the sermon recording</button></div>'
+// cancel: offer a way back to what the post drafted from before.
+function sermonUploadHtml(note, cancel) {
+  return '<div class="pl-label-row"><span class="lbl">Drafts from a video</span>'
+    + '<span>'+(cancel ? '<button class="btn-sm" type="button" data-act="video-cancel">Never mind</button> ' : '')
+    + '<button class="btn-sm" type="button" data-act="src-paste">Paste content instead</button></span></div>'
+    + (note || '<p class="hint">Upload the video (a sermon, a testimony, an event clip; audio works too). It’s transcribed on the church’s server, and Draft with Claude writes the captions from what’s said in it.</p>')
+    + '<div class="btn-row"><button class="btn btn-gold" type="button" data-act="sermon-upload">Upload the video</button></div>'
     + '<input type="file" data-sermon-file hidden accept="video/*,audio/*">'
     + '<div class="pl-sermon-progress" hidden><span class="pl-bar pl-bar-wide"><span></span></span><span class="hint"></span></div>';
 }
@@ -1368,8 +1474,8 @@ function loadSermonPanel(id) {
     if (!drawer.sourceRef || drawer.sourceRef.id !== id || !$('pf-source')) return;
     var sm = d.sermon, html;
     if (sm.status === 'ready') {
-      html = '<div class="pl-label-row"><span class="lbl">Drafts from the sermon</span>'
-        + '<span><button class="btn-sm" type="button" data-act="sermon-replace">Replace the recording</button></span></div>'
+      html = '<div class="pl-label-row"><span class="lbl">Drafts from a video</span>'
+        + '<span><button class="btn-sm" type="button" data-act="sermon-replace">Replace the video</button></span></div>'
         + '<p class="pl-src-title"><strong>'+esc(sm.title)+'</strong> <span class="pl-status pl-s-ready">Ready to draft</span></p>'
         + '<p class="hint">'+esc(sm.duration)+' · <a href="/api/pipeline/sermons/'+encodeURIComponent(sm.id)+'/transcript" target="_blank" rel="noopener">Read the transcript</a></p>'
         + (sm.excerpt ? '<p class="pl-src-excerpt">'+esc(sm.excerpt)+'…</p>' : '');
@@ -1379,10 +1485,10 @@ function loadSermonPanel(id) {
     } else if (sm.status === 'uploading') {
       html = sermonUploadHtml('<div class="alert alert-warn">The upload of '+esc(sm.title)+' didn’t finish. Upload it again.</div>');
     } else {
-      html = '<div class="pl-label-row"><span class="lbl">Drafts from the sermon</span></div>'
+      html = '<div class="pl-label-row"><span class="lbl">Drafts from a video</span></div>'
         + '<p class="pl-src-title"><span class="spin pl-spin-dark"></span> Transcribing <strong>'+esc(sm.title)+'</strong>'
         + (sm.progress ? ' ('+esc(sm.progress)+')' : '')+'…</p>'
-        + '<p class="hint">This runs on the church’s server and can take a while for a long sermon. You can close this; it carries on.</p>';
+        + '<p class="hint">This runs on the church’s server and can take a while for a long video. You can close this; it carries on.</p>';
       sermonPoll = setTimeout(function(){ loadSermonPanel(id); }, 4000);
     }
     panel.innerHTML = html; panel.hidden = false;
@@ -1614,7 +1720,7 @@ function recFilesHtml() {
   }).join('') + '</div>' : '<p class="hint">No files. Add one if every post in the series uses the same image.</p>';
 }
 // The series' source: the event's, none, or (kept as-is) one set elsewhere.
-var SOURCE_CHOICES = [['', 'The event’s source'], ['none', 'None for these posts'], ['sermon', 'A sermon recording (uploaded to each post)']];
+var SOURCE_CHOICES = [['', 'The event’s source'], ['none', 'None for these posts'], ['sermon', 'A video (uploaded to each post)']];
 function recSourceSelect(r) {
   var cur = r && r.drafting && r.drafting.source ? r.drafting.source.kind : '';
   var known = SOURCE_CHOICES.some(function(c){ return c[0] === cur; });
@@ -1817,6 +1923,7 @@ function renderMine(main) {
     api('GET', '/api/pipeline/media' + qs({ status: 'needed,scheduled', to: addDays(today, 21) })),
     api('GET', '/api/pipeline/media' + qs({ status: 'needed', unscheduled: 1 })),
     api('GET', '/api/pipeline/ical'),
+    api('GET', '/api/mcp'),
   ]).then(function(res){
     var open = function(i){ return i.status !== 'published' && i.status !== 'cancelled'; };
     var posts = res[0].items.concat(res[1].items).filter(open);
@@ -1826,8 +1933,8 @@ function renderMine(main) {
       if (m.assigneeEmail || seen[m.id] || (m.itemPublishDate && m.itemPublishDate < today)) return false;
       seen[m.id] = true; return true;
     });
-    var feed = res[5];
-    var html = '<p class="hint">Yours, whatever the filters above say. Signed in as '+esc(personName(me))+'.</p>'
+    var feed = res[5], claude = res[6];
+    var html = '<p class="hint">Yours. Signed in as '+esc(personName(me))+'.</p>'
       + '<div class="pl-two"><section class="card"><h3 class="ct">Posts you own</h3>'
       + (posts.length ? '<ul class="pl-agenda">'+posts.map(agendaPost).join('')+'</ul>' : '<p class="empty">Nothing waiting on you.</p>')
       + '</section><section class="card"><h3 class="ct">Media you’re collecting</h3>'
@@ -1839,13 +1946,21 @@ function renderMine(main) {
         }).join('')+'</ul>'
         : '<p class="empty">Every capture coming up has someone on it.</p>')
       + '</section>';
-    html += '<section class="card"><h3 class="ct">Capture days on your phone</h3>'
-      + '<p class="pl-under hint">Subscribe in Apple Calendar or Google Calendar (“add from URL”). It updates as plans change. Anyone with the link can see the capture schedule, so share it only with the team.</p>'
-      + '<div class="field"><label for="ical-mine">Just your captures</label><div class="pl-copyrow"><input id="ical-mine" type="text" readonly value="'+esc(feed.mineUrl)+'">'
-      + '<button class="btn-sm" type="button" data-act="copy" data-target="ical-mine">Copy</button></div></div>'
-      + '<div class="field"><label for="ical-all">Everyone’s captures</label><div class="pl-copyrow"><input id="ical-all" type="text" readonly value="'+esc(feed.url)+'">'
-      + '<button class="btn-sm" type="button" data-act="copy" data-target="ical-all">Copy</button></div></div>'
-      + '<button class="btn-sm" type="button" data-act="reset-ical">Reset the link</button></section>';
+    var feedRow = function(id, label, url){
+      return '<div class="field"><label for="'+id+'">'+label+'</label><div class="pl-copyrow"><input id="'+id+'" type="text" readonly value="'+esc(url)+'">'
+        + '<button class="btn-sm" type="button" data-act="copy" data-target="'+id+'">Copy</button></div></div>';
+    };
+    html += '<section class="card"><h3 class="ct">Posts and capture days on your phone</h3>'
+      + '<p class="pl-under hint">Subscribe in Apple Calendar or Google Calendar (“add from URL”). They update as plans change. Anyone with a link can see what’s on it, so share them only with the team.</p>'
+      + feedRow('ical-posts', 'Every post', feed.postsUrl)
+      + feedRow('ical-posts-mine', 'Posts you own', feed.postsMineUrl)
+      + feedRow('ical-mine', 'Just your captures', feed.mineUrl)
+      + feedRow('ical-all', 'Everyone’s captures', feed.url)
+      + '<button class="btn-sm" type="button" data-act="reset-ical">Reset the links</button></section>';
+    html += '<section class="card"><h3 class="ct">Use the pipeline from Claude</h3>'
+      + '<p class="pl-under hint">In Claude Desktop, open Settings → Connectors → Add custom connector, and paste this link. Claude can then read the calendar, find gaps, and add or change posts (never delete or publish them), recorded as yours. The link is yours alone: anyone with it can do the same, so don’t share it.</p>'
+      + feedRow('mcp-url', 'Your connector link', claude.url)
+      + '<button class="btn-sm" type="button" data-act="reset-mcp">Reset your link</button></section>';
     main.innerHTML = html;
   });
 }
@@ -1934,13 +2049,13 @@ document.addEventListener('click', function(e){
       e.preventDefault();
       newPost({ date: el.getAttribute('data-date') || '', eventId: el.getAttribute('data-event') || '' });
       break;
+    case 'new-post-at':
+      newPost({ date: el.getAttribute('data-date'), time: minutesTime(slotAt(el, e.clientY)) });
+      break;
     case 'close': closeDrawer(); break;
     case 'clear-filters':
       S.filters = { eventId: '', platform: '', status: '', owner: '' };
       storeSet('pipeline.filters', S.filters); renderFilters(); render(); break;
-    case 'filter-status':
-      S.filters.status = el.getAttribute('data-status');
-      storeSet('pipeline.filters', S.filters); renderFilters(); break;
     case 'lens': S.cal.lens = el.getAttribute('data-lens'); storeSet('pipeline.cal', S.cal); render(); break;
     case 'cal-view': S.cal.view = el.getAttribute('data-v'); storeSet('pipeline.cal', S.cal); render(); break;
     case 'cal-today': S.cal.anchor = ''; storeSet('pipeline.cal', S.cal); render(); break;
@@ -1981,9 +2096,14 @@ document.addEventListener('click', function(e){
       (navigator.clipboard ? navigator.clipboard.writeText(target.value) : Promise.reject()).then(function(){ toast('Link copied.', 'ok'); })
         .catch(function(){ document.execCommand('copy'); toast('Link copied.', 'ok'); });
       break;
+    case 'reset-mcp':
+      if (!confirm('Reset your Claude link? Claude stops reaching the pipeline until you add the new link as a connector.')) return;
+      api('POST', '/api/mcp/reset').then(function(){ toast('New link made. Replace the connector in Claude with it.', 'ok'); render(); })
+        .catch(function(err){ toast(err.message, 'err'); });
+      break;
     case 'reset-ical':
-      if (!confirm('Reset the calendar link? Everyone subscribed with the old link stops getting updates until they subscribe again.')) return;
-      api('POST', '/api/pipeline/ical/reset').then(function(){ toast('New link made. The old one no longer works.', 'ok'); render(); })
+      if (!confirm('Reset the calendar links? Everyone subscribed with an old link stops getting updates until they subscribe again.')) return;
+      api('POST', '/api/pipeline/ical/reset').then(function(){ toast('New links made. The old ones no longer work.', 'ok'); render(); })
         .catch(function(err){ toast(err.message, 'err'); });
       break;
     case 'duplicate-event':
@@ -2009,7 +2129,13 @@ document.addEventListener('click', function(e){
     case 'publish-check': checkPublishedNow(el); break;
     case 'src-change': showSourceChoices(el.getAttribute('data-kind')); break;
     case 'sermon-upload': document.querySelector('[data-sermon-file]').click(); break;
-    case 'sermon-replace': $('pf-source').innerHTML = sermonUploadHtml(); break;
+    case 'sermon-replace': $('pf-source').innerHTML = sermonUploadHtml(null, true); break;
+    case 'video-start': $('pf-source').innerHTML = sermonUploadHtml(null, true); $('pf-source').hidden = false; break;
+    case 'video-cancel': loadSourcePanel(); break;
+    case 'episode-transcribe':
+      api('POST', '/api/pipeline/episodes/' + encodeURIComponent(el.getAttribute('data-id')) + '/transcribe')
+        .then(function(){ toast('Transcribing the episode again.', 'ok'); loadSourcePanel(); }).catch(function(err){ toast(err.message, 'err'); });
+      break;
     case 'sermon-retry':
       api('POST', '/api/pipeline/sermons/' + encodeURIComponent(el.getAttribute('data-id')) + '/retry')
         .then(function(d){ loadSermonPanel(d.sermon.id); }).catch(function(err){ toast(err.message, 'err'); });
@@ -2103,7 +2229,6 @@ document.addEventListener('change', function(e){
     return;
   }
   var act = el.getAttribute('data-act');
-  if (act === 'quick-status') return moveStatus(el.getAttribute('data-id'), el.value);
   if (act === 'toggle-cancelled') { storeSet('pipeline.boardCancelled', el.checked); return render(); }
   if (act === 'toggle-archived') { storeSet('pipeline.eventsArchived', el.checked); return render(); }
   if (act === 'dr-kind') return showDraftingFields(el.closest('form'));

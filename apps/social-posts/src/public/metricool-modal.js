@@ -7,6 +7,7 @@
 //                text per network; each distinct text is sent as its own post,
 //         files: [{ label, approvedImageId, imageUrl }] — the post's Media field,
 //                in order; each is listed ticked, and all ticked ones are sent,
+//         publish: 'scheduled' (the default) or 'draft' — which option starts picked,
 //         approvedImageId, imageUrl (a public image to attach),
 //         sourceType, sourceRef, contentItemId, onSent(res) }
 
@@ -33,7 +34,7 @@ function loadMetricoolDefaults(){
   }).catch(function(){ /* fall back to 09:00 America/New_York */ });
 }
 
-document.body.insertAdjacentHTML('beforeend', "<div id=\"mc-modal\" style=\"display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:100;align-items:center;justify-content:center\">\n  <div class=\"card\" style=\"max-width:520px;width:92%;max-height:90vh;overflow:auto\">\n    <div class=\"ct\">Send to Metricool</div>\n    <div class=\"field\"><label>Post text</label><textarea id=\"mc-text\" style=\"min-height:120px\"></textarea></div>\n    <div class=\"field\"><label>Networks</label>\n      <label class=\"check\"><input type=\"checkbox\" id=\"mc-fb\" checked onchange=\"updatePublishHint()\"> Facebook</label>\n      <label class=\"check\"><input type=\"checkbox\" id=\"mc-ig\" checked onchange=\"updatePublishHint()\"> Instagram</label>\n      <label class=\"check\"><input type=\"checkbox\" id=\"mc-x\" checked onchange=\"updatePublishHint()\"> X</label>\n      <div class=\"hint\" id=\"mc-publish-hint\"></div>\n    </div>\n    <div class=\"row2\">\n      <div class=\"field\"><label>Date</label><input type=\"date\" id=\"mc-date\"><div class=\"hint\" id=\"mc-date-hint\"></div></div>\n      <div class=\"field\"><label>Time</label><input type=\"time\" id=\"mc-time\"></div>\n    </div>\n    <div id=\"mc-image-area\">\n      <div class=\"field\"><label>Image</label>\n        <select id=\"mc-image-source\" onchange=\"switchImageSource()\">\n          <option value=\"none\">No image</option>\n          <option value=\"upload\">Upload an image</option>\n          <option value=\"approved\">Choose an approved image</option>\n          <option value=\"url\">Use an image URL</option>\n        </select>\n      </div>\n      <div class=\"field\" id=\"mc-src-upload\" style=\"display:none\">\n        <label>File</label><input type=\"file\" id=\"mc-file\" accept=\"image/*\">\n        <div class=\"hint\">JPG, PNG, GIF or WebP, up to 10 MB.</div>\n      </div>\n      <div class=\"field\" id=\"mc-src-approved\" style=\"display:none\">\n        <label>Approved image</label><select id=\"mc-approved\"></select>\n      </div>\n      <div class=\"field\" id=\"mc-src-url\" style=\"display:none\">\n        <label>Image URL (must be public)</label><input type=\"text\" id=\"mc-imgurl\" placeholder=\"https://...\">\n      </div>\n    </div>\n    <div id=\"mc-msg\"></div>\n    <div class=\"btn-row\">\n      <button class=\"btn btn-primary\" id=\"mc-send-btn\" data-default=\"Send to Metricool\" onclick=\"submitMetricool()\">Send to Metricool</button>\n      <button class=\"btn btn-secondary\" onclick=\"closeMetricool()\">Cancel</button>\n    </div>\n  </div>\n</div>\n");
+document.body.insertAdjacentHTML('beforeend', "<div id=\"mc-modal\" style=\"display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:100;align-items:center;justify-content:center\">\n  <div class=\"card\" style=\"max-width:520px;width:92%;max-height:90vh;overflow:auto\">\n    <div class=\"ct\">Send to Metricool</div>\n    <div class=\"field\"><label>Post text</label><textarea id=\"mc-text\" style=\"min-height:120px\"></textarea></div>\n    <div class=\"field\"><label>Networks</label>\n      <label class=\"check\"><input type=\"checkbox\" id=\"mc-fb\" checked> Facebook</label>\n      <label class=\"check\"><input type=\"checkbox\" id=\"mc-ig\" checked> Instagram</label>\n      <label class=\"check\"><input type=\"checkbox\" id=\"mc-x\" checked> X</label>\n    </div>\n    <div class=\"field\"><label>Send as</label>\n      <label class=\"check\"><input type=\"radio\" name=\"mc-publish\" value=\"scheduled\" checked onchange=\"updatePublishHint()\"> Scheduled</label>\n      <label class=\"check\"><input type=\"radio\" name=\"mc-publish\" value=\"draft\" onchange=\"updatePublishHint()\"> Draft</label>\n      <div class=\"hint\" id=\"mc-publish-hint\"></div>\n    </div>\n    <div class=\"row2\">\n      <div class=\"field\"><label>Date</label><input type=\"date\" id=\"mc-date\"><div class=\"hint\" id=\"mc-date-hint\"></div></div>\n      <div class=\"field\"><label>Time</label><input type=\"time\" id=\"mc-time\"></div>\n    </div>\n    <div id=\"mc-image-area\">\n      <div class=\"field\"><label>Image</label>\n        <select id=\"mc-image-source\" onchange=\"switchImageSource()\">\n          <option value=\"none\">No image</option>\n          <option value=\"upload\">Upload an image</option>\n          <option value=\"approved\">Choose an approved image</option>\n          <option value=\"url\">Use an image URL</option>\n        </select>\n      </div>\n      <div class=\"field\" id=\"mc-src-upload\" style=\"display:none\">\n        <label>File</label><input type=\"file\" id=\"mc-file\" accept=\"image/*\">\n        <div class=\"hint\">JPG, PNG, GIF or WebP, up to 10 MB.</div>\n      </div>\n      <div class=\"field\" id=\"mc-src-approved\" style=\"display:none\">\n        <label>Approved image</label><select id=\"mc-approved\"></select>\n      </div>\n      <div class=\"field\" id=\"mc-src-url\" style=\"display:none\">\n        <label>Image URL (must be public)</label><input type=\"text\" id=\"mc-imgurl\" placeholder=\"https://...\">\n      </div>\n    </div>\n    <div id=\"mc-msg\"></div>\n    <div class=\"btn-row\">\n      <button class=\"btn btn-primary\" id=\"mc-send-btn\" data-default=\"Send to Metricool\" onclick=\"submitMetricool()\">Send to Metricool</button>\n      <button class=\"btn btn-secondary\" onclick=\"closeMetricool()\">Cancel</button>\n    </div>\n  </div>\n</div>\n");
 document.getElementById('mc-date').addEventListener('change', function(){ updateDateHint(); });
 // Per-network texts render here, in place of the single text box, when a
 // caller has a different caption for each network.
@@ -73,19 +74,13 @@ function switchImageSource(){
   if(mode!=='approved') document.getElementById('mc-approved').value='';
 }
 
-// Metricool's autoPublish is one flag for the whole post, and Instagram has to
-// publish itself — so ticking Instagram also commits whatever it's grouped with.
-// Say that up front instead of letting it be a surprise after the fact.
+// Scheduled or draft is the sender's call, and it holds for every network ticked.
+function mcPublishMode(){ return document.querySelector('input[name="mc-publish"]:checked').value; }
 function updatePublishHint(){
   var hint=document.getElementById('mc-publish-hint'); if(!hint) return;
-  var ig=document.getElementById('mc-ig').checked;
-  var others=[];
-  if(document.getElementById('mc-fb').checked) others.push('Facebook');
-  if(document.getElementById('mc-x').checked) others.push('X');
-  if(!ig){ hint.textContent='Lands as a draft — approve it in Metricool to publish.'; return; }
-  hint.textContent = others.length
-    ? 'Instagram publishes automatically, so '+others.join(' and ')+' will too — nothing waits for approval.'
-    : 'Publishes automatically at the scheduled time.';
+  hint.textContent = mcPublishMode() === 'draft'
+    ? 'Lands in the Metricool planner as a draft — nothing publishes until you schedule it there.'
+    : 'Publishes automatically at the date and time below.';
 }
 
 // opts.date is the day this post belongs to (this week's Wednesday for a
@@ -116,6 +111,7 @@ function openMetricool(text, opts){
     document.getElementById('mc-x').checked = opts.networks.indexOf('twitter') !== -1;
   }
   document.getElementById('mc-image-source').value = opts.approvedImageId ? 'approved' : opts.imageUrl ? 'url' : 'none';
+  document.querySelector('input[name="mc-publish"][value="'+(opts.publish === 'draft' ? 'draft' : 'scheduled')+'"]').checked = true;
   document.getElementById('mc-msg').innerHTML = '';
   switchImageSource();
   if (opts.imageUrl) document.getElementById('mc-imgurl').value = opts.imageUrl;
@@ -172,6 +168,7 @@ function submitMetricool(){
   if (!networks.length) { document.getElementById('mc-msg').innerHTML='<div class="alert alert-err">Pick at least one network.</div>'; return; }
   var dateTime = document.getElementById('mc-date').value + 'T' + (document.getElementById('mc-time').value||'09:00') + ':00';
   var tz = (window._mcDefaults && _mcDefaults.tz) || 'America/New_York';
+  var publish = mcPublishMode();
   // One send per distinct text: with a single caption that's one post to every
   // network; with separate captions, each network gets its own.
   var groups = [], byText = {};
@@ -185,8 +182,8 @@ function submitMetricool(){
   if (!groups.length) { document.getElementById('mc-msg').innerHTML='<div class="alert alert-err">There’s no text to send.</div>'; return; }
   mcSetBtn('mc-send-btn', true, 'Sending...');
   readMetricoolImage().then(function(image){
-    if (groups.length > 1) return sendGroups(groups, image, dateTime, tz);
-    var body = { text: groups[0].text, networks: groups[0].networks, dateTime: dateTime, timezone: tz,
+    if (groups.length > 1) return sendGroups(groups, image, dateTime, tz, publish);
+    var body = { text: groups[0].text, networks: groups[0].networks, dateTime: dateTime, timezone: tz, publish: publish,
       sourceType: _mcCtx.sourceType, sourceRef: _mcCtx.sourceRef, contentItemId: _mcCtx.contentItemId };
     Object.keys(image).forEach(function(k){ body[k]=image[k]; });
     return mcApi('/api/metricool/send', { method:'POST', body: body });
@@ -194,25 +191,24 @@ function submitMetricool(){
     mcSetBtn('mc-send-btn', false);
     var el = document.getElementById('mc-msg');
     if(!res.ok){ el.innerHTML = '<div class="alert alert-err">'+mcEsc(res.error)+'</div>'; return; }
-    // Whether a human still has to press publish depends on the networks picked,
-    // so say which of the two happened rather than a generic "sent".
+    // Say which of the two happened rather than a generic "sent".
     var fate = res.autoPublish
       ? ' It will publish automatically.'
-      : ' Approve it in the Metricool planner to publish.';
+      : ' It’s a draft — schedule it in the Metricool planner to publish.';
     var extra = fate + (res.note? ' '+mcEsc(res.note):'') + ((res.warnings&&res.warnings.length)? ' '+mcEsc(res.warnings.join(' ')):'');
     var each = res.sentTo ? ' Each network got its own text (' + mcEsc(res.sentTo.join(', ')) + ').' : '';
-    el.innerHTML = '<div class="alert alert-ok">Sent to Metricool — scheduled '+mcEsc(res.scheduledFor)+'.'+each+extra+'</div>';
+    el.innerHTML = '<div class="alert alert-ok">Sent to Metricool '+(res.autoPublish ? '— scheduled ' : 'as a draft for ')+mcEsc(res.scheduledFor)+'.'+each+extra+'</div>';
     if (_mcCtx.onSent) _mcCtx.onSent(res);
   }).catch(function(e){ mcSetBtn('mc-send-btn', false); document.getElementById('mc-msg').innerHTML = '<div class="alert alert-err">'+mcEsc(e.message)+'</div>'; });
 }
 
 // Send each network's own text as its own Metricool post, one after another,
 // and report exactly which went if one fails part-way.
-function sendGroups(groups, image, dateTime, tz) {
+function sendGroups(groups, image, dateTime, tz, publish) {
   var sent = [], last = null;
   return groups.reduce(function(chain, g){
     return chain.then(function(){
-      var body = { text: g.text, networks: g.networks, dateTime: dateTime, timezone: tz,
+      var body = { text: g.text, networks: g.networks, dateTime: dateTime, timezone: tz, publish: publish,
         sourceType: _mcCtx.sourceType, sourceRef: _mcCtx.sourceRef, contentItemId: _mcCtx.contentItemId };
       Object.keys(image).forEach(function(k){ body[k]=image[k]; });
       return mcApi('/api/metricool/send', { method:'POST', body: body }).then(function(res){

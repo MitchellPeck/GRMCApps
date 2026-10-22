@@ -181,3 +181,13 @@ test("disabled entries and dates outside effective bounds give no coverage", () 
 test("no entries at all is off with no next change", () => {
   assert.deepEqual(scheduleCoverage([], at("2026-01-15T10:00:00Z"), CHI), { on: false, changesAt: null });
 });
+
+test("a weekly slot whose first date is weeks away is upcoming, not finished", () => {
+  // Wednesday 2026-10-21; first Sunday allowed is 2026-11-15.
+  const e = entry({
+    id: 7, mode: "recurring", days: [0], startTime: "08:00", endTime: "12:30", effectiveFrom: "2026-11-15",
+  });
+  const [s] = describeEntries([e], at("2026-10-21T20:00:00Z"), CHI);
+  assert.equal(s.state, "upcoming");
+  assert.equal(s.nextStart?.toISOString(), "2026-11-15T14:00:00.000Z");
+});

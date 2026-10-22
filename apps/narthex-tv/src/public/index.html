@@ -40,6 +40,31 @@
     <div id="playnow-banner"></div>
 
     <div class="card" data-needs="schedule" hidden>
+      <div class="ct">Play now</div>
+      <p class="muted" style="font-size:13px;margin:0 0 14px">
+        Goes up immediately, over whatever is scheduled, and loops until you
+        clear it &mdash; turning the TV on if nothing is scheduled.
+      </p>
+      <div id="pn-msg"></div>
+      <div class="grid2">
+        <div class="field">
+          <label for="pn-kind">Play</label>
+          <select id="pn-kind">
+            <option value="playlist">A playlist</option>
+            <option value="media">One media item</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="pn-pick" id="pn-pick-label">Playlist</label>
+          <select id="pn-pick"></select>
+        </div>
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-primary" id="pn-start" data-default="Play now">Play now</button>
+      </div>
+    </div>
+
+    <div class="card" data-needs="schedule" hidden>
       <div class="ct">Put a message on the screen now</div>
       <p class="muted" style="font-size:13px;margin:0 0 14px">
         Goes up immediately, over whatever is scheduled, and stays until you clear
@@ -102,7 +127,7 @@
     <div id="schedule-msg"></div>
 
     <div class="card" data-needs="schedule" hidden>
-      <div class="ct">Put a playlist on the screen</div>
+      <div class="ct" id="s-form-title">Put a playlist on the screen</div>
       <div class="field">
         <label for="s-playlist">Playlist</label>
         <select id="s-playlist"></select>
@@ -169,6 +194,7 @@
 
       <div class="btn-row">
         <button class="btn btn-primary" id="s-save" data-default="Add to the schedule">Add to the schedule</button>
+        <button class="btn btn-secondary" id="s-cancel" hidden>Cancel</button>
       </div>
     </div>
 

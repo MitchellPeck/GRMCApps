@@ -94,7 +94,13 @@ export async function scheduleRoutes(app: FastifyInstance): Promise<void> {
         changesAt: power.changesAt ? power.changesAt.toISOString() : null,
       },
       playNow: playNow.active
-        ? { mediaId: playNow.mediaId, title: playNow.title, startedAt: playNow.startedAt, startedBy: playNow.startedBy }
+        ? {
+            mediaId: playNow.mediaId,
+            playlistId: playNow.playlistId,
+            title: playNow.title,
+            startedAt: playNow.startedAt,
+            startedBy: playNow.startedBy,
+          }
         : null,
       nothingPlayable,
       entry: entry ? { id: entry.id, mode: entry.mode, label: entry.label } : null,
@@ -129,6 +135,10 @@ export async function scheduleRoutes(app: FastifyInstance): Promise<void> {
     const merged = { ...toEntry(existing), ...readInputPartial(body) };
     const check = validateEntry(merged);
     if (!check.ok) return reply.code(400).send({ ok: false, error: check.error });
+    if (merged.playlistId !== toEntry(existing).playlistId) {
+      const exists = await pool.query("SELECT 1 FROM playlists WHERE id = $1", [merged.playlistId]);
+      if (!exists.rowCount) return reply.code(400).send({ ok: false, error: "No such playlist." });
+    }
 
     await updateEntry(pool, id, {
       playlistId: merged.playlistId,

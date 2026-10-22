@@ -8,6 +8,7 @@ import { settingsRoutes } from "./routes/settings";
 import { metricoolRoutes } from "./routes/metricool";
 import { podcastRoutes } from "./routes/podcast";
 import { pipelineRoutes } from "./routes/pipeline";
+import { mcpRoutes } from "./routes/mcp";
 import { backfillOnce } from "./pipeline/sync";
 import { migrateDrafting } from "./pipeline/migrate-drafting";
 import { recoverSermons, sermonOpts } from "./pipeline/sermons";
@@ -27,6 +28,7 @@ app.register(settingsRoutes);
 app.register(metricoolRoutes);
 app.register(podcastRoutes);
 app.register(pipelineRoutes);
+app.register(mcpRoutes);
 // The pipeline is the app now; old bookmarks to /pipeline land on it.
 app.get("/pipeline", async (_req, reply) => reply.redirect("/", 301));
 

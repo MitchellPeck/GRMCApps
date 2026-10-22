@@ -6,6 +6,8 @@ import { addDays } from "../dates";
 import { getEpisode } from "../buzzsprout";
 import { callClaude, stripJsonFences } from "../claude";
 import { DEFAULT_PLATFORMS } from "./config";
+import { startEpisodeTranscript } from "./episode-audio";
+import { sermonOpts } from "./sermons";
 import { SERIES_PLAN_PROMPT } from "./drafting-seed";
 import { ContentRow, createContent } from "./repo";
 import { Result, isIsoDate } from "./rules";
@@ -21,6 +23,8 @@ export async function planFromEpisode(
   const angles = (ev.drafting.angles || []).filter((a: { key: string }) => angleKeys.includes(a.key));
   if (!angles.length) return fail("Pick at least one angle.");
   const ep = await getEpisode(pool, episodeId);
+  // Start transcribing the audio now, so it's likely ready by the time anyone drafts.
+  if (ep.audioUrl) await startEpisodeTranscript(pool, ep, sermonOpts());
   const base = ep.publishDate || today;
   const items: ContentRow[] = [];
   for (const a of angles) {
@@ -37,6 +41,14 @@ export async function planFromEpisode(
 
 export interface PlannedPost { date: string; phase: string; title: string; sub: string }
 
+const PLAN_SCHEMA = {
+  type: "object", additionalProperties: false, required: ["posts"],
+  properties: { posts: { type: "array", items: {
+    type: "object", additionalProperties: false, required: ["date", "phase", "title", "sub"],
+    properties: { date: { type: "string" }, phase: { type: "string" }, title: { type: "string" }, sub: { type: "string" } },
+  } } },
+};
+
 export async function proposeSeriesPlan(
   pool: Pool, eventId: string, params: { count: number; cadence: string; startDate: string },
 ): Promise<Result<PlannedPost[]>> {
@@ -47,7 +59,10 @@ export async function proposeSeriesPlan(
   const lines = SERIES_PLAN_PROMPT({ name: ev.name, description: "", context: ev.notes || "", count: params.count,
     cadence: params.cadence || "weekly", startDate: params.startDate || "" });
   let rows: unknown;
-  try { rows = JSON.parse(stripJsonFences(await callClaude(pool, sys, lines.join("\n")))); }
+  try {
+    const reply = JSON.parse(stripJsonFences(await callClaude(pool, sys, lines.join("\n"), { schema: PLAN_SCHEMA })));
+    rows = Array.isArray(reply) ? reply : reply?.posts;
+  }
   catch (e) { return fail(e instanceof SyntaxError ? "Claude's plan wasn't readable. Try again." : (e as Error).message); }
   if (!Array.isArray(rows)) return fail("Claude's plan wasn't a list. Try again.");
   const posts = rows.map((r: any) => ({

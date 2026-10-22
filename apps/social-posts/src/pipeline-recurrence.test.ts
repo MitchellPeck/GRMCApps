@@ -1,8 +1,8 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import { Rule, describeRule, occurrences, parseRecurrenceInput, parseRule } from "./pipeline/recurrence";
-import { buildCaptureIcs } from "./pipeline/ical";
-import { MediaRow } from "./pipeline/repo";
+import { buildCaptureIcs, buildPostsIcs } from "./pipeline/ical";
+import { ContentRow, MediaRow } from "./pipeline/repo";
 
 const base: Rule = {
   freq: "weekly", interval: 1, weekdays: [], monthDay: null, nth: null, weekday: null,
@@ -83,4 +83,26 @@ test("capture feed is valid iCalendar with escaping and folding", () => {
   assert.equal((ics.match(/BEGIN:VEVENT/g) || []).length, 1, "undated media left out");
   for (const line of ics.split("\r\n")) assert.ok(Buffer.byteLength(line) <= 75, "folded: " + line);
   assert.ok(ics.endsWith("END:VCALENDAR\r\n"));
+});
+
+test("posts feed: timed posts in the church's zone, others all day, status in the title", () => {
+  const p = {
+    id: "c1", title: "Advent, week one", eventName: "Advent", platforms: ["instagram", "x"], publishDate: "2026-11-29",
+    publishTime: "09:30", status: "drafted", ownerEmail: "a@x.org", brief: "", captionMode: "separate",
+    caption: "", captions: { instagram: "Come early", x: "" }, mediaTotal: 2, mediaDone: 1,
+  } as unknown as ContentRow;
+  const ics = buildPostsIcs([
+    p,
+    { ...p, id: "c2", publishTime: null, status: "published" },
+    { ...p, id: "c3", publishDate: null },
+  ], { name: "GRMC posts", pageUrl: "https://x/#calendar", stamp: new Date("2026-10-20T12:00:00Z"), timezone: "America/New_York" });
+  assert.equal((ics.match(/BEGIN:VEVENT/g) || []).length, 2, "undated posts left out");
+  assert.match(ics, /DTSTART;TZID=America\/New_York:20261129T093000\r\nDURATION:PT30M/);
+  assert.match(ics, /SUMMARY:Advent\\, week one \(Drafted\)/);
+  assert.match(ics, /DTSTART;VALUE=DATE:20261129\r\nDTEND;VALUE=DATE:20261130\r\nSUMMARY:✓ Advent/);
+  const unfolded = ics.replace(/\r\n /g, "");
+  assert.match(unfolded, /Instagram\\, X/);
+  assert.match(unfolded, /Media: 1 of 2 ready/);
+  assert.match(unfolded, /Instagram:\\nCome early/);
+  for (const line of ics.split("\r\n")) assert.ok(Buffer.byteLength(line) <= 75, "folded: " + line);
 });
