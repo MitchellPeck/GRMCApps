@@ -126,7 +126,11 @@ export async function schedulePost(c: MetricoolCreds, payload: SchedulerPayload)
     const detail = data?.message || data?.error || text.trim().slice(0, 300);
     throw new Error(`Metricool scheduler failed (${res.status})${detail ? `: ${detail}` : ""}`);
   }
-  return String(data.id ?? data.postId ?? "");
+  // The live reply didn't carry the id at the top level, and its real shape is unknown, so try each
+  // likely place. No id is fine: the post-send sync relinks it from the planner.
+  const id = data?.id ?? data?.postId ?? data?.data?.id ?? data?.data?.postId
+    ?? (Array.isArray(data?.data) ? data.data[0]?.id : undefined);
+  return String(id ?? "");
 }
 
 export interface McProvider { network: string; status: string; detailedStatus?: string; publicUrl?: string }

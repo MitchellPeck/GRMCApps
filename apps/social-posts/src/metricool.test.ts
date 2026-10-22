@@ -95,3 +95,22 @@ test("a Metricool post is published only when every network says so", async () =
   assert.equal(publicationState({ providers: [] }).state, "unknown", "nothing to go on, change nothing");
   assert.equal(publicationState({ providers: [prov("WEIRD")] }).state, "unknown");
 });
+
+test("schedulePost finds the new post's id in every reply shape we've seen or suspect", async () => {
+  const { schedulePost } = await import("./metricool");
+  const creds = { token: "t", userId: "u", blogId: "b" };
+  const payload = buildSchedulerPayload({ text: "Hi", networks: ["facebook"], dateTime: "2026-11-01T09:00:00",
+    timezone: "America/New_York", mediaUrls: [], publish: "scheduled" });
+  const real = globalThis.fetch;
+  const idFrom = async (reply: unknown) => {
+    globalThis.fetch = (async () => new Response(JSON.stringify(reply), { status: 200 })) as typeof fetch;
+    try { return await schedulePost(creds, payload); } finally { globalThis.fetch = real; }
+  };
+  assert.equal(await idFrom({ id: 1 }), "1");
+  assert.equal(await idFrom({ postId: 2 }), "2");
+  assert.equal(await idFrom({ data: { id: 3 } }), "3");
+  assert.equal(await idFrom({ data: { postId: 4 } }), "4");
+  assert.equal(await idFrom({ data: [{ id: 5 }] }), "5");
+  assert.equal(await idFrom({ data: [] }), "", "no id is an empty id, not a crash");
+  assert.equal(await idFrom({}), "");
+});

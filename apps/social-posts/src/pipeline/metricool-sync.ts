@@ -57,7 +57,9 @@ async function syncOnce(pool: Pool, o: { itemId?: string; now?: Date }): Promise
   const itemIds = o.itemId ? [o.itemId]
     : (await pool.query(`SELECT DISTINCT content_item_id FROM metricool_links WHERE content_item_id IS NOT NULL`)).rows.map((r) => r.content_item_id);
   const links = [...(await linksFor(pool, itemIds)).values()].flat();
-  const dates = links.map(dayOf).filter(Boolean).sort();
+  const dates = links.map(dayOf).filter(Boolean);
+  if (o.itemId) dates.push(...await idlessDays(pool, o.itemId));
+  dates.sort();
   let covered: Covered;
   if (o.itemId) {
     if (!dates.length) return counts;
@@ -115,6 +117,19 @@ async function syncOnce(pool: Pool, o: { itemId?: string; now?: Date }): Promise
     }
   }
   return counts;
+}
+
+/**
+ * A send Metricool gave no id has no link, so a one-post window built from links alone would never
+ * list it: add its date and the post's own, so the relink can find it.
+ */
+async function idlessDays(pool: Pool, itemId: string): Promise<string[]> {
+  const sends = (await pool.query(
+    `SELECT left(scheduled_for, 10) AS d FROM metricool_sends
+      WHERE status = 'sent' AND metricool_post_id = '' AND source_type = 'content' AND source_ref = $1`, [itemId])).rows;
+  if (!sends.length) return [];
+  const item = (await pool.query(`SELECT publish_date::text AS d FROM content_items WHERE id = $1`, [itemId])).rows[0];
+  return [...sends.map((s) => String(s.d)), item?.d].filter((d): d is string => /^\d{4}-\d{2}-\d{2}$/.test(d || ""));
 }
 
 async function syncItem(
