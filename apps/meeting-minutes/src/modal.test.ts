@@ -1758,3 +1758,91 @@ test("console: the replaced box's blur never writes onto the next topic", { skip
   assert.equal(w.eval("state.items[1].notes"), "Roof notes");
   assert.equal(doc.getElementById("rc-notes").value, "Roof notes");
 });
+
+// ── Naming the meeting's voices ─────────────────────────────────────────────
+// Names used to wait in the dropdowns for "Save speakers", and every poll
+// redraw (a summary landing) threw them away.
+// What the server sends back for the meeting once the names are in.
+const voicesDetail = (w: any) => w.eval(`({ ok: true, meeting: Object.assign({}, state.meeting), items: state.items,
+  attendeeIds: state.attendeeIds, meetingRecordings: [], meetingSpeakerStats: state.meetingSpeakerStats, guests: [] })`);
+function bootVoices() {
+  const b = boot();
+  const calls = stubFetch(b.w, (p) => (p === "/api/meetings/42" ? voicesDetail(b.w) : { ok: true }));
+  b.w.eval(`
+    state.people = [{ id: 9, name: 'Alice', active: true }, { id: 10, name: 'Bob', active: true }];
+    state.peopleById = { 9: state.people[0], 10: state.people[1] }; state.attendeeIds = [9, 10];
+    state.meeting.speaker_map = {};
+    state.meetingSpeakerStats = [
+      { speaker: 'S0', label: 'Speaker 1', seconds: 300, share: 0.6, sample: 'one' },
+      { speaker: 'S1', label: 'Speaker 2', seconds: 200, share: 0.4, sample: 'two' }];
+    state.section = 'speakers'; renderDetail();`);
+  return { ...b, calls };
+}
+const pick = (w: any, doc: any, spk: string, name: string) => {
+  const sel = doc.querySelector(`select[data-mspk="${spk}"]`);
+  sel.value = name;
+  sel.dispatchEvent(new w.Event("change", { bubbles: true }));
+};
+
+test("voices: choosing a name saves it at once, with the names already chosen", { skip }, async () => {
+  const { w, doc, calls } = bootVoices();
+  assert.equal(doc.getElementById("btn-save-mspk"), null, "no separate Save step");
+  pick(w, doc, "S0", "Alice");
+  await flush();
+  pick(w, doc, "S1", "Bob");
+  await flush();
+  const puts = calls.filter((c) => c.method === "PUT" && c.path === "/api/meetings/42/speaker-map");
+  assert.equal(puts.length, 2);
+  assert.deepEqual(puts[0].body.speakerMap, { S0: "Alice" });
+  assert.deepEqual(puts[1].body.speakerMap, { S0: "Alice", S1: "Bob" });
+});
+
+test("voices: a redraw mid-naming keeps every name chosen", { skip }, () => {
+  const { w, doc } = bootVoices();
+  pick(w, doc, "S0", "Alice");
+  w.eval("renderMeetingSpeakerPanel()"); // what a poll does when a summary lands
+  pick(w, doc, "S1", "Bob");
+  w.eval("renderMeetingSpeakerPanel()");
+  assert.equal(doc.querySelector('select[data-mspk="S0"]').value, "Alice");
+  assert.equal(doc.querySelector('select[data-mspk="S1"]').value, "Bob");
+});
+
+test("voices: quick changes save in order, so the last choice wins", { skip }, async () => {
+  const { w, doc } = bootVoices();
+  const order: string[] = [];
+  let release: () => void = () => {};
+  w.fetch = (path: string, opts: any = {}) => {
+    if (opts.method === "PUT") {
+      const body = JSON.parse(opts.body);
+      order.push(JSON.stringify(body.speakerMap));
+      if (order.length === 1) return new Promise((r) => { release = () => r({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }) }); });
+    }
+    const a = path === "/api/meetings/42" ? voicesDetail(w) : { ok: true };
+    return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(a) });
+  };
+  pick(w, doc, "S0", "Alice");
+  pick(w, doc, "S0", "Bob");
+  await flush();
+  assert.equal(order.length, 1, "the second save waits for the first");
+  release();
+  await flush(); await flush();
+  assert.deepEqual(order, ['{"S0":"Alice"}', '{"S0":"Bob"}']);
+});
+
+test("voices: a refused save says so and puts the dropdown back", { skip }, async () => {
+  const { w, doc } = bootVoices();
+  stubFetch(w, (_p, o) => (o.method === "PUT" ? { ok: false, error: "Someone else is editing" } : { ok: true }));
+  pick(w, doc, "S0", "Alice");
+  await flush(); await flush();
+  assert.match(doc.getElementById("mspk-msg").textContent, /Someone else is editing/);
+  assert.equal(doc.querySelector('select[data-mspk="S0"]').value, "");
+});
+
+test("voices: leaving while a name is still saving warns", { skip }, () => {
+  const { w, doc } = bootVoices();
+  w.fetch = () => new Promise(() => {}); // never answers
+  pick(w, doc, "S0", "Alice");
+  const ev = new w.Event("beforeunload", { cancelable: true });
+  w.dispatchEvent(ev);
+  assert.equal(ev.defaultPrevented, true);
+});

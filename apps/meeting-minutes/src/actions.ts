@@ -51,13 +51,14 @@ export async function patchItem(pool: Pool, itemId: number, input: Record<string
   return { status: 200, body: { ...r, summaryQueued: contentChanged } };
 }
 
-// Name the meeting's voices. Without minutes yet, every whole-meeting summary
-// is cleared and written again; with minutes, they are corrected in place.
+// Name the meeting's voices. Without minutes yet, the summaries of topics the
+// renamed voices spoke in are cleared and written again; with minutes, they
+// are corrected in place. Names are given one at a time, so the rewrite waits
+// for a pause: each rename restarts the wait, and a run of them costs one
+// summary per topic rather than one per rename.
 export async function saveMeetingSpeakers(pool: Pool, meetingId: number, map: Record<string, unknown>): Promise<void> {
-  const hadReport = !!(await getMeeting(pool, meetingId))?.report_generated_at;
-  await rewriteMeetingSpeakerMap(pool, meetingId, map);
-  if (hadReport) return;
+  const changed = await rewriteMeetingSpeakerMap(pool, meetingId, map);
   for (const it of await listAgendaItems(pool, meetingId)) {
-    if (it.transcript_source === "meeting" && itemHasContent(it)) await requestSummary(it.id);
+    if (changed.includes(it.id) && itemHasContent(it)) await requestSummary(it.id, EDIT_SUMMARY_DELAY_MS);
   }
 }

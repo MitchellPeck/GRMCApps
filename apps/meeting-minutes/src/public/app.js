@@ -1983,21 +1983,93 @@ document.addEventListener('click', function(e){
 
 // Meeting-wide speaker naming: one set of voices for the whole recording.
 // Saving rewrites every meeting-sourced topic's transcript server-side.
-var savingMspk=false; // true only while a PUT .../speaker-map is in flight (blocks double-submit)
+// Each name is saved the moment it is chosen, one save at a time and in
+// order. Until the saves land, the panel draws from the names chosen
+// (mspkWanted), so a redraw (a summary landing, say) never undoes one.
+var mspkWanted=null, mspkPending=0, mspkChain=Promise.resolve(), mspkMeetingId=null;
+window.addEventListener('beforeunload', function(e){ if(mspkPending>0){ e.preventDefault(); e.returnValue=''; } });
+
+function meetingSpeakerMap(){
+  if(mspkPending>0 && state.meeting && mspkMeetingId===state.meeting.id && mspkWanted) return mspkWanted;
+  return (state.meeting && state.meeting.speaker_map)||{};
+}
+
+function nameMeetingSpeaker(spk, name){
+  var mid=state.meeting.id;
+  var before=meetingSpeakerMap()[spk]||'';
+  var map=JSON.parse(JSON.stringify(meetingSpeakerMap()));
+  if(name) map[spk]=name; else delete map[spk];
+  mspkWanted=map; mspkMeetingId=mid; mspkPending++;
+  msg('mspk-msg','','');
+  renderMeetingSpeakerPanel();
+  mspkChain=mspkChain.then(function(){
+    return flushReportSave().then(function(){
+      return api('/api/meetings/'+mid+'/speaker-map', { method:'PUT', body:{ speakerMap:map } });
+    });
+  }).then(function(res){
+    if(res && res.ok) return { ok:true };
+    return { ok:false, error:(res && res.error)||'Could not save.' };
+  }, function(e){ return { ok:false, error:e.message }; }).then(function(r){
+    mspkPending--;
+    var here=state.meeting && state.meeting.id===mid;
+    if(!r.ok){
+      // Put back this one choice, unless it has been changed again since.
+      if(mspkWanted && (mspkWanted[spk]||'')===(name||'')){
+        if(before) mspkWanted[spk]=before; else delete mspkWanted[spk];
+      }
+      if(here){ msg('mspk-msg','err','Could not save '+(name||'that change')+': '+r.error); renderMeetingSpeakerPanel(); }
+      return;
+    }
+    // The server now holds exactly this map.
+    if(here) state.meeting.speaker_map=map;
+    if(mspkPending>0 || !here) return;
+    // All saved: pull the relabelled transcripts.
+    return api('/api/meetings/'+mid).then(function(det){
+      if(mspkPending>0 || !state.meeting || state.meeting.id!==mid) return;
+      if(det.ok){
+        adoptMeeting(det.meeting);
+        state.meetingRecordings=det.meetingRecordings||[];
+        state.meetingSpeakerStats=det.meetingSpeakerStats||[];
+        state.attendeeIds=det.attendeeIds;
+        syncItems(det.items);
+      }
+      mspkWanted=null;
+      renderMeetingSpeakerPanel();
+      // With minutes, the server corrected them in place. Without, the topics
+      // these voices spoke in get new summaries once the naming pauses.
+      msg('mspk-msg','ok', state.meeting && state.meeting.report_generated_at
+        ? 'Saved. Transcripts, summaries, action items and the minutes are updated.'
+        : 'Saved. Transcripts are updated; summaries of the topics these voices spoke in are rewritten two minutes after the last change.');
+      startPolling();
+    });
+  });
+}
+
 function renderMeetingSpeakerPanel(){
   var el=document.getElementById('meeting-speakers'); if(!el) return;
   var stats=state.meetingSpeakerStats||[];
   if(!stats.length){ el.innerHTML=''; return; }
-  var map=(state.meeting && state.meeting.speaker_map)||{};
+  var map=meetingSpeakerMap();
   // Samples are on the processed recording's timeline, so they can be played.
   var recs=state.meetingRecordings||[];
   var recId=recs.length ? recs[recs.length-1].id : null;
   var opts=speakerOptions;
-  // Voices still to name come first.
+  var busy=meetingProcessing();
+  // Kept in the order they were first drawn while naming, so a row doesn't
+  // jump away the moment it is named; unnamed voices first otherwise.
   var ordered=stats.filter(function(st){ return !map[st.speaker]; }).concat(stats.filter(function(st){ return !!map[st.speaker]; }));
+  if(el._order && el._order.length===stats.length && (mspkPending>0 || el.contains(document.activeElement))){
+    var by={}; stats.forEach(function(st){ by[st.speaker]=st; });
+    var kept=el._order.map(function(k){ return by[k]; }).filter(Boolean);
+    if(kept.length===stats.length) ordered=kept;
+  }
+  el._order=ordered.map(function(st){ return st.speaker; });
   var mins=function(sec){ var m=Math.round(sec/60); return m<1 ? 'under a minute' : m+' min'; };
+  var saving=mspkPending>0 && state.meeting && mspkMeetingId===state.meeting.id;
+  var keepMsg=document.getElementById('mspk-msg');
+  keepMsg=keepMsg ? keepMsg.innerHTML : '';
   el.innerHTML='<div class="card"><div class="ct">Who spoke in this meeting?</div>'
-    +'<div id="mspk-msg"></div>'
+    +'<div id="mspk-msg">'+keepMsg+'</div>'
     +'<div class="voice-cards">'
     + ordered.map(function(st){
         var cur=map[st.speaker]||'';
@@ -2006,48 +2078,20 @@ function renderMeetingSpeakerPanel(){
           +'<div class="voice-head"><span class="spk-tag">'+esc(st.label)+'</span>'
           +'<span class="voice-time">'+mins(st.seconds||0)+' · '+pct+'%</span>'
           +(cur?'':'<span class="chip warn-chip">unnamed</span>')+'<span style="flex:1"></span>'
-          +'<select data-mspk="'+esc(st.speaker)+'">'+opts(cur)+'</select></div>'
+          +'<select data-mspk="'+esc(st.speaker)+'"'+(busy?' disabled':'')+'>'+opts(cur)+'</select></div>'
           +(st.sample?'<div class="spk-sample">&ldquo;'+esc(st.sample)+'&rdquo;</div>':'')
           +speakerSamplesHtml(st, recId)
           +'</div>';
       }).join('')
     +'</div>'
-    +'<div class="hint">One set of voices for the whole meeting &mdash; assign a name once and every topic updates. Saving re-labels all topic transcripts.</div>'
-    +'<div class="btn-row"><button class="btn btn-primary" id="btn-save-mspk" data-default="Save speakers"'+((savingMspk||meetingProcessing())?' disabled':'')+'>Save speakers</button></div>'
-    +'</div>';
-  document.getElementById('btn-save-mspk').addEventListener('click', function(){
-    if(savingMspk || meetingProcessing()) return;
-    var newMap={};
-    el.querySelectorAll('select[data-mspk]').forEach(function(sel){
-      if(sel.value) newMap[sel.getAttribute('data-mspk')]=sel.value;
+    +'<div class="hint">One set of voices for the whole meeting &mdash; choose a name once and every topic updates. Each name saves as soon as you choose it.'
+    +(saving ? ' <span class="mspk-saving"><span class="spin" style="border-top-color:var(--navy)"></span> Saving&hellip;</span>' : '')
+    +'</div></div>';
+  el.querySelectorAll('select[data-mspk]').forEach(function(sel){
+    sel.addEventListener('change', function(){
+      if(meetingProcessing()) return;
+      nameMeetingSpeaker(sel.getAttribute('data-mspk'), sel.value);
     });
-    savingMspk=true;
-    var mid=state.meeting.id;
-    setBtn('btn-save-mspk', true, 'Saving...');
-    flushReportSave().then(function(){ return api('/api/meetings/'+mid+'/speaker-map', { method:'PUT', body:{ speakerMap:newMap } }); })
-      .then(function(res){
-        if(!res.ok){ savingMspk=false; setBtn('btn-save-mspk', false); msg('mspk-msg','err',res.error||'Could not save.'); return; }
-        savingMspk=false;
-        if(!state.meeting || state.meeting.id!==mid) return;
-        return api('/api/meetings/'+mid).then(function(det){
-          if(!state.meeting || state.meeting.id!==mid) return;
-          if(det.ok){
-            adoptMeeting(det.meeting);
-            state.meetingRecordings=det.meetingRecordings||[];
-            state.meetingSpeakerStats=det.meetingSpeakerStats||[];
-            state.attendeeIds=det.attendeeIds;
-            syncItems(det.items);
-          }
-          renderMeetingSpeakerPanel();
-          // Without minutes yet, the server cleared every meeting-sourced
-          // summary and queued them again; the poll shows them landing. With
-          // minutes, it corrected them in place.
-          msg('mspk-msg','ok', state.meeting && state.meeting.report_generated_at
-            ? 'Speakers saved — transcripts, summaries, action items and the minutes updated.'
-            : 'Speakers saved — transcripts updated. Summaries are being rewritten.');
-          startPolling();
-        });
-      })['catch'](function(e){ savingMspk=false; setBtn('btn-save-mspk', false); msg('mspk-msg','err',e.message); });
   });
   renderMeetingNav();
 }

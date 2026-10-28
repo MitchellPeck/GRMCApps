@@ -382,13 +382,16 @@ test("rewriteMeetingSpeakerMap renames every meeting-sourced topic with meeting-
   // Meeting-wide numbering: item B's only voice is Speaker 2, not Speaker 1.
   assert.equal((await getAgendaItem(pool, bId))!.transcript, "Speaker 2: Trip is planned.");
 
-  await rewriteMeetingSpeakerMap(pool, meetingId, { SPEAKER_00: "Alice", IGNORED: "" });
+  const changed = await rewriteMeetingSpeakerMap(pool, meetingId, { SPEAKER_00: "Alice", IGNORED: "" });
   const aAfter = (await getAgendaItem(pool, aId))!;
   const bAfter = (await getAgendaItem(pool, bId))!;
   assert.equal(aAfter.transcript, "Alice: Numbers look good.");
   assert.equal(bAfter.transcript, "Speaker 2: Trip is planned.");
   assert.equal(aAfter.summary, "");
   assert.equal(aAfter.status, "pending");
+  // Naming one voice leaves topics it never spoke in alone.
+  assert.deepEqual(changed, [aId]);
+  assert.equal(bAfter.summary, "stale B");
   assert.deepEqual((await getMeeting(pool, meetingId))!.speaker_map, { SPEAKER_00: "Alice" });
 
   await reset(pool);

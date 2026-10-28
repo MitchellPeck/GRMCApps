@@ -746,7 +746,7 @@ export async function rewriteMeetingSpeakerMap(
   pool: Pool,
   meetingId: number,
   rawMap: Record<string, unknown>
-): Promise<void> {
+): Promise<number[]> {
   const map: SpeakerMap = {};
   for (const [k, v] of Object.entries(rawMap ?? {})) {
     const name = String(v ?? "").trim();
@@ -757,7 +757,7 @@ export async function rewriteMeetingSpeakerMap(
   const m = await pool.query("SELECT report_generated_at FROM meetings WHERE id = $1", [meetingId]);
   if (m.rows[0]?.report_generated_at) {
     await renameMeetingSpeakers(pool, meetingId, map);
-    return;
+    return [];
   }
   const client = await pool.connect();
   try {
@@ -766,7 +766,7 @@ export async function rewriteMeetingSpeakerMap(
       meetingId, JSON.stringify(map),
     ]);
     const r = await client.query(
-      `SELECT id, transcript_segments FROM agenda_items
+      `SELECT id, transcript, transcript_segments FROM agenda_items
         WHERE meeting_id = $1 AND transcript_source = 'meeting' ORDER BY position, id`,
       [meetingId]
     );
@@ -774,16 +774,27 @@ export async function rewriteMeetingSpeakerMap(
       (Array.isArray(row.transcript_segments) ? row.transcript_segments : []) as DiarizedSegment[]
     );
     const order = chronologicalSpeakerOrder(perItem);
+    // Only a topic whose transcript reads differently needs a new summary; one
+    // where the renamed voice never spoke keeps the summary it has.
+    const changed: number[] = [];
     for (let i = 0; i < r.rows.length; i++) {
+      const id = Number(r.rows[i].id);
+      const transcript = renderTranscript(perItem[i], map, order);
+      if (transcript === r.rows[i].transcript) {
+        await client.query("UPDATE agenda_items SET speaker_map = $2 WHERE id = $1", [id, JSON.stringify(map)]);
+        continue;
+      }
+      changed.push(id);
       await client.query(
         `UPDATE agenda_items
             SET speaker_map = $2, transcript = $3, summary = '', action_items = '[]'::jsonb, status = 'pending'
           WHERE id = $1`,
-        [Number(r.rows[i].id), JSON.stringify(map), renderTranscript(perItem[i], map, order)]
+        [id, JSON.stringify(map), transcript]
       );
     }
     await client.query("UPDATE meetings SET updated_at = now() WHERE id = $1", [meetingId]);
     await client.query("COMMIT");
+    return changed;
   } catch (e) {
     await client.query("ROLLBACK");
     throw e;
