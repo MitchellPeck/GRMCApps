@@ -1599,3 +1599,162 @@ test("the chat panel ends at the bottom of the window, above the mini player", {
   w.eval("fitChatPanel()");
   assert.equal(panel.style.height, "548px", "stops 12px above the player: 760 - 12 - 200");
 });
+
+// ── Recording console ───────────────────────────────────────────────────────
+// A recording in progress on the meeting on screen, with the console open.
+function bootConsole() {
+  const b = bootTwoTopics();
+  const calls = stubFetch(b.w, () => ({ ok: true }));
+  b.w.eval(`renderDetail();
+    meetingRec = { meetingId: 42, recordingId: 7, title: "April Board Meeting", topic: "", topicId: null,
+      t0: performance.now(), mr: { state: "recording" }, stream: { getTracks(){ return []; } },
+      chain: Promise.resolve(), failedChunk: null, timer: null };
+    renderMeetingRecUi(); openRecConsole();`);
+  return { ...b, calls };
+}
+const typeNotes = (w: any, doc: any, text: string) => {
+  const ta = doc.getElementById("rc-notes");
+  ta.value = text;
+  ta.dispatchEvent(new w.Event("input", { bubbles: true }));
+  return ta;
+};
+
+test("console: opens on the first topic, filing the audio there, in place of the bar", { skip }, () => {
+  const { doc, calls } = bootConsole();
+  const el = doc.getElementById("rec-console");
+  assert.equal(el.hidden, false);
+  assert.ok(doc.body.classList.contains("rc-open"));
+  assert.equal(doc.getElementById("rec-banner").hidden, true, "the console has its own bar");
+  assert.equal(doc.querySelector(".rc-title").textContent, "Budget");
+  assert.ok(calls.some((c) => c.path === "/api/meeting-recordings/7/marker" && c.body.itemId === 1));
+  assert.equal(doc.querySelectorAll(".rc-topic").length, 2);
+  assert.ok(doc.querySelector('.rc-topic[data-rc-topic="1"]').classList.contains("on"));
+  assert.match(doc.getElementById("rc-next").textContent, /Roof/);
+});
+
+test("console: tapping a topic files the audio under it and shows its notes", { skip }, () => {
+  const { w, doc, calls } = bootConsole();
+  w.eval("state.items[1].notes = 'Leak by the bell tower'");
+  doc.querySelector('.rc-topic[data-rc-topic="2"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  assert.ok(calls.some((c) => c.path === "/api/meeting-recordings/7/marker" && c.body.itemId === 2));
+  assert.equal(doc.querySelector(".rc-title").textContent, "Roof");
+  assert.equal(doc.getElementById("rc-notes").value, "Leak by the bell tower");
+  assert.equal(doc.getElementById("rc-next"), null, "the last topic has no Next");
+});
+
+test("console: notes save after a pause, onto the topic, and match its own Notes box", { skip }, async () => {
+  const { w, doc, calls } = bootConsole();
+  w.eval("RC_SAVE_MS = 10");
+  typeNotes(w, doc, "Motion to approve the budget");
+  assert.equal(calls.filter((c) => c.method === "PATCH").length, 0, "nothing saved mid-typing");
+  await flush();
+  const patch = calls.find((c) => c.method === "PATCH")!;
+  assert.equal(patch.path, "/api/items/1");
+  assert.deepEqual(patch.body, { notes: "Motion to approve the budget" });
+  assert.equal(w.eval("state.items[0].notes"), "Motion to approve the budget");
+  assert.equal(doc.getElementById("nt-1").value, "Motion to approve the budget");
+  await flush();
+  assert.equal(doc.getElementById("rc-save").textContent, "Saved");
+});
+
+test("console: moving on saves what was typed for the topic it was typed under", { skip }, () => {
+  const { w, doc, calls } = bootConsole();
+  typeNotes(w, doc, "Approved 5-0");
+  doc.getElementById("rc-next").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  const patch = calls.find((c) => c.method === "PATCH")!;
+  assert.equal(patch.path, "/api/items/1");
+  assert.equal(patch.body.notes, "Approved 5-0");
+  assert.equal(doc.querySelector(".rc-title").textContent, "Roof");
+  assert.equal(doc.getElementById("rc-notes").value, "");
+});
+
+test("console: the clock ticking doesn't disturb typing", { skip }, () => {
+  const { w, doc } = bootConsole();
+  const ta = typeNotes(w, doc, "half a thought");
+  w.eval("renderMeetingRecUi()");
+  assert.equal(doc.getElementById("rc-notes"), ta, "same box, not rebuilt");
+  assert.equal(ta.value, "half a thought");
+});
+
+test("console: a failed save is said, and tried again on the next pause", { skip }, async () => {
+  const { w, doc } = bootConsole();
+  let fail = true;
+  const calls = stubFetch(w, (_p, o) => (o.method === "PATCH" && fail ? { ok: false, error: "Server down" } : { ok: true }));
+  w.eval("RC_SAVE_MS = 10");
+  typeNotes(w, doc, "Keep this");
+  await flush(); await flush();
+  assert.match(doc.getElementById("rc-save").textContent, /Not saved: Server down/);
+  assert.equal(w.eval("state.items[0].notes"), "", "the topic doesn't pretend it was saved");
+  fail = false;
+  doc.getElementById("rc-notes").dispatchEvent(new w.Event("blur"));
+  assert.equal(calls.filter((c) => c.method === "PATCH").length, 2);
+});
+
+test("console: Full view leaves it recording; the bar brings it back", { skip }, () => {
+  const { w, doc } = bootConsole();
+  doc.getElementById("rc-full").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  assert.equal(doc.getElementById("rec-console").hidden, true);
+  assert.equal(doc.body.classList.contains("rc-open"), false);
+  assert.ok(w.eval("meetingRec !== null"), "still recording");
+  const banner = doc.getElementById("rec-banner");
+  assert.equal(banner.hidden, false);
+  doc.getElementById("rb-console").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  assert.equal(doc.getElementById("rec-console").hidden, false);
+});
+
+test("console: Stop asks first, then saves the notes and stops", { skip }, () => {
+  const { w, doc, calls } = bootConsole();
+  w.eval("var stopped = 0; meetingRec.mr = { state: 'recording', stop: function(){ stopped++; } };");
+  typeNotes(w, doc, "Adjourned 8:40");
+  w.confirm = () => false;
+  doc.getElementById("rc-stop").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  assert.equal(w.eval("stopped"), 0);
+  w.confirm = () => true;
+  doc.getElementById("rc-stop").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  assert.equal(w.eval("stopped"), 1);
+  assert.ok(calls.some((c) => c.method === "PATCH" && c.body.notes === "Adjourned 8:40"));
+});
+
+test("console: closes itself once the recording ends", { skip }, () => {
+  const { w, doc } = bootConsole();
+  w.eval("finalizeMeetingRecording()");
+  assert.equal(doc.getElementById("rec-console").hidden, true);
+  assert.equal(doc.body.classList.contains("rc-open"), false);
+});
+
+test("console: without the lock, notes are read-only but topics still file the audio", { skip }, () => {
+  const { w, doc, calls } = bootConsole();
+  w.eval("state.lock = { held: false, holder: { name: 'Bob' } }; renderMeetingRecUi();");
+  assert.equal(doc.getElementById("rc-notes").readOnly, true);
+  doc.querySelector('.rc-topic[data-rc-topic="2"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  assert.ok(calls.some((c) => c.path === "/api/meeting-recordings/7/marker" && c.body.itemId === 2));
+  assert.equal(calls.filter((c) => c.method === "PATCH").length, 0);
+});
+
+test("console: starting a meeting recording opens it", { skip }, async () => {
+  const { w, doc } = bootTwoTopics();
+  stubFetch(w, (p) => (p === "/api/meetings/42/recording/start" ? { ok: true, recordingId: 7 } : { ok: true }));
+  w.eval(`renderDetail();
+    navigator.mediaDevices = { getUserMedia: function(){ return Promise.resolve({ getTracks: function(){ return []; } }); } };
+    MediaRecorder = function(){ this.state = 'inactive'; this.start = function(){ this.state = 'recording'; }; this.stop = function(){}; };
+    MediaRecorder.isTypeSupported = function(){ return false; };`);
+  doc.getElementById("btn-meeting-rec").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  await flush();
+  assert.equal(doc.getElementById("rec-console").hidden, false);
+  assert.equal(doc.querySelector(".rc-title").textContent, "Budget");
+  w.eval("clearInterval(meetingRec.timer)");
+});
+
+// Swapping topics replaces the focused box, and the old box's blur fires after
+// the console already names the next topic. It must not save onto that one.
+test("console: the replaced box's blur never writes onto the next topic", { skip }, () => {
+  const { w, doc, calls } = bootConsole();
+  w.eval("state.items[1].notes = 'Roof notes'");
+  const old = typeNotes(w, doc, "Budget notes");
+  doc.getElementById("rc-next").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  old.value = "Budget notes, edited late";
+  old.dispatchEvent(new w.Event("blur"));
+  assert.equal(calls.filter((c) => c.method === "PATCH" && c.path === "/api/items/2").length, 0);
+  assert.equal(w.eval("state.items[1].notes"), "Roof notes");
+  assert.equal(doc.getElementById("rc-notes").value, "Roof notes");
+});

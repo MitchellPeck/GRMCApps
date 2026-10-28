@@ -391,3 +391,57 @@ body.has-mini-player .layout{padding-bottom:150px}
   .minutes-layout,.minutes-layout:has(.chat-panel:not([hidden])){display:flex;flex-direction:column}
   .chat-panel{order:-1;max-height:60vh}
 }
+
+/* ---- Recording console ---- */
+/* Full screen while a meeting is recorded: topics on the left, the notes for
+   the one being discussed filling the rest. */
+#rec-console{position:fixed;inset:0;z-index:95;display:flex;flex-direction:column;background:var(--paper)}
+body.rc-open{overflow:hidden}
+.rc-bar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:10px 24px;background:var(--navy);color:#fff;font-size:13px}
+.rc-bar .rec-dot{background:#e8836f}
+.rc-rec{font-weight:700;letter-spacing:.04em;text-transform:uppercase;font-size:11.5px}
+.rc-clock{font-variant-numeric:tabular-nums;font-weight:700;font-size:17px;min-width:4ch}
+.rc-mtg{color:var(--gold);font-family:var(--font-display);font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1}
+.rc-actions{display:flex;gap:8px;margin-left:auto}
+.rc-actions .btn-sm{background:transparent;color:#fff;border-color:rgba(255,255,255,.35)}
+.rc-actions .btn-sm:hover{border-color:#fff}
+.rc-stop{background:var(--rej-fg);color:#fff;padding:7px 14px}
+.rc-stop:hover{background:#7f3c2d}
+.rc-body{flex:1;min-height:0;display:grid;grid-template-columns:minmax(220px,300px) 1fr}
+/* Let the columns shrink to the screen; the topic strip scrolls instead. */
+.rc-body>*{min-width:0}
+.rc-topics{overflow-y:auto;padding:18px 14px;border-right:1px solid var(--rule);background:var(--card);display:flex;flex-direction:column;gap:6px}
+.rc-kicker{margin:0 4px 6px}
+.rc-topic{display:flex;align-items:flex-start;gap:10px;text-align:left;width:100%;padding:12px;border:1px solid transparent;border-radius:var(--r-lg);
+  background:transparent;font:inherit;font-size:14px;font-weight:600;color:var(--ink);cursor:pointer;line-height:1.35}
+.rc-topic:hover{background:var(--paper);border-color:var(--rule)}
+.rc-topic:focus-visible{outline:2px solid var(--navy);outline-offset:1px}
+.rc-topic.on{background:var(--navy);color:#fff;border-color:var(--navy)}
+.rc-n{flex:0 0 24px;height:24px;border-radius:50%;background:var(--paper);color:var(--navy);font-size:12px;font-weight:700;
+  display:inline-flex;align-items:center;justify-content:center}
+.rc-topic.on .rc-n{background:var(--gold);color:var(--navy)}
+.rc-main{min-height:0;display:flex;flex-direction:column;padding:26px 32px 20px;max-width:980px;width:100%}
+.rc-title{font-size:30px;margin:6px 0 4px;overflow-wrap:anywhere}
+.rc-pres{color:var(--muted);font-size:13px}
+.rc-label{display:flex;align-items:baseline;gap:10px;margin:20px 0 6px;font-size:12px;font-weight:700;color:var(--navy);text-transform:uppercase;letter-spacing:.08em}
+.rc-save{font-weight:500;text-transform:none;letter-spacing:0;color:var(--hint)}
+.rc-save.bad{color:var(--rej-fg)}
+#rc-notes{flex:1;min-height:180px;width:100%;resize:none;padding:16px 18px;border:1px solid var(--rule);border-radius:var(--r-lg);
+  background:var(--field-bg);color:var(--ink);font:inherit;font-size:16px;line-height:1.6}
+#rc-notes:focus{outline:none;border-color:var(--gold);box-shadow:0 0 0 3px var(--gold-ring)}
+#rc-notes[readonly]{background:var(--paper);color:var(--muted)}
+.rc-foot{display:flex;align-items:center;gap:14px;margin-top:12px;flex-wrap:wrap}
+.rc-foot .hint{flex:1;margin:0}
+.rc-next{padding:12px 20px;font-size:14px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rc-empty{margin:auto;color:var(--muted);text-align:center;max-width:40ch}
+@media (max-width:720px){
+  .rc-bar{padding:8px 14px;gap:8px}
+  .rc-mtg{flex-basis:100%;order:5}
+  .rc-body{grid-template-columns:1fr;grid-template-rows:auto 1fr}
+  .rc-topics{flex-direction:row;overflow-x:auto;overflow-y:hidden;padding:10px;border-right:none;border-bottom:1px solid var(--rule)}
+  .rc-kicker{display:none}
+  .rc-topic{flex:0 0 auto;width:auto;max-width:70vw;padding:9px 12px}
+  .rc-main{padding:16px 14px 14px}
+  .rc-title{font-size:23px}
+}
+@media print{ #rec-console{display:none !important} }

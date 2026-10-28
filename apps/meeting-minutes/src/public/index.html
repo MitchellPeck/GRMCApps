@@ -11,6 +11,9 @@
 <!-- Whole-meeting recording status. Fixed to the viewport and rendered from the
      recorder state, so it stays visible on every view while capture runs. -->
 <div id="rec-banner" role="status" aria-live="polite" hidden></div>
+<!-- The recording console: while a meeting is recorded, just its topics and
+     the notes for the one being discussed. Rendered by app.js. -->
+<div id="rec-console" role="dialog" aria-modal="true" aria-label="Recording console" hidden></div>
 <header>
   <div class="logo">
     <div class="seal">G</div>

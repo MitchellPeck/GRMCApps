@@ -1518,7 +1518,9 @@ function syncItems(fresh){
     var tx=document.getElementById('tx-'+it.id);
     if(!tx || document.activeElement!==tx) it.transcript=f.transcript;
     var nt=document.getElementById('nt-'+it.id);
-    if(!nt || document.activeElement!==nt) it.notes=f.notes;
+    var cn=document.getElementById('rc-notes');
+    var typingHere=cn && document.activeElement===cn && rcItemId===it.id;
+    if((!nt || document.activeElement!==nt) && !typingHere) it.notes=f.notes;
     it.summary=f.summary; it.action_items=f.action_items;
     it.summarize_status=f.summarize_status; it.summarize_error=f.summarize_error;
     // Once it comes from a recording, it is corrected with word fixes only.
@@ -2396,6 +2398,12 @@ function renderRecBanner(){
   }
   el.className='';
   var onThisMeeting = state.meeting && state.meeting.id===meetingRec.meetingId;
+  // The console has its own bar.
+  if(recConsoleOpen && onThisMeeting){
+    el.hidden=true;
+    document.body.classList.remove('has-rec-banner');
+    return;
+  }
   el.innerHTML='<span class="rec-dot"></span>'
     +'<span class="rb-title">Recording &middot; '+esc(meetingRec.title||'meeting')+'</span>'
     +'<span class="rb-clock">'+fmtClock(meetingElapsedSeconds())+'</span>'
@@ -2405,6 +2413,7 @@ function renderRecBanner(){
         ? '<span class="rb-topic">Filing under: '+esc(meetingRec.topic)+'</span>'
         : '<span class="rb-topic rb-warn">No topic opened yet &mdash; audio files under the first item</span>')
     +'<span class="rb-actions">'
+      +(onThisMeeting ? '<button class="btn-sm" id="rb-console">Recording console</button> ' : '')
       +(onThisMeeting && nextTopic() ? '<button class="btn-sm" id="rb-next">Next topic &rsaquo;</button> ' : '')
       +(onThisMeeting ? '' : '<button class="btn-sm" id="rb-open">Open meeting</button> ')
       +'<button class="btn-sm" id="rb-stop">Stop &amp; process</button>'
@@ -2413,6 +2422,8 @@ function renderRecBanner(){
   document.body.classList.add('has-rec-banner');
   var open=document.getElementById('rb-open');
   if(open) open.addEventListener('click', function(){ openMeeting(meetingRec.meetingId); });
+  var con=document.getElementById('rb-console');
+  if(con) con.addEventListener('click', openRecConsole);
   var next=document.getElementById('rb-next');
   if(next) next.addEventListener('click', function(){ var it=nextTopic(); if(it) showSection('agenda', it.id); });
   document.getElementById('rb-stop').addEventListener('click', function(){ stopMeetingRecording(); });
@@ -2433,6 +2444,165 @@ function renderRecTopics(){
     b.addEventListener('click', function(){ postTopicMarker(Number(b.getAttribute('data-rec-topic'))); renderRecTopics(); });
   });
 }
+// ── Recording console ───────────────────────────────────────────────────────
+// While this meeting is recorded: a full-screen view with only the topics and
+// the notes for the one being discussed. It opens when recording starts;
+// "Full view" steps back to the whole page without stopping, and the
+// recording bar brings it back.
+var recConsoleOpen=false;
+var rcItemId=null;    // the topic whose notes the console's box holds
+var rcKey='';         // what the console was last built from
+var rcSaveTimer=null;
+var RC_SAVE_MS=1500;  // typing pause before the notes save
+
+function rcItem(){ return (state.items||[]).filter(function(x){ return x.id===rcItemId; })[0]||null; }
+
+function openRecConsole(){
+  if(!meetingRecordingActive()) return;
+  recConsoleOpen=true;
+  // Audio before any topic is tapped files under the first one anyway, so
+  // start there and its notes are ready to type into.
+  if(!meetingRec.topicId && (state.items||[]).length) postTopicMarker(state.items[0].id);
+  renderRecConsole();
+  renderRecBanner();
+  rcFocusNotes();
+}
+function closeRecConsole(){
+  rcFlushNotes();
+  recConsoleOpen=false;
+  renderRecConsole();
+  renderRecBanner();
+}
+function rcFocusNotes(){
+  var ta=document.getElementById('rc-notes');
+  if(ta && !ta.readOnly){ try { ta.focus(); } catch(e){} }
+}
+
+// Save a notes box onto its topic, the same way the topic's own Notes field
+// does, and keep that field in step. The topic comes from the box itself: a
+// box being replaced on a topic change still fires its blur, by which time
+// rcItemId already names the next topic.
+function rcFlushNotes(box){
+  if(rcSaveTimer){ clearTimeout(rcSaveTimer); rcSaveTimer=null; }
+  var ta=box && box.nodeType ? box : document.getElementById('rc-notes');
+  var id=ta ? Number(ta.getAttribute('data-item')) : null;
+  var it=(state.items||[]).filter(function(x){ return x.id===id; })[0];
+  if(!ta || !it || ta.readOnly || ta.value===it.notes) return;
+  var val=ta.value, before=it.notes;
+  it.notes=val;
+  var nt=document.getElementById('nt-'+it.id); if(nt){ nt.value=val; nt.defaultValue=val; }
+  rcSaveStatus(it.id, 'Saving…');
+  saveItemField(it, { notes: val }).then(function(res){
+    if(res && res.ok){ rcSaveStatus(it.id, 'Saved'); return; }
+    // Not saved: let the next pause or topic change try again.
+    if(it.notes===val) it.notes=before;
+    rcSaveStatus(it.id, 'Not saved'+(res && res.error ? ': '+res.error : ''), true);
+  })['catch'](function(e){
+    if(it.notes===val) it.notes=before;
+    rcSaveStatus(it.id, 'Not saved: '+e.message, true);
+  });
+  invalidateSummary(it);
+}
+function rcSaveStatus(itemId, text, bad){
+  var el=document.getElementById('rc-save');
+  if(!el || rcItemId!==itemId) return;
+  el.textContent=text;
+  el.classList.toggle('bad', !!bad);
+}
+
+// Goes to a topic: from here on the audio files under it.
+function rcGoTo(itemId){
+  if(!meetingRec || meetingRec.topicId===itemId) return;
+  postTopicMarker(itemId);
+  rcFocusNotes();
+}
+
+// Called every second while recording: rebuilds only when the topic, the
+// topic list or editing rights change, otherwise just moves the clock.
+function renderRecConsole(){
+  var el=document.getElementById('rec-console'); if(!el) return;
+  if(recConsoleOpen && !meetingRecordingActive()){ rcFlushNotes(); recConsoleOpen=false; }
+  if(!recConsoleOpen){
+    if(!el.hidden){ el.hidden=true; el.innerHTML=''; document.body.classList.remove('rc-open'); }
+    rcKey=''; rcItemId=null;
+    return;
+  }
+  var items=state.items||[];
+  var key=[meetingRec.topicId||'', readOnly()?1:0,
+           items.map(function(it){ return it.id+':'+it.title+':'+presenterLine(it); }).join('|')].join('#');
+  if(key!==rcKey){ rcFlushNotes(); rcKey=key; rcBuild(el, items, meetingRec.topicId||null); }
+  var c=document.getElementById('rc-clock'); if(c) c.textContent=fmtClock(meetingElapsedSeconds());
+  el.hidden=false;
+  document.body.classList.add('rc-open');
+}
+
+function rcBuild(el, items, topicId){
+  // A rebuild of the same topic (say, editing rights changed) keeps what was typed.
+  var prev=document.getElementById('rc-notes');
+  var draft = prev && Number(prev.getAttribute('data-item'))===topicId ? prev.value : null;
+  rcItemId=topicId;
+  var it=rcItem(), ro=readOnly(), idx=items.indexOf(it);
+  var next = idx>=0 && idx<items.length-1 ? items[idx+1] : null;
+  var h='<div class="rc-bar"><span class="rec-dot"></span><span class="rc-rec">Recording</span>'
+    +'<span class="rc-clock" id="rc-clock"></span>'
+    +'<span class="rc-mtg">'+esc(meetingRec.title||'')+'</span>'
+    +'<span class="rc-actions"><button type="button" class="btn-sm" id="rc-full">Full view</button>'
+    +'<button type="button" class="btn rc-stop" id="rc-stop">Stop &amp; process</button></span></div>';
+  h+='<div class="rc-body"><nav class="rc-topics" aria-label="Topics"><div class="kicker rc-kicker">Topics</div>'
+    +(items.length
+      ? items.map(function(x, i){
+          var on=x.id===topicId;
+          return '<button type="button" class="rc-topic'+(on?' on':'')+'" data-rc-topic="'+x.id+'"'+(on?' aria-current="true"':'')+'>'
+            +'<span class="rc-n">'+(i+1)+'</span><span class="rc-t">'+esc(x.title)+'</span></button>';
+        }).join('')
+      : '<div class="hint">This meeting has no topics, so the whole recording files under one.</div>')
+    +'</nav><main class="rc-main">';
+  if(it){
+    var pres=presenterLine(it);
+    h+='<div class="kicker">Now discussing &middot; '+(idx+1)+' of '+items.length+'</div>'
+      +'<h2 class="rc-title">'+esc(it.title)+'</h2>'
+      +(pres ? '<div class="rc-pres">'+esc(pres)+'</div>' : '')
+      +'<div class="rc-label"><label for="rc-notes">Notes</label><span class="rc-save" id="rc-save"></span></div>'
+      +'<textarea id="rc-notes" data-item="'+it.id+'"'+(ro?' readonly':'')
+      +' placeholder="Motions, votes, decisions, anything the recording might miss">'+esc(draft!=null ? draft : it.notes)+'</textarea>'
+      +'<div class="rc-foot"><span class="hint">'+(ro
+          ? 'Someone else is editing this meeting, so notes are read-only. Tapping a topic still files the audio.'
+          : 'Notes save as you type and go into this topic&rsquo;s summary.')+'</span>'
+      +(next ? '<button type="button" class="btn btn-primary rc-next" id="rc-next">Next: '+esc(next.title)+' &rsaquo;</button>'
+             : '<span class="hint">Last topic</span>')
+      +'</div>';
+  } else {
+    h+='<div class="rc-empty">Recording. Notes are kept per topic, so add a topic in Full view to take them.</div>';
+  }
+  h+='</main></div>';
+  el.innerHTML=h;
+
+  el.querySelectorAll('[data-rc-topic]').forEach(function(b){
+    b.addEventListener('click', function(){ rcGoTo(Number(b.getAttribute('data-rc-topic'))); });
+  });
+  // On a phone the topics are a strip that scrolls; keep the current one in it.
+  var on=el.querySelector('.rc-topic.on');
+  if(on && on.scrollIntoView){ try { on.scrollIntoView({ block:'nearest', inline:'nearest' }); } catch(e){} }
+  var nb=document.getElementById('rc-next');
+  if(nb) nb.addEventListener('click', function(){ rcGoTo(next.id); });
+  document.getElementById('rc-full').addEventListener('click', closeRecConsole);
+  document.getElementById('rc-stop').addEventListener('click', function(){
+    if(!confirm('Stop recording? The audio so far is processed into the topics; recording again starts a separate recording.')) return;
+    rcFlushNotes();
+    stopMeetingRecording();
+  });
+  var ta=document.getElementById('rc-notes');
+  if(ta){
+    ta.addEventListener('input', function(){
+      lockActivity=true;
+      rcSaveStatus(rcItemId, '');
+      if(rcSaveTimer) clearTimeout(rcSaveTimer);
+      rcSaveTimer=setTimeout(rcFlushNotes, RC_SAVE_MS);
+    });
+    ta.addEventListener('blur', function(){ rcFlushNotes(ta); });
+  }
+}
+
 // Every whole-meeting recording, with its length and the audio to download.
 function renderRecHistory(){
   var el=document.getElementById('rec-history'); if(!el) return;
@@ -2458,6 +2628,7 @@ function renderRecHistory(){
 function renderMeetingRecUi(){
   // Both of these must run even on the list view, where the meeting card below
   // does not exist: the recorder outlives the detail view.
+  renderRecConsole();
   renderRecBanner();
   syncItemRecControls();
   renderRecTopics();
@@ -2550,6 +2721,7 @@ function postTopicMarker(itemId){
   var it=(state.items||[]).filter(function(x){ return x.id===itemId; })[0];
   meetingRec.topic = it ? it.title : '';
   meetingRec.topicId = it ? it.id : null;
+  renderRecConsole();
   renderRecBanner();
   renderRecTopics();
   api('/api/meeting-recordings/'+meetingRec.recordingId+'/marker', {
@@ -2600,6 +2772,7 @@ function toggleMeetingRecording(){
           window.onbeforeunload=function(){ return 'A meeting recording is running.'; };
           if(state.openItemId) postTopicMarker(state.openItemId);
           renderMeetingRecUi();
+          openRecConsole();
         })['catch'](function(e){
           try { stream.getTracks().forEach(function(t){ t.stop(); }); } catch(_){}
           startFailed(e.message);
