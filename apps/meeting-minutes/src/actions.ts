@@ -2,6 +2,7 @@ import { Pool } from "pg";
 import { renameTopicSpeakers } from "./fixes";
 import { getAgendaItem, getMeeting, listAgendaItems, rewriteMeetingSpeakerMap, updateAgendaItem } from "./meetings";
 import { EDIT_SUMMARY_DELAY_MS, itemHasContent, requestSummary } from "./minutesWork";
+import { getVoiceSettings, learnMeetingVoices } from "./voices";
 
 // Actions shared by the page's routes and the chat, so the same request does
 // the same thing whichever way it arrives.
@@ -57,8 +58,20 @@ export async function patchItem(pool: Pool, itemId: number, input: Record<string
 // for a pause: each rename restarts the wait, and a run of them costs one
 // summary per topic rather than one per rename.
 export async function saveMeetingSpeakers(pool: Pool, meetingId: number, map: Record<string, unknown>): Promise<void> {
+  const before = (await getMeeting(pool, meetingId))?.speaker_map ?? {};
   const changed = await rewriteMeetingSpeakerMap(pool, meetingId, map);
   for (const it of await listAgendaItems(pool, meetingId)) {
     if (changed.includes(it.id) && itemHasContent(it)) await requestSummary(it.id, EDIT_SUMMARY_DELAY_MS);
+  }
+  // A name someone chose is a voice learned (or, renamed, moved to the right
+  // person). Learning never stands in the way of the rename itself.
+  try {
+    if ((await getVoiceSettings(pool)).mode === "off") return;
+    const after = (await getMeeting(pool, meetingId))?.speaker_map ?? {};
+    const named = [...new Set([...Object.keys(before), ...Object.keys(after)])]
+      .filter((k) => (before[k] ?? "").trim() !== (after[k] ?? "").trim());
+    if (named.length) await learnMeetingVoices(pool, meetingId, after, named);
+  } catch (e) {
+    console.error(`[voices] meeting ${meetingId}: could not learn from the names: ${(e as Error).message}`);
   }
 }

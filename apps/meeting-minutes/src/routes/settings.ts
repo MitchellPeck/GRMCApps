@@ -1,17 +1,29 @@
 import { FastifyInstance } from "fastify";
 import { pool } from "../db";
 import { getSettingsView, setSetting } from "../settings";
+import { getVoiceSettings, learnedVoiceCounts, setVoiceSettings } from "../voices";
+import { currentVoiceCheck, enqueueVoiceCheck } from "../transcribeQueue";
 
 interface SaveBody {
   anthropicKey?: string;
   reportInstructions?: string;
   reportExample?: string;
+  voiceMode?: string;
+  voiceThreshold?: number;
 }
 
 export async function settingsRoutes(app: FastifyInstance): Promise<void> {
   app.get("/api/settings", async () => {
     try {
-      return { ok: true, ...(await getSettingsView(pool)) };
+      const voice = await getVoiceSettings(pool);
+      return {
+        ok: true,
+        ...(await getSettingsView(pool)),
+        voiceMode: voice.mode,
+        voiceThreshold: voice.threshold,
+        voicePeople: (await learnedVoiceCounts(pool)).size,
+        voiceCheck: await currentVoiceCheck(),
+      };
     } catch (e) {
       return { ok: false, error: (e as Error).message };
     }
@@ -27,9 +39,17 @@ export async function settingsRoutes(app: FastifyInstance): Promise<void> {
         await setSetting(pool, "report_instructions", s.reportInstructions.trim());
       if (typeof s.reportExample === "string")
         await setSetting(pool, "report_example", s.reportExample.trim());
+      const voiceError = await setVoiceSettings(pool, { mode: s.voiceMode, threshold: s.voiceThreshold });
+      if (voiceError) return { ok: false, error: voiceError };
       return { ok: true };
     } catch (e) {
       return { ok: false, error: (e as Error).message };
     }
+  });
+
+  // Learn voices from past meetings and measure how well they match.
+  app.post("/api/voices/check", async () => {
+    const started = await enqueueVoiceCheck();
+    return started ? { ok: true } : { ok: false, error: "A check is already running." };
   });
 }

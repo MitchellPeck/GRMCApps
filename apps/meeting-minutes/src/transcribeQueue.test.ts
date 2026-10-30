@@ -289,3 +289,30 @@ test("the generic queue runs meeting and item tasks strictly serially and surviv
   assert.equal(maxActive, 1);
   assert.deepEqual(order, ["a", "b", "b:fail:boom", "c"]);
 });
+
+test("runMeetingJob puts names recognised by voice over the guessed ones", async () => {
+  const { deps, maps } = meetingSpyDeps({
+    transcribe: async () => ({ text: "", segments: [seg("a", "SPEAKER_00", 0, 10), seg("b", "SPEAKER_01", 10, 20)] }),
+    reconcile: async () => ({ SPEAKER_00: "Alice Smith", SPEAKER_01: "Bob Jones" }),
+    recognize: async (_job, segments) => {
+      assert.equal(segments.length, 2);
+      return { SPEAKER_01: "Alice Smith" };
+    },
+  });
+  await runMeetingJob(deps, mjob(5));
+  assert.deepEqual(maps, [{ SPEAKER_01: "Alice Smith" }]);
+});
+
+test("runMeetingJob finishes with the guessed names when voice matching fails", async () => {
+  const logs: string[] = [];
+  const { deps, events, maps } = meetingSpyDeps({
+    transcribe: async () => ({ text: "", segments: [seg("a", "SPEAKER_00", 0, 10)] }),
+    reconcile: async () => ({ SPEAKER_00: "Alice Smith" }),
+    recognize: async () => { throw new Error("Speaker model not found"); },
+    log: (m) => logs.push(m),
+  });
+  await runMeetingJob(deps, mjob(6));
+  assert.equal(events[events.length - 1], "status:6:done");
+  assert.deepEqual(maps, [{ SPEAKER_00: "Alice Smith" }]);
+  assert.ok(logs.some((l) => /voice matching skipped: Speaker model not found/.test(l)));
+});

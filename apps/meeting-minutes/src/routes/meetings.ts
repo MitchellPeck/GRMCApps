@@ -13,6 +13,7 @@ import { anthropicChatModel, chatDisplay, chatWorking, startChatTurn } from "../
 import { archiveChat, markCardDone } from "../chatStore";
 import { recordSnapshotChange } from "../changes";
 import { getSetting } from "../settings";
+import { getVoiceSettings, meetingVoiceMatches } from "../voices";
 import { acquireLock, getLock, releaseLock } from "../locks";
 import { fixWords, listChanges, renameTopicSpeakers, undoChange } from "../fixes";
 import {
@@ -170,6 +171,8 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
       items: withRecordings,
       meetingRecordings: await listMeetingRecordings(pool, id),
       meetingSpeakerStats,
+      // Whom each voice sounds like, from voices learned in other meetings.
+      voiceMatches: (await getVoiceSettings(pool)).mode === "off" ? [] : await meetingVoiceMatches(pool, id),
       guests: await listGuests(pool, id),
       report: await reportState(pool, meeting),
       lock: await lockFor(id, getIdentity(req).email),

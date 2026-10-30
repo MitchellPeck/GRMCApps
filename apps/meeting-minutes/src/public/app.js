@@ -430,6 +430,9 @@ function loadPeople(){
         +'<div><div class="person-name">'+esc(p.name)+'</div>'
         +(sub?'<div class="person-sub">'+sub+'</div>':'')+'</div>'
         +'<div class="person-actions">'
+        +'<span class="person-voice'+(p.learn_voice?'':' off')+'">'+(!p.learn_voice ? 'Voice not learned'
+            : p.voice_meetings ? 'Voice learned from '+p.voice_meetings+' meeting'+(p.voice_meetings===1?'':'s') : 'Voice not learned yet')+'</span>'
+        +'<button class="btn-sm" data-voice="'+p.id+'" data-learn="'+(!p.learn_voice)+'">'+(p.learn_voice?'Forget voice':'Learn voice')+'</button>'
         +'<button class="btn-sm" data-edit="'+p.id+'">Edit</button>'
         +'<button class="btn-sm" data-toggle="'+p.id+'" data-active="'+(!p.active)+'">'+(p.active?'Deactivate':'Reactivate')+'</button>'
         +'</div></div>';
@@ -438,6 +441,14 @@ function loadPeople(){
       b.addEventListener('click', function(){
         api('/api/people/'+b.getAttribute('data-toggle')+'/active',
           { method:'POST', body:{ active: b.getAttribute('data-active')==='true' } }).then(loadPeople);
+      });
+    });
+    el.querySelectorAll('[data-voice]').forEach(function(b){
+      b.addEventListener('click', function(){
+        var learn=b.getAttribute('data-learn')==='true';
+        var who=(res.people.filter(function(x){ return String(x.id)===b.getAttribute('data-voice'); })[0]||{}).name||'this person';
+        if(!learn && !confirm('Forget '+who+'\u2019s voice? What was learned is deleted, and their voice isn\u2019t learned again until you choose \u201cLearn voice\u201d.')) return;
+        api('/api/people/'+b.getAttribute('data-voice')+'/voice', { method:'POST', body:{ learn: learn } }).then(loadPeople);
       });
     });
     el.querySelectorAll('[data-edit]').forEach(function(b){
@@ -488,6 +499,7 @@ function loadSettings(){
     document.getElementById('s-anthropic-hint').innerHTML = res.hasAnthropicKey
       ? 'Saved (' + esc(res.anthropicKeyHint) + '). Enter a new key to replace it.'
       : 'Used to extract agendas, summarize items, and write the report.';
+    renderVoiceSettings(res);
     // Never overwrite text the user is part-way through editing.
     ['s-report-instructions','s-report-example'].forEach(function(id, i){
       var el=document.getElementById(id);
@@ -495,6 +507,81 @@ function loadSettings(){
     });
   });
 }
+// Voice recognition: the mode, the match level, and the check against past
+// meetings that learns voices from them and measures how well matching works.
+var voiceCheckTimer=null;
+function renderVoiceSettings(res){
+  var mode=document.getElementById('s-voice-mode');
+  if(mode && document.activeElement!==mode) mode.value=res.voiceMode||'suggest';
+  var el=document.getElementById('voice-check'); if(!el) return;
+  var c=res.voiceCheck||{status:'idle'};
+  var lvl=Math.round((res.voiceThreshold||0)*100);
+  var html='<div class="hint">Voices learned for '+(res.voicePeople||0)+' '+(res.voicePeople===1?'person':'people')
+    +'. A voice is matched at '+lvl+'% similarity or more.</div>';
+  if(c.status==='running'){
+    var p=c.progress;
+    html+='<div class="voice-check-run"><span class="spin" style="border-color:var(--rule);border-top-color:var(--navy)"></span> Checking past meetings'
+      +(p&&p.total ? ' ('+p.done+' of '+p.total+')' : '')+'&hellip; It waits for any recording being processed.</div>';
+  } else if(c.status==='error'){
+    html+='<div class="alert alert-err">'+esc(c.error||'The check failed.')+'</div>';
+  } else if(c.status==='done'){
+    html+=voiceCheckHtml(c, res.voiceThreshold);
+  }
+  el.innerHTML=html;
+  var run=document.getElementById('btn-voice-check');
+  if(run){ run.disabled=c.status==='running'; run.textContent=c.status==='done' ? 'Check again' : 'Check against past meetings'; }
+  el.querySelectorAll('[data-voice-level]').forEach(function(b){
+    b.addEventListener('click', function(){
+      api('/api/settings', { method:'POST', body:{ voiceThreshold:Number(b.getAttribute('data-voice-level')) } }).then(function(r){
+        if(!r.ok){ msg('voice-msg','err',r.error); return; }
+        msg('voice-msg','ok','Match level saved.');
+        loadSettings();
+      });
+    });
+  });
+  clearTimeout(voiceCheckTimer);
+  if(c.status==='running') voiceCheckTimer=setTimeout(loadSettings, 3000);
+}
+function voiceCheckHtml(c, current){
+  if(!c.voices){
+    return '<div class="hint">No named voices to learn from yet. Voices are learned from meetings recorded with the whole-meeting recorder once their minutes are generated, and from names you choose.</div>'
+      +voiceSkippedHtml(c);
+  }
+  var rows=c.rows||[];
+  var html='<div class="hint">Learned '+c.voices+' voice'+(c.voices===1?'':'s')+' of '+c.people+' '+(c.people===1?'person':'people')+' from '+c.meetings+' meeting'+(c.meetings===1?'':'s')
+    +'. Each meeting was matched against the voices learned from the others, as if it were the newest. Each voice was also tried as a newcomer whose voice was never learned, to see whether it would be given someone else&rsquo;s name:</div>'
+    +'<table class="voice-check-table"><thead><tr><th>Match level</th><th>Right</th><th>Wrong</th><th>Left for you</th><th>Newcomers misnamed</th><th></th></tr></thead><tbody>'
+    +rows.map(function(r){
+      var on=Math.abs(r.threshold-current)<1e-6, rec=c.recommended!=null && Math.abs(r.threshold-c.recommended)<1e-6;
+      return '<tr'+(on?' class="on"':'')+'><td>'+Math.round(r.threshold*100)+'%'+(rec?' <span class="chip ok-chip">recommended</span>':'')+'</td>'
+        +'<td>'+r.correct+'</td><td'+(r.wrong?' class="bad"':'')+'>'+r.wrong+'</td><td>'+r.missed+'</td>'
+        +'<td'+(r.newcomerWrong?' class="bad"':'')+'>'+(r.newcomers ? r.newcomerWrong+' of '+r.newcomers : '&ndash;')+'</td>'
+        +'<td>'+(on?'<span class="voice-time">in use</span>':'<button class="btn-sm" data-voice-level="'+r.threshold+'">Use</button>')+'</td></tr>';
+    }).join('')+'</tbody></table>';
+  html+= c.recommended!=null
+    ? '<div class="hint">At the recommended level, almost every name given was right and newcomers were rarely mistaken for someone. If that holds up, you can switch to naming automatically.</div>'
+    : '<div class="hint">No level was reliable enough on these meetings yet, so keep it on suggestions. It gets better as more meetings are named.</div>';
+  return html+voiceSkippedHtml(c);
+}
+function voiceSkippedHtml(c){
+  var s=c.skipped||[];
+  return s.length ? '<details class="voice-skipped"><summary>'+s.length+' meeting'+(s.length===1?'':'s')+' skipped</summary><ul>'
+    +s.map(function(x){ return '<li>'+esc(x)+'</li>'; }).join('')+'</ul></details>' : '';
+}
+document.getElementById('s-voice-mode').addEventListener('change', function(e){
+  api('/api/settings', { method:'POST', body:{ voiceMode:e.target.value } }).then(function(r){
+    if(!r.ok){ msg('voice-msg','err',r.error); return; }
+    msg('voice-msg','ok', e.target.value==='off' ? 'Voice recognition is off.' : e.target.value==='auto'
+      ? 'Saved. Recognised voices will be named automatically in meetings processed from now on.'
+      : 'Saved. Recognised voices will be suggested on the meeting page.');
+  }).catch(function(err){ msg('voice-msg','err',err.message); });
+});
+document.getElementById('btn-voice-check').addEventListener('click', function(){
+  api('/api/voices/check', { method:'POST' }).then(function(r){
+    if(!r.ok){ msg('voice-msg','err',r.error); return; }
+    loadSettings();
+  }).catch(function(err){ msg('voice-msg','err',err.message); });
+});
 document.getElementById('btn-save-style').addEventListener('click', function(){
   setBtn('btn-save-style', true, 'Saving...');
   api('/api/settings', { method:'POST', body:{
@@ -540,6 +627,7 @@ function openMeeting(id){
     state.items = det.items;
     state.meetingRecordings = det.meetingRecordings || [];
     state.meetingSpeakerStats = det.meetingSpeakerStats || [];
+    state.voiceMatches = det.voiceMatches || [];
     state.guests = det.guests || [];
     state.report = det.report || null;
     state.lock = det.lock || null;
@@ -566,6 +654,7 @@ function refreshMeeting(mid){
 function loadMeetingState(det){
   adoptMeeting(det.meeting); state.attendeeIds=det.attendeeIds; state.items=det.items;
   state.meetingRecordings=det.meetingRecordings||[]; state.meetingSpeakerStats=det.meetingSpeakerStats||[];
+  state.voiceMatches=det.voiceMatches||[];
   state.guests=det.guests||[]; state.report=det.report||null;
 }
 
@@ -2030,6 +2119,7 @@ function nameMeetingSpeaker(spk, name){
         adoptMeeting(det.meeting);
         state.meetingRecordings=det.meetingRecordings||[];
         state.meetingSpeakerStats=det.meetingSpeakerStats||[];
+        state.voiceMatches=det.voiceMatches||[];
         state.attendeeIds=det.attendeeIds;
         syncItems(det.items);
       }
@@ -2043,6 +2133,20 @@ function nameMeetingSpeaker(spk, name){
       startPolling();
     });
   });
+}
+
+// Whom a voice sounds like, from voices learned in earlier meetings: a quiet
+// "recognised" mark when the name on it agrees, a one-tap suggestion when not.
+function voiceMatchHtml(speaker, cur, busy){
+  var m=(state.voiceMatches||[]).filter(function(x){ return x.speaker===speaker; })[0];
+  if(!m) return '';
+  var pct=Math.round(m.score*100);
+  if(cur && cur.trim().toLowerCase()===m.name.trim().toLowerCase()){
+    return '<div class="voice-match agree" title="Matched to voices learned from earlier meetings ('+pct+'% similar)">&#10003; Recognised by voice</div>';
+  }
+  return '<div class="voice-match">Sounds like <strong>'+esc(m.name)+'</strong> <span class="voice-time">('+pct+'% similar)</span>'
+    +(readOnly()||busy ? '' : ' <button class="btn-sm" data-voice-use="'+esc(speaker)+'" data-voice-name="'+esc(m.name)+'">Use '+esc(m.name)+'</button>')
+    +'</div>';
 }
 
 function renderMeetingSpeakerPanel(){
@@ -2079,6 +2183,7 @@ function renderMeetingSpeakerPanel(){
           +'<span class="voice-time">'+mins(st.seconds||0)+' · '+pct+'%</span>'
           +(cur?'':'<span class="chip warn-chip">unnamed</span>')+'<span style="flex:1"></span>'
           +'<select data-mspk="'+esc(st.speaker)+'"'+(busy?' disabled':'')+'>'+opts(cur)+'</select></div>'
+          +voiceMatchHtml(st.speaker, cur, busy)
           +(st.sample?'<div class="spk-sample">&ldquo;'+esc(st.sample)+'&rdquo;</div>':'')
           +speakerSamplesHtml(st, recId)
           +'</div>';
@@ -2091,6 +2196,12 @@ function renderMeetingSpeakerPanel(){
     sel.addEventListener('change', function(){
       if(meetingProcessing()) return;
       nameMeetingSpeaker(sel.getAttribute('data-mspk'), sel.value);
+    });
+  });
+  el.querySelectorAll('[data-voice-use]').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      if(meetingProcessing()) return;
+      nameMeetingSpeaker(btn.getAttribute('data-voice-use'), btn.getAttribute('data-voice-name'));
     });
   });
   renderMeetingNav();
@@ -2954,6 +3065,7 @@ function pollOnce(){
         adoptMeeting(det.meeting);
         state.meetingRecordings = det.meetingRecordings || [];
         state.meetingSpeakerStats = det.meetingSpeakerStats || [];
+        state.voiceMatches = det.voiceMatches || [];
         syncItems(det.items);
         renderMeetingRecUi();
         if(typeof renderMeetingSpeakerPanel==='function') renderMeetingSpeakerPanel();

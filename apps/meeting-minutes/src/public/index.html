@@ -93,6 +93,21 @@
       <div class="btn-row"><button class="btn btn-primary" id="btn-save-style" data-default="Save report style">Save report style</button></div>
     </div>
     <div class="card">
+      <div class="ct">Voice recognition</div>
+      <div class="hint" style="margin-bottom:10px">The app learns each person&rsquo;s voice from the names you choose under &ldquo;Who spoke in this meeting?&rdquo; and from meetings whose minutes have been generated. It then recognises them in later recordings. Only a voice print (a list of numbers) is kept, never extra audio. Anyone&rsquo;s voice can be forgotten from the People tab.</div>
+      <div id="voice-msg"></div>
+      <div class="field">
+        <label for="s-voice-mode">When a voice is recognised</label>
+        <select id="s-voice-mode">
+          <option value="suggest">Suggest the name on the meeting page</option>
+          <option value="auto">Name the voice automatically</option>
+          <option value="off">Off: don&rsquo;t learn or recognise voices</option>
+        </select>
+      </div>
+      <div id="voice-check"></div>
+      <div class="btn-row"><button class="btn btn-gold" id="btn-voice-check">Check against past meetings</button></div>
+    </div>
+    <div class="card">
       <div class="ct">Transcription</div>
       <div class="hint">Live and uploaded-audio transcription run on a self-hosted Whisper service on your own server — no API key, no per-minute cost, and audio never leaves your machine. Live transcription streams your mic in real time; use a good microphone for best results.</div>
     </div>

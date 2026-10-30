@@ -299,6 +299,18 @@ button.roll-row:hover{background:var(--paper)}
 .voice-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .voice-time{color:var(--muted);font-size:12.5px;font-variant-numeric:tabular-nums}
 .warn-chip{background:var(--pending-bg);color:var(--pending-fg);border-color:transparent}
+.ok-chip{background:var(--ok-bg);color:var(--ok-fg);border-color:transparent;cursor:default;padding:2px 8px;font-size:11.5px}
+.voice-match{margin-top:6px;font-size:13px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.voice-match.agree{color:var(--ok-fg);font-size:12.5px}
+.person-voice{color:var(--muted);font-size:12.5px;align-self:center}
+.person-voice.off{font-style:italic}
+.voice-check-run{display:flex;align-items:center;gap:8px;margin:10px 0;font-size:13px}
+.voice-check-table{border-collapse:collapse;margin:10px 0;font-size:13px;font-variant-numeric:tabular-nums}
+.voice-check-table th,.voice-check-table td{padding:5px 12px 5px 0;text-align:left;border-bottom:1px solid var(--rule)}
+.voice-check-table th{color:var(--muted);font-weight:600;font-size:12px}
+.voice-check-table tr.on td{font-weight:600}
+.voice-check-table td.bad{color:var(--rej-fg)}
+.voice-skipped{font-size:12.5px;color:var(--muted);margin:6px 0}
 @media (max-width:720px){
   .dlbl{flex-basis:72px}
   .stats{grid-template-columns:repeat(2,minmax(0,1fr))}

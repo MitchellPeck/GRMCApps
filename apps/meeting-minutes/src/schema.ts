@@ -240,4 +240,23 @@ CREATE TABLE IF NOT EXISTS report_docs (
   report_at     timestamptz NOT NULL,
   PRIMARY KEY (meeting_id, email)
 );
+-- One voice print per voice in a processed whole-meeting recording (see
+-- voices.ts). person_id says whose voice it is, set only from names people
+-- chose or minutes that were generated, never from a guess alone; those rows
+-- are what later meetings are matched against. match_* is what this meeting's
+-- voice was matched to when it was processed.
+CREATE TABLE IF NOT EXISTS meeting_voices (
+  meeting_id       bigint NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+  speaker          text NOT NULL,
+  embedding        real[] NOT NULL,
+  seconds          real NOT NULL DEFAULT 0,
+  match_person_id  bigint REFERENCES people(id) ON DELETE SET NULL,
+  match_score      real,
+  person_id        bigint REFERENCES people(id) ON DELETE SET NULL,
+  learned_at       timestamptz,
+  PRIMARY KEY (meeting_id, speaker)
+);
+CREATE INDEX IF NOT EXISTS meeting_voices_person_idx ON meeting_voices (person_id, learned_at) WHERE person_id IS NOT NULL;
+-- Turned off, a person's voice is neither learned nor kept.
+ALTER TABLE people ADD COLUMN IF NOT EXISTS learn_voice boolean NOT NULL DEFAULT true;
 `;

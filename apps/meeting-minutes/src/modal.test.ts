@@ -1764,7 +1764,8 @@ test("console: the replaced box's blur never writes onto the next topic", { skip
 // redraw (a summary landing) threw them away.
 // What the server sends back for the meeting once the names are in.
 const voicesDetail = (w: any) => w.eval(`({ ok: true, meeting: Object.assign({}, state.meeting), items: state.items,
-  attendeeIds: state.attendeeIds, meetingRecordings: [], meetingSpeakerStats: state.meetingSpeakerStats, guests: [] })`);
+  attendeeIds: state.attendeeIds, meetingRecordings: [], meetingSpeakerStats: state.meetingSpeakerStats,
+  voiceMatches: state.voiceMatches || [], guests: [] })`);
 function bootVoices() {
   const b = boot();
   const calls = stubFetch(b.w, (p) => (p === "/api/meetings/42" ? voicesDetail(b.w) : { ok: true }));
@@ -1845,4 +1846,101 @@ test("voices: leaving while a name is still saving warns", { skip }, () => {
   const ev = new w.Event("beforeunload", { cancelable: true });
   w.dispatchEvent(ev);
   assert.equal(ev.defaultPrevented, true);
+});
+
+// ── Voice recognition ───────────────────────────────────────────────────────
+
+test("voices: a recognised voice is offered as a one-tap name, then marked recognised", { skip }, async () => {
+  const { w, doc, calls } = bootVoices();
+  w.eval("state.voiceMatches = [{ speaker: 'S0', personId: 9, name: 'Alice', score: 0.712 }]; renderMeetingSpeakerPanel();");
+  const card = doc.querySelector('select[data-mspk="S0"]').closest(".voice-card");
+  assert.match(card.textContent, /Sounds like Alice \(71% similar\)/);
+  assert.equal(doc.querySelector('select[data-mspk="S1"]').closest(".voice-card").querySelector(".voice-match"), null);
+  card.querySelector("[data-voice-use]").click();
+  await flush();
+  const put = calls.find((c) => c.method === "PUT" && c.path === "/api/meetings/42/speaker-map");
+  assert.deepEqual(put!.body.speakerMap, { S0: "Alice" });
+  const after = doc.querySelector('select[data-mspk="S0"]').closest(".voice-card");
+  assert.match(after.textContent, /Recognised by voice/);
+  assert.equal(after.querySelector("[data-voice-use]"), null);
+});
+
+test("voices: a suggestion has no button when the meeting can't be edited", { skip }, () => {
+  const { w, doc } = bootVoices();
+  w.eval("state.voiceMatches = [{ speaker: 'S1', personId: 10, name: 'Bob', score: 0.8 }]; state.lock = { held: false, holder: { email: 'b@x', name: 'Bea' } }; renderDetail();");
+  const card = doc.querySelector('select[data-mspk="S1"]').closest(".voice-card");
+  assert.match(card.textContent, /Sounds like Bob/);
+  assert.equal(card.querySelector("[data-voice-use]"), null);
+});
+
+const voiceSettings = (over: Record<string, unknown> = {}) => ({
+  ok: true, hasAnthropicKey: true, anthropicKeyHint: "sk-ant-api", reportInstructions: "", reportExample: "",
+  voiceMode: "suggest", voiceThreshold: 0.55, voicePeople: 3, voiceCheck: { status: "idle" }, ...over,
+});
+
+test("settings: the voice check's results show each level, the recommended one, and can set it", { skip }, async () => {
+  const { w, doc } = boot();
+  const calls = stubFetch(w, (p) => p === "/api/settings" ? voiceSettings({ voiceCheck: {
+    status: "done", meetings: 6, voices: 30, people: 7, recommended: 0.6, skipped: ["Old meeting: its recording can't be matched to the transcript."],
+    rows: [
+      { threshold: 0.55, correct: 24, wrong: 3, missed: 1, newcomers: 30, newcomerWrong: 9 },
+      { threshold: 0.6, correct: 22, wrong: 0, missed: 4, newcomers: 30, newcomerWrong: 1 },
+    ] } }) : { ok: true });
+  w.eval("loadSettings()");
+  await flush();
+  const box = doc.getElementById("voice-check");
+  assert.match(box.textContent, /Voices learned for 3 people/);
+  assert.match(box.textContent, /Learned 30 voices of 7 people from 6 meetings/);
+  const rows = [...box.querySelectorAll("tbody tr")];
+  assert.match(rows[0].textContent, /55%.*24.*3.*1.*9 of 30.*in use/);
+  assert.match(rows[1].textContent, /60% recommended/);
+  assert.match(box.textContent, /1 meeting skipped/);
+  assert.equal(doc.getElementById("btn-voice-check").textContent, "Check again");
+  rows[1].querySelector("[data-voice-level]").click();
+  await flush();
+  const post = calls.find((c) => c.method === "POST" && c.path === "/api/settings");
+  assert.deepEqual(post!.body, { voiceThreshold: 0.6 });
+});
+
+test("settings: a running voice check shows progress, and the mode saves on change", { skip }, async () => {
+  const { w, doc } = boot();
+  const calls = stubFetch(w, (p) => p === "/api/settings"
+    ? voiceSettings({ voiceMode: "auto", voiceCheck: { status: "running", progress: { done: 2, total: 5 } } }) : { ok: true });
+  w.eval("loadSettings()");
+  await flush();
+  w.eval("clearTimeout(voiceCheckTimer)");
+  assert.match(doc.getElementById("voice-check").textContent, /Checking past meetings \(2 of 5\)/);
+  assert.equal(doc.getElementById("btn-voice-check").disabled, true);
+  const mode = doc.getElementById("s-voice-mode");
+  assert.equal(mode.value, "auto");
+  mode.value = "off";
+  mode.dispatchEvent(new w.Event("change", { bubbles: true }));
+  await flush();
+  assert.deepEqual(calls.find((c) => c.method === "POST")!.body, { voiceMode: "off" });
+  assert.match(doc.getElementById("voice-msg").textContent, /off/);
+});
+
+test("people: each person shows what's learned of their voice, and forgetting asks first", { skip }, async () => {
+  const { w, doc } = boot();
+  const calls = stubFetch(w, (p) => p.startsWith("/api/people?") ? { ok: true, people: [
+    { id: 9, name: "Alice", title: "", email: "", active: true, learn_voice: true, voice_meetings: 4 },
+    { id: 10, name: "Bob", title: "", email: "", active: true, learn_voice: false, voice_meetings: 0 },
+  ] } : { ok: true });
+  w.eval("loadPeople()");
+  await flush();
+  const list = doc.getElementById("people-list");
+  assert.match(list.textContent, /Voice learned from 4 meetings/);
+  assert.match(list.textContent, /Voice not learned/);
+  let asked = "";
+  w.confirm = (q: string) => { asked = q; return false; };
+  list.querySelector('[data-voice="9"]').click();
+  await flush();
+  assert.match(asked, /Forget Alice’s voice\?/);
+  assert.equal(calls.filter((c) => c.path === "/api/people/9/voice").length, 0);
+  w.confirm = () => true;
+  list.querySelector('[data-voice="9"]').click();
+  list.querySelector('[data-voice="10"]').click(); // learning again doesn't ask
+  await flush();
+  assert.deepEqual(calls.filter((c) => c.path.endsWith("/voice")).map((c) => [c.path, c.body.learn]),
+    [["/api/people/9/voice", false], ["/api/people/10/voice", true]]);
 });

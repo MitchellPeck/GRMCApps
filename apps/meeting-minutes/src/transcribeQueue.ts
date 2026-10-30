@@ -17,6 +17,9 @@ import { segmentByMarkers, chronologicalSpeakerOrder, TopicMarker } from "./segm
 import { readFile } from "node:fs/promises";
 import { transcribeLongAudio } from "./chunking";
 import { embedSpeaker } from "./speakerEmbedding";
+import {
+  applyVoiceNames, getVoiceCheck, getVoiceSettings, recognizeMeetingVoices, runVoiceCheck, setVoiceCheck, voicesFromRecording, VoiceCheck,
+} from "./voices";
 import { config } from "./config";
 import { createQueue, Queue, QueueTask } from "./queue";
 import { advanceReport, itemHasContent, requestSummary } from "./minutesWork";
@@ -128,6 +131,10 @@ export interface MeetingDeps {
   presenterFor(itemId: number): Promise<string>;
   saveItem(itemId: number, segments: DiarizedSegment[], map: SpeakerMap, order: string[], recordingId: number): Promise<void>;
   saveMeetingMap(meetingId: number, map: SpeakerMap): Promise<void>;
+  // Voice prints for the meeting's voices, matched against voices learned in
+  // earlier meetings (voices.ts). Returns names to apply; failing it only
+  // loses the matching, never the transcript.
+  recognize?(job: MeetingJob, segments: DiarizedSegment[]): Promise<SpeakerMap>;
   log(message: string): void; // must not throw
 }
 
@@ -140,6 +147,12 @@ export async function runMeetingJob(d: MeetingDeps, job: MeetingJob): Promise<vo
   const segments = absorbMicroTurns(result.segments);
   let map: SpeakerMap = {};
   try { map = await d.reconcile(job, segments); } catch { map = {}; }
+  if (d.recognize) {
+    try { map = applyVoiceNames(map, await d.recognize(job, segments)); }
+    catch (e) {
+      try { d.log(`meeting ${job.meetingId}: voice matching skipped: ${(e as Error).message}`); } catch { /* never fails the job */ }
+    }
+  }
   const reconciled = Date.now();
   const markers = await d.loadMarkers(job.recordingId);
   const fallback = await d.fallbackItemId(job.meetingId);
@@ -423,6 +436,14 @@ const realMeetingDeps: MeetingDeps = {
   presenterFor: (itemId) => presenterNameForItem(itemId),
   saveItem: saveMeetingItem,
   saveMeetingMap: (meetingId, map) => setMeetingSpeakerMap(pool, meetingId, map),
+  recognize: async (job, segments) => {
+    if ((await getVoiceSettings(pool)).mode === "off") return {};
+    const voices = await voicesFromRecording(job.path, segments, embedSpeaker);
+    const { matches, apply } = await recognizeMeetingVoices(pool, job.meetingId, voices);
+    realLog(`meeting ${job.meetingId}: ${voices.length} voice print(s), ${matches.length} recognised`
+      + (Object.keys(apply).length ? ", named automatically" : ""));
+    return apply;
+  },
   log: realLog,
 };
 
@@ -456,4 +477,43 @@ export async function recoverPendingMeetingJobs(dbPool: Pool = pool): Promise<nu
     recovered++;
   }
   return recovered;
+}
+
+// "Check against past meetings": learn voices from every meeting with minutes
+// and measure matching on them. Run on the transcription queue, so the CPU
+// it takes never competes with a meeting being processed.
+let voiceCheckQueued = false;
+export async function enqueueVoiceCheck(): Promise<boolean> {
+  if (voiceCheckQueued) return false;
+  voiceCheckQueued = true;
+  await setVoiceCheck(pool, { status: "running", startedAt: new Date().toISOString() });
+  transcribeQueue.enqueue({
+    label: "voice check",
+    run: async () => {
+      try {
+        const r = await runVoiceCheck(pool, {
+          voicesFor: (path, segments) => voicesFromRecording(path, segments, embedSpeaker),
+          log: realLog,
+        });
+        realLog(`voice check: ${r.voices} voice(s) of ${r.people} people in ${r.meetings} meeting(s)`);
+      } finally {
+        voiceCheckQueued = false;
+      }
+    },
+    fail: async (message) => {
+      voiceCheckQueued = false;
+      await setVoiceCheck(pool, { status: "error", error: message, finishedAt: new Date().toISOString() });
+    },
+  });
+  return true;
+}
+
+// A check shown as running that this process is not running was cut short by
+// a restart.
+export async function currentVoiceCheck(): Promise<VoiceCheck> {
+  const v = await getVoiceCheck(pool);
+  if (v.status === "running" && !voiceCheckQueued) {
+    return { ...v, status: "error", error: "The check was interrupted by a restart. Run it again." };
+  }
+  return v;
 }

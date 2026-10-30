@@ -3,6 +3,7 @@ import { pool } from "./db";
 import { generateReportBody, mergeReportSection, summarizeItem } from "./claude";
 import { listPeople, peopleNamedIn } from "./people";
 import { createQueue } from "./queue";
+import { getVoiceSettings, learnMeetingVoices } from "./voices";
 import { transcriptForAi } from "./transcript";
 import { AudioRange, segmentsRange } from "./ranges";
 import { latestMeetingRecording, listRecordings } from "./recordings";
@@ -296,6 +297,7 @@ function enqueueReport(meetingId: number): void {
         }
         await saveReport(pool, meetingId, markdown, built.sources, built.markdown);
         log(`report written for meeting ${meetingId}`);
+        await learnFromMinutes(meetingId);
       } finally {
         writing.delete(meetingId);
       }
@@ -375,4 +377,16 @@ export async function recoverMinutesWork(dbPool: Pool = pool): Promise<number> {
   const meetingIds = await listPendingReports(dbPool);
   for (const id of meetingIds) await advanceReport(id);
   return itemIds.length + meetingIds.length;
+}
+
+// Minutes written from a meeting mean its speaker names have been in front of
+// people who could correct them: every named voice is learned as it stands.
+async function learnFromMinutes(meetingId: number): Promise<void> {
+  try {
+    if ((await getVoiceSettings(pool)).mode === "off") return;
+    const meeting = await getMeeting(pool, meetingId);
+    if (meeting) await learnMeetingVoices(pool, meetingId, meeting.speaker_map ?? {});
+  } catch (e) {
+    log(`meeting ${meetingId}: could not learn voices from the minutes: ${(e as Error).message}`);
+  }
 }

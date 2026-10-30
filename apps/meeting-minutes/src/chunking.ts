@@ -116,7 +116,7 @@ export function mergePartResults(parts: PartResult[]): TranscriptionResult {
 
 // ── ffmpeg ──────────────────────────────────────────────────────────────────
 
-function runFfmpeg(args: string[]): Promise<string> {
+export function runFfmpeg(args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
     let child;
     try {

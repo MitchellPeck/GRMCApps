@@ -1,6 +1,7 @@
 import { FastifyInstance } from "fastify";
 import { pool } from "../db";
 import { addPerson, listPeople, setPersonActive, updatePerson } from "../people";
+import { learnedVoiceCounts, setLearnVoice } from "../voices";
 
 interface AddBody { name?: string; email?: string; title?: string; active?: boolean }
 interface ToggleBody { active?: boolean }
@@ -9,7 +10,15 @@ export async function peopleRoutes(app: FastifyInstance): Promise<void> {
   app.get("/api/people", async (req) => {
     try {
       const includeInactive = (req.query as { all?: string })?.all === "1";
-      return { ok: true, people: await listPeople(pool, includeInactive) };
+      const people = await listPeople(pool, includeInactive);
+      // Whether each person's voice is learned, and from how many meetings.
+      const learning = new Map((await pool.query("SELECT id, learn_voice FROM people")).rows
+        .map((r) => [Number(r.id), r.learn_voice as boolean]));
+      const counts = await learnedVoiceCounts(pool);
+      return {
+        ok: true,
+        people: people.map((p) => ({ ...p, learn_voice: learning.get(p.id) !== false, voice_meetings: counts.get(p.id) ?? 0 })),
+      };
     } catch (e) {
       return { ok: false, error: (e as Error).message };
     }
@@ -43,5 +52,15 @@ export async function peopleRoutes(app: FastifyInstance): Promise<void> {
       reply.code(500);
       return { ok: false, error: (e as Error).message };
     }
+  });
+
+  // Learn this person's voice, or stop and forget it.
+  app.post("/api/people/:id/voice", async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    if (!Number.isFinite(id)) { reply.code(400); return { ok: false, error: "Bad id." }; }
+    const b = (req.body ?? {}) as { learn?: unknown };
+    if (typeof b.learn !== "boolean") { reply.code(400); return { ok: false, error: "learn must be true or false." }; }
+    await setLearnVoice(pool, id, b.learn);
+    return { ok: true };
   });
 }

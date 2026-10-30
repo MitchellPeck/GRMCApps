@@ -73,7 +73,7 @@ export function labelAudio(
   return out;
 }
 
-function cosine(a: Float32Array, b: Float32Array): number {
+export function cosine(a: ArrayLike<number>, b: ArrayLike<number>): number {
   let d = 0, na = 0, nb = 0;
   for (let i = 0; i < a.length; i++) { d += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i]; }
   return na && nb ? d / Math.sqrt(na * nb) : 0;
