@@ -23,6 +23,8 @@ const RECORDING = new Set([
   "POST /api/meeting-recordings/:rid/marker",
   "POST /api/meeting-recordings/:rid/finish",
   "POST /api/items/:itemId/transcribe",
+  "POST /api/items/:itemId/recordings/:recId/chunk",
+  "POST /api/items/:itemId/recordings/:recId/finish",
 ]);
 
 // The meeting a request writes to, from whichever id its route carries.

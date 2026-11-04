@@ -2301,9 +2301,11 @@ function removeItem(it){
 }
 
 // ── Recording → diarized transcription ──────────────────────────────────────
-// Record the agenda item with MediaRecorder; on stop, upload the audio to the
-// self-hosted Whisper service, which transcribes AND labels who is speaking.
-var activeRec = null; // { it, btn, mr, stream, chunks }
+// Record the agenda item with MediaRecorder. Like the whole-meeting recorder,
+// ~20s chunks upload as they are produced, so a long topic never hits the
+// upload size limit; on stop it is queued for the self-hosted Whisper service,
+// which transcribes AND labels who is speaking.
+var activeRec = null; // { it, btn, mr, stream, recordingId, chain, failedChunk }
 
 function pickMime(){
   var opts=['audio/webm;codecs=opus','audio/webm','audio/mp4','audio/ogg'];
@@ -2359,21 +2361,68 @@ function toggleRecording(it, btn){
   navigator.mediaDevices.getUserMedia({ audio:{ channelCount:1, echoCancellation:true, noiseSuppression:true } })
     .then(function(stream){
       var mime=pickMime();
-      var mr=new MediaRecorder(stream, mime?{ mimeType:mime }:undefined);
-      var chunks=[];
-      mr.ondataavailable=function(e){ if(e.data && e.data.size) chunks.push(e.data); };
-      mr.onstop=function(){
+      function startFailed(message){
         try { stream.getTracks().forEach(function(t){ t.stop(); }); } catch(e){}
-        var blob=new Blob(chunks, { type: mime || 'audio/webm' });
-        transcribeBlob(it, blob, mime);
-      };
-      activeRec={ it:it, btn:btn, mr:mr, stream:stream, chunks:chunks };
-      mr.start();
-      syncWakeLock();
-      btn.innerHTML='<span class="rec-dot"></span> Stop &amp; transcribe';
-      rs.innerHTML='<span class="rec-dot"></span> Recording…';
+        rs.innerHTML='<span style="color:var(--rej-fg)">'+esc(message)+'</span>';
+      }
+      api('/api/items/'+it.id+'/recordings/start', { method:'POST', body:{ mimeType: mime||'audio/webm' } })
+        .then(function(res){
+          if(!res.ok){ startFailed(res.error||'Could not start the recording.'); return; }
+          var mr=new MediaRecorder(stream, mime?{ mimeType:mime }:undefined);
+          var r={ it:it, btn:btn, mr:mr, stream:stream, recordingId:res.recordingId, chain:Promise.resolve(), failedChunk:null };
+          mr.ondataavailable=function(e){ if(e.data && e.data.size) uploadTopicChunk(r, e.data); };
+          mr.onstop=function(){
+            try { stream.getTracks().forEach(function(t){ t.stop(); }); } catch(e){}
+            finishTopicRecording(r);
+          };
+          activeRec=r;
+          mr.start(20000);
+          syncWakeLock();
+          btn.innerHTML='<span class="rec-dot"></span> Stop &amp; transcribe';
+          rs.innerHTML='<span class="rec-dot"></span> Recording…';
+        })['catch'](function(e){ startFailed(e.message); });
     })
     .catch(function(e){ rs.innerHTML='<span style="color:var(--rej-fg)">Mic access denied: '+esc(e.message||e.name)+'</span>'; });
+}
+
+function sendTopicChunk(r, blob){
+  var fd=new FormData(); fd.append('file', blob, 'chunk.webm');
+  return apiForm('/api/items/'+r.it.id+'/recordings/'+r.recordingId+'/chunk', fd).then(function(res){
+    if(!res.ok) throw new Error(res.error||'Chunk upload failed');
+  });
+}
+
+// Strictly ordered by the promise chain; a chunk that fails twice is carried
+// forward onto the next one, which preserves the order of the audio.
+function uploadTopicChunk(r, blob){
+  r.chain = r.chain.then(function(){
+    var payload = r.failedChunk ? new Blob([r.failedChunk, blob], { type: blob.type||'audio/webm' }) : blob;
+    r.failedChunk = null;
+    return sendTopicChunk(r, payload)['catch'](function(){
+      return new Promise(function(ok){ setTimeout(ok, 2000); }).then(function(){ return sendTopicChunk(r, payload); });
+    })['catch'](function(){ r.failedChunk = payload; });
+  });
+}
+
+// After the last chunk is in, queue the recording for transcription.
+function finishTopicRecording(r){
+  var it=r.it;
+  var rs=function(){ return document.getElementById('recstat-'+it.id); };
+  var show=function(html){ var el=rs(); if(el) el.innerHTML=html; };
+  var fail=function(text){ show('<span style="color:var(--rej-fg)">'+esc(text)+'</span>'); };
+  var lost=false;
+  show('<span class="spin" style="border-top-color:var(--navy)"></span> Uploading audio&hellip;');
+  r.chain.then(function(){
+    if(r.failedChunk) return sendTopicChunk(r, r.failedChunk)['catch'](function(){ lost=true; });
+  }).then(function(){
+    return api('/api/items/'+it.id+'/recordings/'+r.recordingId+'/finish', { method:'POST' });
+  }).then(function(res){
+    if(!res.ok){ fail(res.error||'Could not queue the transcription.'); return; }
+    it.transcribe_status='queued'; it.transcribe_error='';
+    refreshItemView(it);
+    if(lost) fail('The last few seconds could not be uploaded; the rest is being transcribed.');
+    startPolling();
+  })['catch'](function(e){ fail(e.message); });
 }
 
 function stopRecording(){

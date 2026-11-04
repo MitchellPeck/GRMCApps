@@ -119,6 +119,40 @@ test("uploading a topic's recorded audio is never refused by the lock", { skip: 
   assert.notEqual(r.statusCode, 423);
 });
 
+test("a topic recording uploads in chunks, even from someone without the lock, and won't finish empty", { skip: !url }, async () => {
+  await setup();
+  const { mkdtempSync, readFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { tmpdir } = await import("node:os");
+  config.dataDir = mkdtempSync(join(tmpdir(), "item-rec-"));
+  const { id, item } = await meetingWithItem();
+  const other = Number((await pool.query("INSERT INTO agenda_items (meeting_id, title) VALUES ($1, 'Other') RETURNING id", [id])).rows[0].id);
+  const start = await app.inject({ method: "POST", url: `/api/items/${item}/recordings/start`, headers: A, payload: { mimeType: "audio/webm" } });
+  assert.equal(start.statusCode, 200, start.body);
+  const rec = JSON.parse(start.body).recordingId;
+
+  const empty = await app.inject({ method: "POST", url: `/api/items/${item}/recordings/${rec}/finish`, headers: A });
+  assert.equal(empty.statusCode, 400);
+
+  const chunk = (data: string, itemId = item) => {
+    const boundary = "----chunk" + Date.now();
+    const body = Buffer.concat([
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="chunk.webm"\r\nContent-Type: audio/webm\r\n\r\n`),
+      Buffer.from(data), Buffer.from(`\r\n--${boundary}--\r\n`),
+    ]);
+    return app.inject({ method: "POST", url: `/api/items/${itemId}/recordings/${rec}/chunk`, headers: { ...B, "content-type": `multipart/form-data; boundary=${boundary}` }, payload: body });
+  };
+  assert.equal((await chunk("PART1")).statusCode, 200);
+  assert.equal((await chunk("PART2")).statusCode, 200);
+  assert.equal((await chunk("WRONG", other)).statusCode, 404, "a recording only takes chunks for its own topic");
+
+  const row = (await pool.query("SELECT byte_size, storage_path FROM item_recordings WHERE id = $1", [rec])).rows[0];
+  assert.equal(Number(row.byte_size), 10);
+  assert.equal(readFileSync(row.storage_path, "utf8"), "PART1PART2");
+  const wrong = await app.inject({ method: "POST", url: `/api/items/${other}/recordings/${rec}/finish`, headers: A });
+  assert.equal(wrong.statusCode, 404);
+});
+
 test("chat routes: empty messages and a missing API key are refused clearly; history is readable", { skip: !url }, async () => {
   await setup();
   const { id } = await meetingWithItem();

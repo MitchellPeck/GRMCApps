@@ -79,6 +79,26 @@ export async function saveRecording(
   return rowToRecording(updated.rows[0]);
 }
 
+// A topic recorded in the browser arrives in ~20s chunks, like the whole-meeting
+// one, so no single upload nears the size limit and a dropped connection loses
+// seconds, not the topic. The row and its empty file exist from the start.
+export async function createItemRecording(pool: Pool, itemId: number, mimeType: string): Promise<Recording> {
+  const ext = extensionFor("", mimeType);
+  return saveRecording(pool, itemId, { fileName: `item-${itemId}.${ext}`, mimeType, buffer: Buffer.alloc(0) });
+}
+
+// Append one chunk to a topic recording, refusing a recording of another topic.
+export async function appendItemChunk(pool: Pool, itemId: number, recordingId: number, buffer: Buffer): Promise<number> {
+  const rec = await getRecording(pool, recordingId);
+  if (!rec || rec.item_id !== itemId || !rec.storage_path) throw new Error("Recording not found.");
+  await appendFile(rec.storage_path, buffer);
+  const upd = await pool.query(
+    "UPDATE item_recordings SET byte_size = byte_size + $2 WHERE id = $1 RETURNING byte_size",
+    [recordingId, buffer.byteLength]
+  );
+  return Number(upd.rows[0].byte_size);
+}
+
 export async function getRecording(pool: Pool, recordingId: number): Promise<Recording | null> {
   const r = await pool.query("SELECT * FROM item_recordings WHERE id = $1", [recordingId]);
   return r.rows[0] ? rowToRecording(r.rows[0]) : null;

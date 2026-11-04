@@ -35,7 +35,7 @@ import {
 } from "../meetings";
 import { enqueueTranscription, enqueueStoredRecording, enqueueMeetingProcessing } from "../transcribeQueue";
 import {
-  saveRecording, getRecording, listRecordings,
+  saveRecording, getRecording, listRecordings, createItemRecording, appendItemChunk,
   createMeetingRecording, appendMeetingChunk, finishMeetingRecording, getMeetingRecording, listMeetingRecordings,
 } from "../recordings";
 
@@ -352,6 +352,55 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
     } catch (e) {
       return uploadErrorResponse(reply, e);
     }
+  });
+
+  // Record a topic in the browser: create the (empty) recording, append ~20s
+  // chunks as they are captured, then queue it for transcription on finish —
+  // the same chunked upload as the whole-meeting recording, so a long topic
+  // never hits the upload size limit.
+  app.post("/api/items/:itemId/recordings/start", async (req, reply) => {
+    const itemId = Number((req.params as { itemId: string }).itemId);
+    if (!Number.isFinite(itemId) || !(await getAgendaItem(pool, itemId))) {
+      reply.code(404);
+      return { ok: false, error: "Agenda item not found." };
+    }
+    const b = (req.body ?? {}) as { mimeType?: string };
+    const rec = await createItemRecording(pool, itemId, b.mimeType || "audio/webm");
+    return { ok: true, recordingId: rec.id };
+  });
+
+  app.post("/api/items/:itemId/recordings/:recId/chunk", async (req, reply) => {
+    try {
+      const p = req.params as { itemId: string; recId: string };
+      const { file } = await readMultipart(req);
+      if (!file) { reply.code(400); return { ok: false, error: "An audio chunk is required." }; }
+      const byteSize = await appendItemChunk(pool, Number(p.itemId), Number(p.recId), file.buffer);
+      return { ok: true, byteSize };
+    } catch (e) {
+      if ((e as Error).message === "Recording not found.") {
+        reply.code(404);
+        return { ok: false, error: "Recording not found." };
+      }
+      return uploadErrorResponse(reply, e);
+    }
+  });
+
+  app.post("/api/items/:itemId/recordings/:recId/finish", async (req, reply) => {
+    const p = req.params as { itemId: string; recId: string };
+    const itemId = Number(p.itemId);
+    const rec = await getRecording(pool, Number(p.recId));
+    if (!rec || rec.item_id !== itemId) { reply.code(404); return { ok: false, error: "Recording not found." }; }
+    if (!rec.byte_size) { reply.code(400); return { ok: false, error: "No audio captured." }; }
+    await setTranscribeStatus(pool, itemId, "queued");
+    enqueueTranscription({
+      itemId,
+      recordingId: rec.id,
+      path: rec.storage_path,
+      fileName: rec.file_name,
+      mimeType: rec.mime_type,
+    });
+    reply.code(202);
+    return { ok: true, recordingId: rec.id, status: "queued" };
   });
 
   // Re-run transcription on a recording that is already stored.
