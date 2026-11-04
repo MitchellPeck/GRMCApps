@@ -1944,3 +1944,123 @@ test("people: each person shows what's learned of their voice, and forgetting as
   assert.deepEqual(calls.filter((c) => c.path.endsWith("/voice")).map((c) => [c.path, c.body.learn]),
     [["/api/people/9/voice", false], ["/api/people/10/voice", true]]);
 });
+
+// ── Review board, phase 1: nothing she does by accident loses work ─────────
+
+test("a network failure resolves to a plain-language error, never a rejection", { skip }, async () => {
+  const { w } = boot();
+  w.fetch = () => Promise.reject(new TypeError("Failed to fetch"));
+  const res = await w.eval("api('/api/meetings')");
+  assert.equal(res.ok, false);
+  assert.match(res.error, /Couldn’t reach the server/);
+  const form = await w.eval("apiForm('/api/x', new FormData())");
+  assert.equal(form.ok, false);
+});
+
+test("a server crash with no message of its own doesn't show a status code", { skip }, async () => {
+  const { w } = boot();
+  w.fetch = () => Promise.resolve({ ok: false, status: 500, statusText: "Internal Server Error", json: () => Promise.reject(new Error("html")) });
+  w.console.warn = () => {};
+  const res = await w.eval("api('/api/meetings')");
+  assert.equal(res.ok, false);
+  assert.doesNotMatch(res.error, /500|Internal/);
+});
+
+test("the delete-meeting dialog offers no Save button", { skip }, () => {
+  const { w, doc } = boot();
+  w.eval("deleteMeetingDialog()");
+  assert.equal(doc.getElementById("modal-save"), null);
+  assert.equal(doc.activeElement, doc.getElementById("mf-danger-confirm"), "focus lands on the confirmation box");
+});
+
+function pickAgendaFile(w: any, doc: any) {
+  w.eval("renderDetail()");
+  const input = doc.getElementById("agenda-file");
+  Object.defineProperty(input, "files", { value: [new w.File(["1. Budget"], "agenda.txt", { type: "text/plain" })], configurable: true });
+}
+
+test("uploading an agenda over empty topics just goes ahead", { skip }, () => {
+  const { w, doc, calls } = boot();
+  pickAgendaFile(w, doc);
+  w.eval("uploadAgenda()");
+  assert.equal(doc.querySelector(".modal"), null);
+  assert.ok(calls.some((c) => c.path === "/api/meetings/42/agenda"));
+});
+
+test("uploading an agenda over a topic with notes asks for DELETE first", { skip }, () => {
+  const { w, doc, calls } = boot();
+  w.eval("state.items[0].notes = 'Approved 5-0'; state.items[0].recordings = [{ id: 3 }]");
+  pickAgendaFile(w, doc);
+  w.eval("uploadAgenda()");
+  assert.equal(calls.length, 0, "nothing sent yet");
+  const hint = doc.querySelector(".modal-danger .hint").textContent;
+  assert.match(hint, /1 topic has notes/);
+  assert.match(hint, /1 topic recording will be deleted/);
+  typeConfirm(w, doc, "DELETE");
+  doc.getElementById("modal-danger-btn").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  assert.ok(calls.some((c) => c.path === "/api/meetings/42/agenda"));
+});
+
+test("removing a topic with recordings asks for DELETE; an empty one a plain yes", { skip }, () => {
+  const { w, doc, calls } = boot();
+  w.eval("state.items[0].recordings = [{ id: 3 }, { id: 4 }]; removeItem(state.items[0])");
+  assert.match(doc.querySelector(".modal-danger .hint").textContent, /2 recordings/);
+  assert.equal(calls.length, 0);
+  w.eval("closeModal(); state.items[0].recordings = [];");
+  let asked = "";
+  w.confirm = (q: string) => { asked = q; return true; };
+  w.eval("removeItem(state.items[0])");
+  assert.match(asked, /Remove the topic "Budget"/);
+  assert.deepEqual(calls[0], { path: "/api/items/1", method: "DELETE" });
+});
+
+test("a roll-call change the server refuses is undone on screen", { skip }, async () => {
+  const { w, doc } = boot();
+  w.eval("state.people = [{ id: 5, name: 'Ann', active: true }]; state.peopleById = { 5: state.people[0] }; renderDetail();");
+  stubFetch(w, (p) => p.endsWith("/attendees") ? { ok: false, error: "Database unavailable." } : { ok: true });
+  w.eval("toggleAttendee(5)");
+  assert.deepEqual(Array.from(w.eval("state.attendeeIds")), [5], "flips at once");
+  await flush();
+  assert.deepEqual(Array.from(w.eval("state.attendeeIds")), [], "and back when refused");
+  assert.match(doc.getElementById("roll-msg").textContent, /wasn’t saved/);
+});
+
+test("every Stop for the meeting recording asks first", { skip }, () => {
+  const { w, doc } = bootConsole();
+  w.eval("var stopped = 0; meetingRec.mr = { state: 'recording', stop: function(){ stopped++; } }; closeRecConsole();");
+  w.confirm = () => false;
+  w.eval("toggleMeetingRecording()");
+  doc.getElementById("rb-stop").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  assert.equal(w.eval("stopped"), 0);
+  w.confirm = () => true;
+  doc.getElementById("rb-stop").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  assert.equal(w.eval("stopped"), 1);
+});
+
+test("leaving the page is questioned while any audio is captured or uploading", { skip }, () => {
+  const { w } = boot();
+  const leave = () => { const e = new w.Event("beforeunload", { cancelable: true }); w.dispatchEvent(e); return e.defaultPrevented; };
+  assert.equal(leave(), false);
+  w.eval("activeRec = { it: state.items[0] }");
+  assert.equal(leave(), true, "topic recording");
+  w.eval("activeRec = null; topicRecFinishing = 1");
+  assert.equal(leave(), true, "topic upload draining");
+  w.eval("topicRecFinishing = 0; meetingRecFinishing = true");
+  assert.equal(leave(), true, "meeting upload draining");
+});
+
+test("microphone errors say what to do, not the browser's error name", { skip }, () => {
+  const { w } = boot();
+  assert.match(w.eval("micErrorText({ name: 'NotAllowedError', message: 'Permission denied' })"), /allow the microphone/);
+  assert.match(w.eval("micErrorText({ name: 'NotFoundError' })"), /No microphone/);
+  assert.match(w.eval("micErrorText({ name: 'NotReadableError' })"), /another program/);
+});
+
+test("a recording whose uploads are failing says so while it records", { skip }, () => {
+  const { w, doc } = bootConsole();
+  assert.equal(doc.getElementById("rc-net").hidden, true);
+  w.eval("meetingRec.failedChunk = new Blob(['x']); renderMeetingRecUi();");
+  assert.equal(doc.getElementById("rc-net").hidden, false);
+  w.eval("closeRecConsole()");
+  assert.match(doc.getElementById("rec-banner").textContent, /Connection lost/);
+});
