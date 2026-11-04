@@ -48,7 +48,28 @@ function setBtn(id, loading, label){
 }
 function msg(id, kind, text){
   var el=document.getElementById(id); if(!el) return;
+  if(kind==='err') text=plainError(text);
   el.innerHTML = text ? '<div class="alert alert-'+kind+'">'+esc(text)+'</div>' : '';
+}
+// Errors from the services behind the app (the transcriber, the AI) arrive in
+// their own technical words. Say what happened and what to do instead; the
+// original goes to the console for whoever looks after the app.
+function plainError(text){
+  text=String(text==null ? '' : text);
+  var plain=null;
+  if(/whisper|transcription service|docker/i.test(text))
+    plain='The service that types up recordings isn’t responding right now. The recording is safe. Ask whoever set up this app to check it, then try again.';
+  else if(/x-api-key|invalid api key|authentication_error|401/i.test(text))
+    plain='The AI’s key isn’t working. Ask whoever set up this app to check it under Settings › Technical setup.';
+  else if(/did not respond within/i.test(text))
+    plain='The AI took too long to answer. Nothing is lost; try again in a few minutes.';
+  else if(/could not reach claude|fetch failed|overloaded|rate.?limit|ECONN|ETIMEDOUT|socket hang up|\b5\d\d\b/i.test(text))
+    plain='The AI service is busy or couldn’t be reached. Nothing is lost; try again in a few minutes.';
+  else if(/^Claude returned|reply was cut off/i.test(text))
+    plain='The AI’s answer came back garbled. Nothing is lost; please try again.';
+  if(plain===null) return text;
+  if(typeof console!=='undefined' && console.warn) console.warn('Service error:', text);
+  return plain;
 }
 function fmtDate(s){ if(!s) return ''; try { return new Date(s).toLocaleString(); } catch(e){ return s; } }
 
@@ -60,10 +81,14 @@ var modalEsc = null;
 // The word that unlocks any destructive modal action. Compared case-insensitively.
 var DANGER_WORD = 'DELETE';
 
+var modalReturnFocus=null; // where focus goes back to when the dialog closes
 function closeModal(){
   var root=document.getElementById('modal-root');
+  var wasOpen=!!(root && root.innerHTML);
   if(root) root.innerHTML='';
   if(modalEsc){ document.removeEventListener('keydown', modalEsc); modalEsc=null; }
+  if(wasOpen && modalReturnFocus && document.contains(modalReturnFocus)){ try { modalReturnFocus.focus(); } catch(e){} }
+  modalReturnFocus=null;
 }
 
 function modalFieldHtml(f){
@@ -86,12 +111,14 @@ function modalFieldHtml(f){
 }
 
 function openModal(opts){
+  var returnTo=document.activeElement;
   closeModal();
+  modalReturnFocus=returnTo;
   var root=document.getElementById('modal-root');
   if(!root) return;
   var fields=opts.fields||[];
-  var h='<div class="modal-backdrop" id="modal-backdrop"><div class="modal" role="dialog" aria-modal="true">'
-    +'<h3>'+esc(opts.title)+'</h3>'
+  var h='<div class="modal-backdrop" id="modal-backdrop"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">'
+    +'<h3 id="modal-title">'+esc(opts.title)+'</h3>'
     +'<div id="modal-msg"></div>'
     +fields.map(modalFieldHtml).join('');
   if(opts.danger){
@@ -164,6 +191,15 @@ function openModal(opts){
   });
   modalEsc=function(e){
     if(e.key==='Escape'){ closeModal(); return; }
+    // Tab stays inside the dialog.
+    if(e.key==='Tab'){
+      var f=Array.prototype.filter.call(root.querySelectorAll('button, input, textarea, select'), function(x){ return !x.disabled; });
+      if(!f.length) return;
+      var first=f[0], last=f[f.length-1];
+      if(e.shiftKey && document.activeElement===first){ e.preventDefault(); last.focus(); }
+      else if(!e.shiftKey && document.activeElement===last){ e.preventDefault(); first.focus(); }
+      return;
+    }
     if(e.key!=='Enter' || !e.target || e.target.tagName==='TEXTAREA') return;
     // Enter inside the confirmation box means "do the dangerous thing", never
     // "save". Routing it to save() silently saved the meeting and closed the
@@ -1087,7 +1123,7 @@ function renderChatPanel(){
     +'<button type="button" class="chat-reset" id="btn-chat-reset" title="Clear this conversation and start a new one">Start over</button></div></div>'
     +'<div class="chat-log" id="chat-log" aria-live="polite"></div>'
     +'<div class="chat-compose"><textarea id="chat-input" rows="1" placeholder="Ask or tell it what to fix…" aria-label="Message"></textarea>'
-    +'<button type="button" class="chat-send" id="btn-chat-send" title="Send" aria-label="Send">&#8593;</button></div>'
+    +'<button type="button" class="chat-send" id="btn-chat-send">Send</button></div>'
     +'<div class="chat-keys">Enter to send &middot; Shift+Enter for a new line</div>';
   var input=document.getElementById('chat-input');
   input.value=state.chatDraft||'';
@@ -1336,14 +1372,15 @@ function checkSetup(){
 function renderNextStep(){
   var el=document.getElementById('next-step'); if(!el || !state.meeting) return;
   var n=nextStep();
-  var key=JSON.stringify(n)+(readOnly()?'ro':'')+(state.aiReady===false?'noai':'');
+  var key=JSON.stringify(n)+(readOnly()?'ro':'')+(state.aiReady===false?'noai':'')+state.section;
   if(el._key===key) return;
   el._key=key;
   el.className='next-step ns-'+(n.kind||'todo');
   el.innerHTML='<span class="ns-label">'+(n.step ? 'Next step · '+n.step+' of 5' : n.kind==='done' ? 'All done' : n.kind==='wait' ? 'Working on it' : n.kind==='live' ? 'Recording' : 'Needs attention')+'</span>'
     +'<span class="ns-text">'+esc(n.text)+'</span>'
     +'<span class="ns-actions">'
-    +(n.btn && !(readOnly() && (n.act==='record' || n.act==='write')) ? '<button class="btn btn-primary" id="ns-go">'+esc(n.btn)+'</button>' : '')
+    // A button that only goes to the section she's already in would do nothing.
+    +(n.btn && !(readOnly() && (n.act==='record' || n.act==='write')) && !(!n.act && state.section===n.sec) ? '<button class="btn btn-primary" id="ns-go">'+esc(n.btn)+'</button>' : '')
     +(n.alt && !readOnly() ? '<button class="btn-link" id="ns-alt">'+esc(n.alt)+'</button>' : '')
     +'</span>'
     +(state.aiReady===false ? '<div class="alert alert-warn ns-setup">The AI part of this app isn’t set up yet, so agendas can’t be read and minutes can’t be written. '
@@ -1370,19 +1407,19 @@ function defaultSection(){
 function navHints(){
   var out={ topics:{} };
   var present=(state.attendeeIds||[]).length+(state.guests||[]).length;
-  if(present) out.people=String(present);
+  if(present) out.people=present+' here';
   var map=(state.meeting && state.meeting.speaker_map)||{};
   var unnamed=(state.meetingSpeakerStats||[]).filter(function(st){ return !(map[st.speaker]||'').trim(); }).length;
-  if(unnamed) out.speakers=unnamed+' unnamed';
+  if(unnamed) out.speakers=unnamed+' to name';
   var r=state.report||{};
-  if(r.status==='pending') out.minutes='generating…';
+  if(r.status==='pending') out.minutes='writing…';
   else if(state.meeting && state.meeting.report && (r.changes||[]).length) out.minutes='out of date';
   (state.items||[]).forEach(function(it){
-    var h = it.transcribe_status==='queued' ? 'queued'
-      : it.transcribe_status==='processing' ? 'transcribing…'
-      : it.transcribe_status==='error' ? 'failed'
+    var h = it.transcribe_status==='queued' ? 'waiting'
+      : it.transcribe_status==='processing' ? 'typing up…'
+      : it.transcribe_status==='error' ? 'problem'
       : it.summarize_status==='processing' ? 'summarizing…'
-      : it.summarize_status==='error' ? 'summary failed' : '';
+      : it.summarize_status==='error' ? 'no summary' : '';
     if(h) out.topics[it.id]=h;
   });
   return out;
@@ -1447,6 +1484,8 @@ function applyTopicFocus(){
   if(up) up.hidden = !!(state.items && state.items.length) && !state.showAgendaUpload;
   var n=(state.items||[]).length, c=document.getElementById('agenda-count');
   if(c) c.textContent = n ? n+' topic'+(n===1?'':'s') : 'No topics yet';
+  // With no topics the upload card is already showing.
+  var rb=document.getElementById('btn-agenda-replace'); if(rb) rb.hidden=!n;
 }
 document.addEventListener('click', function(e){
   var a=e.target && e.target.closest ? e.target.closest('#mtg-nav a') : null;
@@ -1619,7 +1658,7 @@ function renderGuests(){
     return '<div class="roll-row on guest-row"><span class="roll-name">'+esc(g.name)+'</span>'
       +(g.title?'<span class="roll-title">'+esc(g.title)+'</span>':'')
       +(presented.length?'<span class="roll-title">· presented '+esc(presented.join(', '))+'</span>':'')
-      +'<span style="flex:1"></span><button class="chip-x" data-gid="'+g.id+'" title="Remove '+esc(g.name)+'" aria-label="Remove '+esc(g.name)+'">&times;</button></div>';
+      +'<span style="flex:1"></span><button class="btn-sm" data-gid="'+g.id+'" aria-label="Remove '+esc(g.name)+'">Remove</button></div>';
   }).join('') : '<div class="empty-hint">No guests.</div>';
   el.querySelectorAll('[data-gid]').forEach(function(b){
     b.addEventListener('click', function(){ removeGuest(Number(b.getAttribute('data-gid'))); });
@@ -1674,6 +1713,8 @@ function addRollPerson(){
   });
 }
 function removeGuest(gid){
+  var g=(state.guests||[]).filter(function(x){ return x.id===gid; })[0];
+  if(g && !confirm('Remove '+g.name+' from the guests? They’re also taken off any topic they presented.')) return;
   api('/api/guests/'+gid, { method:'DELETE' }).then(function(res){
     if(!res.ok){ msg('guest-msg','err',res.error); return; }
     state.guests=(state.guests||[]).filter(function(g){ return g.id!==gid; });
@@ -1796,7 +1837,7 @@ function editItem(it){
 function renderItems(){
   var wrap=document.getElementById('items-wrap');
   state.openItemId=null; // DOM rebuilt → all bodies collapsed
-  if(!state.items.length){ wrap.innerHTML='<div class="empty">No agenda items yet. Upload an agenda or add items manually.</div>'; return; }
+  if(!state.items.length){ wrap.innerHTML='<div class="empty">No topics yet. Choose the agenda file above, or press “+ Add topic”.</div>'; return; }
   wrap.innerHTML=state.items.map(function(it, idx){ return itemHtml(it, idx); }).join('');
   state.items.forEach(function(it){ wireItem(it); });
   // The rebuilt rows default to showing the per-topic recorder; re-apply the
@@ -1823,9 +1864,9 @@ function refreshItemView(it){
   if(!(typeof activeRec!=='undefined' && activeRec && activeRec.it.id===it.id)){
     var rs=document.getElementById('recstat-'+it.id);
     if(rs){
-      if(it.transcribe_status==='queued') rs.textContent='Queued — transcription starts when the one ahead finishes.';
-      else if(it.transcribe_status==='processing') rs.innerHTML='<span class="spin" style="border-top-color:var(--navy)"></span> Transcribing &amp; identifying speakers&hellip;';
-      else if(it.transcribe_status==='error') rs.innerHTML='<span style="color:var(--rej-fg)">'+esc(it.transcribe_error||'Transcription failed.')+'</span>';
+      if(it.transcribe_status==='queued') rs.textContent='Waiting its turn to be typed up…';
+      else if(it.transcribe_status==='processing') rs.innerHTML='<span class="spin" style="border-top-color:var(--navy)"></span> Typing up and working out who spoke&hellip;';
+      else if(it.transcribe_status==='error') rs.innerHTML='<span style="color:var(--rej-fg)">'+esc(plainError(it.transcribe_error||'The recording couldn’t be typed up.'))+'</span>';
       else rs.textContent='';
     }
   }
@@ -1846,11 +1887,21 @@ function syncItems(fresh){
     it.transcript_source=f.transcript_source;
     // Never clobber text the user is actively editing.
     var tx=document.getElementById('tx-'+it.id);
-    if(!tx || document.activeElement!==tx) it.transcript=f.transcript;
+    // Text typed into the transcript box just as a recording's transcript
+    // lands would be lost when the box turns read-only: keep it in the notes.
+    if(tx && !tx.readOnly && recordedTranscript(it) && tx.value.trim() && tx.value!==f.transcript && (topicUnsaved['transcript:'+it.id] || document.activeElement===tx)){
+      var typed=tx.value.trim();
+      delete topicUnsaved['transcript:'+it.id];
+      it.notes=((it.notes||'').trim() ? it.notes.trim()+'\n\n' : '')+'Typed before the recording arrived:\n'+typed;
+      f.notes=it.notes;
+      var ntEl=document.getElementById('nt-'+it.id); if(ntEl) ntEl.value=it.notes;
+      saveItemField(it, { notes: it.notes });
+    }
+    if((!tx || document.activeElement!==tx) && !topicUnsaved['transcript:'+it.id]) it.transcript=f.transcript;
     var nt=document.getElementById('nt-'+it.id);
     var cn=document.getElementById('rc-notes');
     var typingHere=cn && document.activeElement===cn && rcItemId===it.id;
-    if((!nt || document.activeElement!==nt) && !typingHere) it.notes=f.notes;
+    if((!nt || document.activeElement!==nt) && !typingHere && !topicUnsaved['notes:'+it.id]) it.notes=f.notes;
     it.summary=f.summary; it.action_items=f.action_items;
     it.summarize_status=f.summarize_status; it.summarize_error=f.summarize_error;
     // Once it comes from a recording, it is corrected with word fixes only.
@@ -1862,7 +1913,7 @@ function syncItems(fresh){
 
 function itemHtml(it, idx){
   return '<div class="item" id="item-'+it.id+'">'
-    +'<div class="ihead" data-toggle-item="'+it.id+'">'
+    +'<div class="ihead" data-toggle-item="'+it.id+'" role="button" tabindex="0" aria-expanded="false" aria-controls="ibody-'+it.id+'">'
       +'<div class="itop"><div class="inum" id="inum-'+it.id+'">'+(idx+1)+'</div>'
       +'<div><div class="ititle">'+esc(it.title)+'</div>'
       +'<div class="ipres" id="ipres-'+it.id+'">'+esc(presenterLine(it))+'</div>'
@@ -1874,7 +1925,7 @@ function itemHtml(it, idx){
     +'<div class="ibody collapsed" id="ibody-'+it.id+'">'
       +'<div class="sublbl">Presented by</div>'
       +'<div class="pres-groups" id="pres-'+it.id+'"></div>'
-      +'<label class="sublbl" for="nt-'+it.id+'">Your notes</label>'
+      +'<div class="label-row"><label class="sublbl" for="nt-'+it.id+'">Your notes</label><span class="field-save" id="save-notes-'+it.id+'" role="status"></span></div>'
       +'<textarea id="nt-'+it.id+'" placeholder="Motions, votes, decisions, anything the minutes must include">'+esc(it.notes)+'</textarea>'
       +'<div class="hint" style="margin-top:6px">A short summary of this topic is written for you a minute or two after you close it or stop typing, even if you leave the page.</div>'
       // Shown in place of the per-topic controls while the whole meeting is
@@ -1883,7 +1934,7 @@ function itemHtml(it, idx){
       +'<div class="hint rec-locked" id="reclock-'+it.id+'" hidden>'
         +'<span class="rec-dot"></span> The meeting is being recorded. Tap each topic as it comes up and the recording is filed under it.'
       +'</div>'
-      +'<label class="sublbl" for="tx-'+it.id+'">What was said</label>'
+      +'<div class="label-row"><label class="sublbl" for="tx-'+it.id+'">What was said</label><span class="field-save" id="save-transcript-'+it.id+'" role="status"></span></div>'
       +'<div class="speakers" id="spk-'+it.id+'"></div>'
       +(recordedTranscript(it)
         ? '<textarea id="tx-'+it.id+'" readonly style="margin-top:6px">'+esc(it.transcript)+'</textarea>'
@@ -1951,7 +2002,7 @@ function itemBadgeInner(it){
   if(it.transcribe_status==='error') return '<span class="badge b-rejected">Couldn’t type up the recording</span>';
   if(it.summarize_status==='processing') return '<span class="badge b-pending"><span class="spin" style="border-top-color:var(--pending-fg)"></span> Writing summary&hellip;</span>';
   if(it.summarize_status==='queued') return '<span class="badge b-pending">Summary coming</span>';
-  if(it.summarize_status==='error') return '<span class="badge b-rejected" title="'+esc(it.summarize_error)+'">Summary not written</span>';
+  if(it.summarize_status==='error') return '<span class="badge b-rejected">Summary not written</span>';
   if(it.summary) return '<span class="badge b-approved">Summary ready</span>';
   if(itemHasContent(it)) return '<span class="badge b-changes_requested">Summary coming</span>';
   return '';
@@ -1965,7 +2016,7 @@ function refreshBadge(it){
 // Rendered summary + action-item list for an item.
 function summaryHtml(it){
   var h='';
-  if(it.summarize_status==='error' && it.summarize_error) h+='<div class="alert alert-err" style="margin-top:8px">'+esc(it.summarize_error)+'</div>';
+  if(it.summarize_status==='error' && it.summarize_error) h+='<div class="alert alert-err" style="margin-top:8px">The summary couldn’t be written. '+esc(plainError(it.summarize_error))+'</div>';
   if(it.summary) h+='<div class="sublbl">Summary</div><div class="summary-box">'+esc(it.summary)+'</div>';
   h+=actionItemsHtml(it.action_items);
   return h;
@@ -1979,28 +2030,67 @@ function actionItemsHtml(items){
 }
 
 function wireItem(it){
-  document.querySelector('[data-toggle-item="'+it.id+'"]').addEventListener('click', function(e){
+  var head=document.querySelector('[data-toggle-item="'+it.id+'"]');
+  head.addEventListener('click', function(e){
     // The ▶ plays the topic; it doesn't open it.
     if(e.target && e.target.closest && e.target.closest('.sec-play')) return;
     toggleItemOpen(it);
+  });
+  head.addEventListener('keydown', function(e){
+    if(e.target!==head || (e.key!=='Enter' && e.key!==' ')) return;
+    e.preventDefault(); toggleItemOpen(it);
   });
   renderPresenterChips(it);
   renderSpeakerMap(it);
   renderRecordings(it);
   var tx=document.getElementById('tx-'+it.id);
   var nt=document.getElementById('nt-'+it.id);
-  tx.addEventListener('blur', function(){
-    if(tx.readOnly || tx.value===it.transcript) return;
-    it.transcript=tx.value; saveItemField(it, { transcript: tx.value }); invalidateSummary(it);
-  });
-  nt.addEventListener('blur', function(){
-    if(nt.value===it.notes) return;
-    it.notes=nt.value; saveItemField(it, { notes: nt.value }); invalidateSummary(it);
-  });
+  autosaveTopicField(it, tx, 'transcript');
+  autosaveTopicField(it, nt, 'notes');
   document.querySelector('[data-rec="'+it.id+'"]').addEventListener('click', function(){ toggleRecording(it, this); });
   document.querySelector('[data-audio="'+it.id+'"]').addEventListener('change', function(){ uploadAudio(it, this); });
   document.querySelector('[data-edit-item="'+it.id+'"]').addEventListener('click', function(){ editItem(it); });
   document.querySelector('[data-del-item="'+it.id+'"]').addEventListener('click', function(){ removeItem(it); });
+}
+
+// A topic's notes (and a typed transcript) save a moment after typing stops
+// and again on leaving the box, with "Saving… / Saved" beside the label. A
+// save that fails keeps the text marked unsaved, so the status poll won't
+// overwrite it and the next pause or blur tries again.
+var TOPIC_SAVE_MS=1500;
+var topicUnsaved={}; // 'notes:12' → true while typed text isn't on the server
+function topicSaveStatus(it, field, text, kind){
+  var el=document.getElementById('save-'+field+'-'+it.id); if(!el) return;
+  el.textContent=text||'';
+  el.className='field-save'+(kind?' '+kind:'');
+}
+function autosaveTopicField(it, el, field){
+  var key=field+':'+it.id, timer=null;
+  function save(){
+    if(timer){ clearTimeout(timer); timer=null; }
+    if(el.readOnly || readOnly()) return;
+    var val=el.value;
+    if(val===it[field] && !topicUnsaved[key]) return;
+    topicSaveStatus(it, field, 'Saving…');
+    var body={}; body[field]=val;
+    saveItemField(it, body).then(function(res){
+      if(res && res.ok){
+        it[field]=val;
+        if(el.value===val){ delete topicUnsaved[key]; topicSaveStatus(it, field, 'Saved ✓', 'ok'); }
+        invalidateSummary(it);
+        refreshReportSoon();
+      } else {
+        topicSaveStatus(it, field, 'Not saved yet. It will try again when you pause typing.', 'err');
+      }
+    });
+  }
+  el.addEventListener('input', function(){
+    topicUnsaved[key]=true;
+    topicSaveStatus(it, field, '');
+    if(timer) clearTimeout(timer);
+    timer=setTimeout(save, TOPIC_SAVE_MS);
+  });
+  el.addEventListener('blur', save);
 }
 
 // ── Accordion open/close (drives auto-summary) ──────────────────────────────
@@ -2015,12 +2105,18 @@ function toggleItemOpen(it){
     if(prev) collapseItem(prev);
   }
   body.classList.remove('collapsed');
+  setItemExpanded(it, true);
   state.openItemId=it.id;
   postTopicMarker(it.id);
+}
+function setItemExpanded(it, open){
+  var h=document.querySelector('[data-toggle-item="'+it.id+'"]');
+  if(h) h.setAttribute('aria-expanded', open ? 'true' : 'false');
 }
 function collapseItem(it){
   var body=document.getElementById('ibody-'+it.id);
   if(body) body.classList.add('collapsed');
+  setItemExpanded(it, false);
   if(state.openItemId===it.id) state.openItemId=null;
   summarizeIfNeeded(it);
 }
@@ -2492,21 +2588,21 @@ function renderPresenterChips(it){
   var attendees=state.attendeeIds.map(function(id){ return state.peopleById[id]; }).filter(Boolean);
   var guests=state.guests||[];
   if(!it.guest_presenter_ids) it.guest_presenter_ids=[];
-  if(!attendees.length && !guests.length){ el.innerHTML='<span class="chip empty-hint">Select attendees or add guests above first.</span>'; return; }
+  if(!attendees.length && !guests.length){ el.innerHTML='<span class="empty-hint">Mark who is here under <a href="#" data-goto-sec="people">2. Attendance</a> first; then you can choose who presented.</span>'; return; }
   // Guests first, in their own group, so a visiting speaker is easy to find.
   var html='';
   if(guests.length){
     html+='<div class="pres-group"><div class="pres-group-lbl">Guests</div><div class="chips">'
       +guests.map(function(g){
         var on=it.guest_presenter_ids.indexOf(g.id)>=0;
-        return '<span class="chip pres guest-pres'+(on?' on':'')+'" data-pg="'+g.id+'">'+esc(g.name)
-          +(g.title?' <span class="guest-title">'+esc(g.title)+'</span>':'')+'</span>';
+        return '<button type="button" class="chip pres guest-pres'+(on?' on':'')+'" data-pg="'+g.id+'" aria-pressed="'+on+'">'+esc(g.name)
+          +(g.title?' <span class="guest-title">'+esc(g.title)+'</span>':'')+'</button>';
       }).join('')+'</div></div>';
   }
   html+='<div class="pres-group">'+(guests.length?'<div class="pres-group-lbl">Attendees</div>':'')+'<div class="chips">'
     +(attendees.length ? attendees.map(function(p){
       var on=it.presenter_ids.indexOf(p.id)>=0;
-      return '<span class="chip pres'+(on?' on':'')+'" data-pp="'+p.id+'">'+esc(p.name)+'</span>';
+      return '<button type="button" class="chip pres'+(on?' on':'')+'" data-pp="'+p.id+'" aria-pressed="'+on+'">'+esc(p.name)+'</button>';
     }).join('') : '<span class="chip empty-hint">No attendees selected.</span>')+'</div></div>';
   el.innerHTML=html;
   el.querySelectorAll('.chip[data-pp]').forEach(function(c){
@@ -3176,7 +3272,7 @@ function renderMeetingRecUi(){
       if(rs==='queued'){ ex.innerHTML='<div class="hint">Waiting to be typed up&hellip; You can close this page; it carries on without you.</div>'; }
       else if(rs==='processing'){ ex.innerHTML='<div class="hint"><span class="spin" style="border-top-color:var(--navy)"></span> Typing up the recording&hellip; This usually takes a few minutes. You can close this page; it carries on without you.</div>'; }
       else if(rs==='error'){
-        ex.innerHTML='<div class="alert alert-err">'+esc(m.recording_error||'Processing failed.')+'</div>'
+        ex.innerHTML='<div class="alert alert-err">The recording couldn’t be typed up. '+esc(plainError(m.recording_error||''))+'</div>'
           +(state.meetingRecordings && state.meetingRecordings.length
             ? '<button class="btn-sm" id="btn-mrec-retry">Try again</button>' : '');
         var rb=document.getElementById('btn-mrec-retry');
@@ -3589,6 +3685,7 @@ function renderReportState(){
   var r=state.report||{ status:'idle', error:'', changes:[] };
   var has=!!state.meeting.report;
   var ra=document.getElementById('report-actions'); if(ra) ra.style.display = has ? '' : 'none';
+  var rh=document.getElementById('report-hint'); if(rh) rh.hidden = has && r.status!=='pending';
   var pg=document.getElementById('report-pages');
   if(pg) pg.textContent = has && r.pages ? '≈ '+r.pages+' page'+(r.pages===1?'':'s') : '';
   btn.setAttribute('data-default', has ? 'Rewrite the minutes' : 'Write the minutes');

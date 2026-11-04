@@ -883,12 +883,12 @@ test("the menu shows how things stand", { skip }, () => {
     state.meeting.report = "# M"; state.report = { status: "idle", error: "", changes: ["Attendance changed"] };
     state.items[0].transcribe_status = "processing"; renderDetail();`);
   const hint = (sel: string) => doc.querySelector(`#mtg-nav ${sel} .nav-hint`)?.textContent;
-  assert.equal(hint('[data-sec="people"]'), "3");
-  assert.equal(hint('[data-sec="speakers"]'), "1 unnamed");
+  assert.equal(hint('[data-sec="people"]'), "3 here");
+  assert.equal(hint('[data-sec="speakers"]'), "1 to name");
   assert.equal(hint('[data-sec="minutes"]'), "out of date");
-  assert.equal(hint('[data-topic="1"]'), "transcribing…");
+  assert.equal(hint('[data-topic="1"]'), "typing up…");
   w.eval(`state.report.status = "pending"; renderReportState();`);
-  assert.equal(hint('[data-sec="minutes"]'), "generating…");
+  assert.equal(hint('[data-sec="minutes"]'), "writing…");
 });
 
 // ── The Minutes editor ──────────────────────────────────────────────────────
@@ -2159,4 +2159,78 @@ test("the meetings list shows where each meeting stands, and can be searched", {
   w.eval("loadMeetings()");
   await flush();
   assert.doesNotMatch(doc.getElementById("meetings-list").textContent, /April/);
+});
+
+// ── Review board, phase 3: saving she can see, errors she can act on ───────
+
+test("topic notes save after a pause and say so; a failed save keeps them", { skip }, async () => {
+  const { w, doc } = boot();
+  w.eval("TOPIC_SAVE_MS = 5; renderDetail()");
+  let fail = true;
+  const calls = stubFetch(w, (_p, o) => o.method === "PATCH" ? (fail ? { ok: false, error: "Database unavailable." } : { ok: true }) : { ok: true });
+  const nt = doc.getElementById("nt-1");
+  nt.value = "Motion carried 5-0";
+  nt.dispatchEvent(new w.Event("input", { bubbles: true }));
+  await flush();
+  assert.match(doc.getElementById("save-notes-1").textContent, /Not saved yet/);
+  w.eval("syncItems([Object.assign({}, state.items[0], { notes: '' })])");
+  assert.equal(w.eval("state.items[0].notes"), "", "server copy not taken over the unsaved text…");
+  assert.equal(nt.value, "Motion carried 5-0", "…and the box keeps what was typed");
+  fail = false;
+  nt.dispatchEvent(new w.Event("input", { bubbles: true }));
+  await flush();
+  assert.match(doc.getElementById("save-notes-1").textContent, /Saved/);
+  assert.equal(calls.filter((c) => c.method === "PATCH").pop()!.body.notes, "Motion carried 5-0");
+});
+
+test("text typed in the transcript box as the recording lands moves to the notes", { skip }, () => {
+  const { w, doc } = boot();
+  w.eval("renderDetail()");
+  const calls = stubFetch(w, () => ({ ok: true }));
+  const tx = doc.getElementById("tx-1");
+  tx.value = "Pastor thanked the volunteers";
+  tx.dispatchEvent(new w.Event("input", { bubbles: true }));
+  w.eval(`syncItems([Object.assign({}, state.items[0], { transcript: 'From audio', transcript_segments: [{ start: 0, end: 1, text: 'From audio', speaker: 'S1' }] })])`);
+  assert.match(w.eval("state.items[0].notes"), /Typed before the recording arrived:\nPastor thanked the volunteers/);
+  assert.ok(calls.some((c) => c.method === "PATCH" && /Pastor thanked/.test(c.body.notes)));
+});
+
+test("service errors are said in plain words", { skip }, () => {
+  const { w } = boot();
+  w.console.warn = () => {};
+  assert.match(w.eval("plainError('Transcription service is unreachable. Is the whisper container running?')"), /recording is safe/);
+  assert.match(w.eval("plainError('Could not reach Claude: fetch failed')"), /busy or couldn’t be reached/);
+  assert.match(w.eval("plainError('Claude did not respond within 120s.')"), /took too long/);
+  assert.match(w.eval("plainError('invalid x-api-key')"), /key isn’t working/);
+  assert.equal(w.eval("plainError('A meeting needs a title.')"), "A meeting needs a title.");
+});
+
+test("a topic opens from the keyboard and says whether it's open", { skip }, () => {
+  const { w, doc } = boot();
+  w.eval("renderDetail()");
+  const head = doc.querySelector('[data-toggle-item="1"]');
+  assert.equal(head.getAttribute("aria-expanded"), "false");
+  head.dispatchEvent(new w.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  assert.equal(head.getAttribute("aria-expanded"), "true");
+  assert.equal(doc.getElementById("ibody-1").classList.contains("collapsed"), false);
+});
+
+test("closing a dialog puts focus back where it was", { skip }, () => {
+  const { w, doc } = boot();
+  w.eval("renderDetail(); showSection('details'); state.editingDetails = true; renderDetailsCard();");
+  const del = doc.getElementById("btn-details-delete");
+  del.focus();
+  del.dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  assert.ok(doc.querySelector(".modal"));
+  w.eval("closeModal()");
+  assert.equal(doc.activeElement, del);
+});
+
+test("removing a guest asks first", { skip }, () => {
+  const { w, doc } = boot();
+  w.eval("state.guests = [{ id: 3, name: 'Gina', title: '' }]; renderDetail();");
+  const calls = stubFetch(w, () => ({ ok: true }));
+  w.confirm = () => false;
+  doc.querySelector('[data-gid="3"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  assert.equal(calls.length, 0);
 });

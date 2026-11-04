@@ -152,14 +152,28 @@ body.has-rec-banner{padding-top:44px}
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
-/* ── Print: only the generated report reaches paper ─────────────────────── */
+/* ── Print: only the minutes reach paper ────────────────────────────────── */
+/* Everything else is taken out of the layout (display:none), not just made
+   invisible, so nothing hidden still takes up space and adds blank pages. */
 @media print {
-  body:has(#report-box .report) * { visibility: hidden; }
-  body:has(#report-box .report) #report-box,
-  body:has(#report-box .report) #report-box * { visibility: visible; }
-  body:has(#report-box .report) #report-box {
-    position: absolute; left: 0; top: 0; width: 100%; margin: 0; padding: 0;
-  }
+  @page { margin: 0.75in; }
+  body:has(#report-box .report) { background: #fff; padding: 0 !important; }
+  body:has(#report-box .report) > *:not(#view-detail),
+  body:has(#report-box .report) #view-detail > *:not(#detail-body),
+  body:has(#report-box .report) .mtg-nav,
+  body:has(#report-box .report) .mtg-nav-select,
+  body:has(#report-box .report) .mtg-main > *:not(section[data-sec="minutes"]),
+  body:has(#report-box .report) .minutes-main > *:not(#report-box),
+  body:has(#report-box .report) .chat-panel,
+  body:has(#report-box .report) #report-edit-hint { display: none !important; }
+  body:has(#report-box .report) .layout,
+  body:has(#report-box .report) .mtg-shell,
+  body:has(#report-box .report) .mtg-main,
+  body:has(#report-box .report) .minutes-layout { display: block !important; max-width: none !important; margin: 0 !important; padding: 0 !important; }
+  #report-box { margin: 0 !important; }
+  #report-box .report { border: 0; box-shadow: none; padding: 0; max-width: none; font-size: 12pt; line-height: 1.5; background: #fff; }
+  #report-box .report h1, #report-box .report h2, #report-box .report h3 { break-after: avoid; }
+  #report-box .report li { break-inside: avoid; }
   .sec-play, .sec-time { display: none !important; }
 }
 
@@ -376,7 +390,7 @@ body.has-rec-banner .chat-panel{top:64px}
 /* The meeting page is wider than the list so the minutes and the chat fit side
    by side; the other sections keep a comfortable reading width. */
 #view-detail.layout{max-width:1220px}
-.mtg-main > section:not([data-sec="minutes"]), .mtg-head{max-width:760px}
+.mtg-main > section:not([data-sec="minutes"]), .mtg-head, .next-step{max-width:760px}
 
 /* ── Mini player ────────────────────────────────────────────────────────── */
 .mini-player{position:fixed;right:16px;bottom:calc(16px + env(safe-area-inset-bottom,0px));z-index:70;width:340px;max-width:calc(100vw - 32px);
@@ -507,3 +521,115 @@ body.rc-open{overflow:hidden}
 .admin-setup .admin-block .ct{font-size:15px}
 
 .report-edit-hint{margin:0 0 10px}
+
+/* ── Readability (usability review) ─────────────────────────────────────────
+   This app is used by people who read small, low-contrast text with effort.
+   These override the shared grmc.css for Meeting Minutes only; the shared
+   file is copied into every app and is left as it is.
+   Contrast on paper (#f7f3e9): hint 2.9 → 5.5, muted 4.5 → 6.2, gold text
+   3.6 → 5.7 (WCAG AA is 4.5). */
+:root{
+  --hint:#6b6148; --muted:#635a42; --gold-text:#735d16; --count-zero:var(--muted);
+  --pending-fg:#7a6212;
+  --bg-soft:#efe6cf; --line:var(--rule); --text:var(--ink); --field-edge:#a8986c;
+  --t-body:16px; --t-small:14px;
+}
+body{font-size:16px}
+.kicker,.ai-owner{color:var(--gold-text)}
+
+/* Labels: readable sentence case instead of 10px capitals. */
+label,.lbl,.sublbl{font-size:14px;font-weight:600;text-transform:none;letter-spacing:0;color:var(--ink)}
+.sublbl{display:block;margin:16px 0 6px}
+.check{font-size:15px}
+.hint,.empty-hint{font-size:14px}
+.empty{font-size:15px}
+
+/* Fields and buttons: bigger text, edges you can see, room to click. */
+input[type=text],input[type=email],input[type=url],input[type=file],input[type=password],input[type=search],textarea,select{
+  font-size:16px;border-color:var(--field-edge)}
+input[type=search]{width:100%;border:1px solid var(--field-edge);border-radius:var(--r);padding:9px 11px;font-family:var(--font-ui);color:var(--ink);background:var(--field-bg)}
+.btn{font-size:15px;padding:10px 18px;min-height:42px}
+.btn-sm{font-size:14px;padding:7px 12px;min-height:36px;border-color:var(--field-edge)}
+.btn-secondary{border-color:var(--field-edge)}
+.alert{font-size:15px}
+.badge{font-size:12.5px;padding:3px 10px}
+.pill{font-size:12.5px}
+
+/* A focus ring that can actually be seen (navy, 14:1), for keyboard users and
+   for anyone checking where they are. */
+:focus-visible{outline:3px solid var(--navy);outline-offset:2px}
+input:focus,textarea:focus,select:focus{border-color:var(--navy);box-shadow:0 0 0 3px rgba(9,45,62,.18)}
+
+/* Text across the app, one step up. */
+.mmeta,.mstats{font-size:14px}
+.mstats{color:var(--muted)}
+.person-name{font-size:16px}
+.person-sub,.person-voice{font-size:14px}
+.person-row.off{opacity:1;color:var(--muted)}
+.person-row.off .person-name{color:var(--muted)}
+.chip{font-size:15px;min-height:40px}
+.chip.on::before,.chip.sel::before{content:"✓ ";font-weight:700}
+.inum{font-size:14px}
+.inum.done::after{content:" ✓"}
+.ititle{font-size:17px}
+.idesc,.ipres{font-size:14.5px}
+.rec-status{font-size:14px}
+.spk-tag{font-size:13px}
+.action-list li,.summary-box{font-size:15px}
+.ai-owner{font-size:12.5px}
+.chip.guest .guest-title,.chip.pres .guest-title,.pres-group-lbl{font-size:13px}
+.pres-group-lbl{text-transform:none;letter-spacing:0}
+.sec-time{font-size:13px}
+.mtg-nav a{font-size:15.5px;padding:9px 12px}
+.mtg-nav .nav-topic{font-size:14.5px}
+.mtg-nav .nav-hint{font-size:13px;opacity:1;color:inherit}
+.dlbl,.stat span,.roll-title,.voice-time,.voice-match,.voice-match.agree{font-size:14.5px}
+.roll-count{font-size:14.5px}
+.roll-absent{font-size:13px}
+.chat-sub,.chat-reset{font-size:13.5px}
+.chat-msg,.chat-compose textarea{font-size:15.5px}
+.chat-suggest{font-size:14.5px}
+.chat-keys{font-size:13px}
+.chat-card-state{font-size:13px}
+.rc-bar{font-size:15px}
+.rc-rec{font-size:13px}
+.rc-pres,.rc-label{font-size:14.5px}
+.rc-n{font-size:14px}
+.rc-next{font-size:16px}
+
+/* The minutes: a comfortable reading size and line length. */
+.report{font-size:16px;line-height:1.65}
+.report-editor{max-width:72ch}
+.report h2{font-size:19px}
+.report h3{font-size:17px}
+.report h4{font-size:16px}
+
+/* Lines of the minutes are clickable to edit: show it on hover and focus. */
+.report-editor.editable .rblock{border-radius:4px;cursor:text}
+.report-editor.editable .rblock:hover,.report-editor.editable .rblock:focus-visible{
+  background:var(--pending-bg);box-shadow:inset 3px 0 0 var(--gold)}
+
+/* Play buttons and small controls big enough to hit. */
+.sec-play{width:32px;height:32px;font-size:13px}
+.spk-excerpts .spk-play{font-size:13px;padding:4px 10px;min-height:30px}
+.mp-btn{font-size:14px;min-height:36px;padding:6px 10px}
+.mp-label{font-size:15px}
+.mp-time{font-size:14px}
+.chip-x{font-size:20px;min-width:32px;min-height:32px;padding:0 6px}
+
+/* Topic rows open and close: say so with a chevron. */
+.ihead{cursor:pointer}
+.ihead .ititle::before{content:"▸ ";color:var(--navy)}
+.item:has(.ibody:not(.collapsed)) .ihead .ititle::before{content:"▾ "}
+button.chip{font-family:inherit;cursor:pointer}
+.label-row{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+.field-save{font-size:14px;color:var(--muted)}
+.field-save.ok{color:var(--ok-fg)}
+.field-save.err{color:var(--rej-fg);font-weight:600}
+
+/* Minutes toolbar: Print and Docs first, Rewrite after them. */
+#report-actions{display:contents}
+section[data-sec="minutes"] .btn-row #btn-report{order:5}
+section[data-sec="minutes"] .btn-row #btn-report-cancel{order:6}
+section[data-sec="minutes"] .btn-row #report-pages,section[data-sec="minutes"] .btn-row #report-save{order:7}
+.chat-send{width:auto;height:36px;border-radius:18px;padding:0 16px;font-size:15px;background:var(--muted)}
