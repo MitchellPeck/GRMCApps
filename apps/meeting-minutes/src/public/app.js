@@ -329,7 +329,7 @@ function applyReadOnly(){
   if(!readOnly()) return;
   var h=state.lock.holder||{}, who=h.name||h.email||'Someone else';
   var b=document.createElement('div'); b.className='alert alert-warn'; b.id='lock-banner';
-  b.textContent='Being edited by '+who+'. You can look, listen and export, but not change anything.'
+  b.textContent='Being edited by '+who+', who has this meeting open. Until they close it you can read, listen and print, but not change anything. It unlocks by itself, and this page updates when it does.'
     +(state.lockDrafts ? ' What you were typing is still on screen: copy anything you haven’t saved.' : '');
   body.insertBefore(b, body.firstChild);
   body.querySelectorAll('input, textarea, select, button').forEach(function(el){
@@ -404,26 +404,59 @@ function loadMe(){
 function loadMeetings(){
   var el=document.getElementById('meetings-list');
   api('/api/meetings').then(function(res){
-    if(!res.ok){ el.innerHTML='<div class="alert alert-err">'+esc(res.error)+'</div>'; return; }
-    if(!res.meetings.length){ el.innerHTML='<div class="empty">No meetings yet. Create one above.</div>'; return; }
-    el.innerHTML = res.meetings.map(function(m){
-      var status = m.status==='completed' ? '<span class="badge b-approved">completed</span>'
-                 : m.status==='in_progress' ? '<span class="badge b-changes_requested">in progress</span>'
-                 : '<span class="badge b-pending">draft</span>';
+    if(!res.ok || !Array.isArray(res.meetings)){
+      el.innerHTML='<div class="alert alert-err">Couldn’t load the meetings. '+esc(res.error||'')+' <button class="btn-sm" id="btn-meetings-retry">Try again</button></div>';
+      var rb=document.getElementById('btn-meetings-retry'); if(rb) rb.addEventListener('click', loadMeetings);
+      return;
+    }
+    if(!res.meetings.length){ el.innerHTML='<div class="empty">No meetings yet. Press “+ New meeting” to make the first one.</div>'; return; }
+    state.meetingList=res.meetings;
+    var q=(document.getElementById('m-search')||{}).value||'';
+    q=q.trim().toLowerCase();
+    var shown=res.meetings.filter(function(m){
+      return !q || [m.title, m.meeting_date, m.location].join(' ').toLowerCase().indexOf(q)>=0;
+    });
+    if(!shown.length){ el.innerHTML='<div class="empty">No meetings match “'+esc(q)+'”.</div>'; return; }
+    el.innerHTML = shown.map(function(m){
+      var status=meetingStage(m);
+      status='<span class="badge '+status[0]+'">'+esc(status[1])+'</span>';
       var meta=[m.meeting_date, m.location].filter(Boolean).map(esc).join(' &middot; ');
-      return '<div class="mcard" data-id="'+m.id+'">'
+      return '<div class="mcard" data-id="'+m.id+'" role="button" tabindex="0" aria-label="Open '+esc(m.title)+'">'
         +'<div class="mhead"><div><div class="mtitle">'+esc(m.title)+'</div>'
         +(meta?'<div class="mmeta">'+meta+'</div>':'')+'</div>'+status+'</div>'
-        +'<div class="mstats"><span>'+m.item_count+' agenda item'+(m.item_count===1?'':'s')+'</span>'
+        +'<div class="mstats"><span>'+m.item_count+' topic'+(m.item_count===1?'':'s')+'</span>'
         +'<span>'+m.attendee_count+' present</span>'
-        +(m.report_generated_at?'<span>report ready</span>':'')+'</div></div>';
+        +(m.report_generated_at?'<span>minutes written</span>':'')+'</div></div>';
     }).join('');
     el.querySelectorAll('.mcard').forEach(function(c){
       c.addEventListener('click', function(){ openMeeting(Number(c.getAttribute('data-id'))); });
+      c.addEventListener('keydown', function(e){ if(e.key==='Enter' || e.key===' '){ e.preventDefault(); openMeeting(Number(c.getAttribute('data-id'))); } });
     });
-  }).catch(function(e){ el.innerHTML='<div class="alert alert-err">'+esc(e.message)+'</div>'; });
+  });
+}
+// Where a meeting on the list stands, from what's in it (not a status someone
+// has to remember to set): [badge class, label].
+function meetingStage(m){
+  var rs=m.recording_status||'idle';
+  if(m.report_generated_at || m.report) return ['b-approved','Minutes written'];
+  if(rs==='recording') return ['b-rejected','Recording'];
+  if(rs==='queued' || rs==='processing') return ['b-pending','Being typed up'];
+  if(rs==='error') return ['b-rejected','Recording problem'];
+  if(rs==='done') return ['b-changes_requested','Recorded · minutes not written'];
+  if(m.item_count) return ['b-pending','Agenda ready'];
+  return ['b-pending','Not started'];
 }
 
+// The new-meeting form stays tucked away until asked for, so the list of
+// meetings is the first thing on the page.
+function showNewMeeting(show){
+  document.getElementById('new-meeting-card').hidden=!show;
+  document.getElementById('btn-show-new').hidden=!!show;
+  if(show) document.getElementById('m-title').focus();
+}
+document.getElementById('btn-show-new').addEventListener('click', function(){ showNewMeeting(true); });
+document.getElementById('btn-cancel-new').addEventListener('click', function(){ msg('new-msg','',''); showNewMeeting(false); });
+document.getElementById('m-search').addEventListener('input', loadMeetings);
 document.getElementById('btn-new-meeting').addEventListener('click', function(){
   if(!v('m-title')){ msg('new-msg','err','A title is required.'); return; }
   setBtn('btn-new-meeting', true, 'Creating...');
@@ -433,7 +466,8 @@ document.getElementById('btn-new-meeting').addEventListener('click', function(){
     setBtn('btn-new-meeting', false);
     if(!res.ok){ msg('new-msg','err',res.error); return; }
     ['m-title','m-date','m-loc','m-desc'].forEach(function(id){ document.getElementById(id).value=''; });
-    msg('new-msg','ok','Meeting created.');
+    msg('new-msg','','');
+    showNewMeeting(false);
     openMeeting(res.id);
   }).catch(function(e){ setBtn('btn-new-meeting', false); msg('new-msg','err',e.message); });
 });
@@ -454,7 +488,7 @@ function loadPeople(){
             : p.voice_meetings ? 'Voice learned from '+p.voice_meetings+' meeting'+(p.voice_meetings===1?'':'s') : 'Voice not learned yet')+'</span>'
         +'<button class="btn-sm" data-voice="'+p.id+'" data-learn="'+(!p.learn_voice)+'">'+(p.learn_voice?'Forget voice':'Learn voice')+'</button>'
         +'<button class="btn-sm" data-edit="'+p.id+'">Edit</button>'
-        +'<button class="btn-sm" data-toggle="'+p.id+'" data-active="'+(!p.active)+'">'+(p.active?'Deactivate':'Reactivate')+'</button>'
+        +'<button class="btn-sm" data-toggle="'+p.id+'" data-active="'+(!p.active)+'">'+(p.active?'Hide from attendance':'Show in attendance')+'</button>'
         +'</div></div>';
     }).join('');
     el.querySelectorAll('[data-toggle]').forEach(function(b){
@@ -485,7 +519,7 @@ function editPerson(id, people){
       { id:'name', label:'Name', type:'text', value:p.name, required:true },
       { id:'title', label:'Role / title', type:'text', value:p.title||'', placeholder:'e.g. Treasurer' },
       { id:'email', label:'Email', type:'text', value:p.email||'', placeholder:'name@grmc.org' },
-      { id:'active', label:'Active (appears in attendee lists)', type:'checkbox', value:!!p.active }
+      { id:'active', label:'Show in every meeting’s attendance list', type:'checkbox', value:!!p.active }
     ],
     onSave: function(v, done){
       api('/api/people/'+id, { method:'PUT', body:{
@@ -518,7 +552,7 @@ function loadSettings(){
     if(!res.ok) return;
     document.getElementById('s-anthropic-hint').innerHTML = res.hasAnthropicKey
       ? 'Saved (' + esc(res.anthropicKeyHint) + '). Enter a new key to replace it.'
-      : 'Used to extract agendas, summarize items, and write the report.';
+      : 'Used to read agendas, summarize topics and write the minutes.';
     renderVoiceSettings(res);
     // Never overwrite text the user is part-way through editing.
     ['s-report-instructions','s-report-example'].forEach(function(id, i){
@@ -610,7 +644,7 @@ document.getElementById('btn-save-style').addEventListener('click', function(){
   } }).then(function(res){
     setBtn('btn-save-style', false);
     if(!res.ok){ msg('style-msg','err',res.error); return; }
-    msg('style-msg','ok','Saved. The next report you generate will follow it.');
+    msg('style-msg','ok','Saved. The next minutes written will follow it.');
   }).catch(function(e){ setBtn('btn-save-style', false); msg('style-msg','err',e.message); });
 });
 document.getElementById('btn-save-settings').addEventListener('click', function(){
@@ -622,6 +656,7 @@ document.getElementById('btn-save-settings').addEventListener('click', function(
       document.getElementById('s-anthropic').value='';
       msg('settings-msg','ok','Saved.');
       loadSettings();
+      checkSetup();
     }).catch(function(e){ setBtn('btn-save-settings', false); msg('settings-msg','err',e.message); });
 });
 
@@ -638,7 +673,7 @@ function openMeeting(id){
   Promise.all([ api('/api/people?all=1'), api('/api/meetings/'+id) ]).then(function(r){
     var peopleRes=r[0], det=r[1];
     if(!det.ok || !det.meeting){ document.getElementById('detail-body').innerHTML='<div class="alert alert-err">'+esc(det.error||'Could not load the meeting.')+'</div>'; return; }
-    if(!state.meeting || state.meeting.id!==det.meeting.id){ state.lastFix=null; state.section=null; state.topicFocus=null; }
+    if(!state.meeting || state.meeting.id!==det.meeting.id){ state.lastFix=null; state.section=null; state.topicFocus=null; state.skipRecording=false; }
     state.people = (peopleRes.ok?peopleRes.people:[]);
     state.peopleById = {}; state.people.forEach(function(p){ state.peopleById[p.id]=p; });
     state.lockDrafts = false;
@@ -696,9 +731,15 @@ function renderDetail(){
     +'<button class="btn-sm" id="btn-roll-clear">Clear</button></div>'
     +'<div id="roll-msg"></div>'
     +'<div class="roll-list" id="attendee-list"></div>'
-    +'<div class="hint" style="margin-top:8px">Tap a name to mark them present or absent. Add people to the list under the People tab.</div></div>'
+    +'<div class="hint" style="margin-top:8px">Tap a name to mark them present or absent. Only people marked here can be chosen as presenters or named as speakers.</div>'
+    +'<div class="sublbl" style="margin-top:14px">Someone missing from the list?</div>'
+    +'<div id="roll-add-msg"></div>'
+    +'<div class="guest-add"><input type="text" id="ra-name" placeholder="Their full name" aria-label="Name of a regular member to add">'
+    +'<input type="text" id="ra-title" placeholder="Role, e.g. Treasurer (optional)" aria-label="Their role">'
+    +'<button class="btn-sm" id="btn-roll-add" data-default="Add and mark present">Add and mark present</button></div>'
+    +'<div class="hint">For regular members: they’re added to the People list for every meeting. For one-time visitors, use Guests below.</div></div>'
     +'<div class="card"><div class="ct">Guests</div>'
-    +'<div class="hint" style="margin-bottom:6px">Visitors for this meeting only. Guests count as present and can be named as speakers or chosen as presenters.</div>'
+    +'<div class="hint" style="margin-bottom:6px">Visitors for this meeting only. Guests count as present and can be chosen as presenters or named as speakers.</div>'
     +'<div class="roll-list" id="guest-list"></div>'
     +'<div id="guest-msg"></div>'
     +'<div class="guest-add"><input type="text" id="g-name" placeholder="Guest name">'
@@ -708,30 +749,32 @@ function renderDetail(){
 
   // Meeting recording
   h+='<section data-sec="recording" hidden>'
-    +'<div class="card"><div class="ct">Meeting recording</div>'
+    +'<div class="card"><div class="ct">Record the meeting</div>'
     +'<div id="mrec-msg"></div>'
-    +'<div class="btn-row rec-main"><button class="btn btn-primary rec-big" id="btn-meeting-rec" data-default="● Record meeting">● Record meeting</button>'
+    +'<div class="btn-row rec-main"><button class="btn btn-primary rec-big" id="btn-meeting-rec" data-default="● Start recording">● Start recording</button>'
     +'<span class="rec-status" id="mrec-status"></span></div>'
-    +'<div class="hint">One recording for the whole meeting. While it runs, tap each topic as it comes up and the audio is filed under it. Processing starts when you stop.</div>'
+    +'<ol class="how-to"><li>Press <b>Start recording</b> once, when the meeting begins.</li>'
+    +'<li>As each topic comes up, tap it, so the recording is filed under the right topic.</li>'
+    +'<li>Press <b>Stop recording</b> when the meeting ends. It’s then typed up for you automatically.</li></ol>'
     +'<div id="rec-topics"></div>'
     +'<div id="mrec-extra"></div></div>'
-    +'<div class="card"><div class="ct">Recordings</div><div id="rec-history"></div></div></section>';
+    +'<div class="card"><div class="ct">Past recordings</div><div id="rec-history"></div></div></section>';
 
   // Meeting-wide speaker naming (populated once transcripts with meeting-wide
   // speaker labels exist; empty until then)
   h+='<section data-sec="speakers" hidden>';
   h+='<div id="meeting-speakers"></div>';
   // Fix a misheard name or word everywhere at once.
-  h+='<div class="card"><div class="ct">Fix a name or word</div>'
-    +'<div class="hint">Corrects it in the transcripts, summaries, action items, speaker names, guests and the report, all at once.</div>'
+  h+='<div class="card"><div class="ct">Correct a name or word</div>'
+    +'<div class="hint">If the recording misheard a name or word, correct it here once. It’s changed everywhere: what was said, the summaries, action items, voice names, guests and the minutes.</div>'
     +'<div class="fix-row" id="fix-panel">'
-    +'<input type="text" id="fix-from" placeholder="Replace (e.g. John)">'
-    +'<input type="text" id="fix-to" placeholder="With (e.g. Jon)">'
-    +'<select id="fix-scope"><option value="">Whole meeting</option>'
+    +'<input type="text" id="fix-from" placeholder="Wrong spelling (e.g. John)" aria-label="Wrong spelling">'
+    +'<input type="text" id="fix-to" placeholder="Right spelling (e.g. Jon)" aria-label="Right spelling">'
+    +'<select id="fix-scope" aria-label="Where to correct it"><option value="">Whole meeting</option>'
     +state.items.map(function(it, i){ return '<option value="'+it.id+'">'+(i+1)+'. '+esc(it.title)+'</option>'; }).join('')
     +'</select>'
-    +'<button class="btn btn-secondary btn-sm" id="btn-fix-preview">Check</button>'
-    +'<button class="btn btn-primary btn-sm" id="btn-fix-apply" disabled title="Check first">Fix</button>'
+    +'<button class="btn btn-secondary btn-sm" id="btn-fix-preview">1. Show where it appears</button>'
+    +'<button class="btn btn-primary btn-sm" id="btn-fix-apply" disabled>2. Change all</button>'
     +'</div><div id="fix-msg"></div><div id="fix-result">'+(state.lastFix ? fixResultHtml(state.lastFix) : '')+'</div></div>';
 
   h+='</section>';
@@ -741,43 +784,45 @@ function renderDetail(){
   h+='<section data-sec="agenda" hidden>';
   h+='<div class="card" id="agenda-upload-card"><div class="ct">Agenda</div>'
     +'<div id="agenda-msg"></div>'
-    +(m.agenda_file_name?'<div class="hint" style="margin-bottom:8px">Loaded from: '+esc(m.agenda_file_name)+'</div>':'')
-    +'<div class="field"><label>Upload agenda (PDF, image, or text)</label>'
+    +(m.agenda_file_name?'<div class="hint" style="margin-bottom:8px">The current topics came from: '+esc(m.agenda_file_name)+'</div>':'')
+    +'<div class="hint" style="margin-bottom:10px">Choose the agenda file (a PDF, a photo of it, or a text file) and its topics are read for you. Or press “+ Add topic” below to type them in.</div>'
+    +'<div class="field"><label for="agenda-file">Agenda file</label>'
     +'<input type="file" id="agenda-file" accept="application/pdf,image/png,image/jpeg,image/webp,image/gif,text/plain,.txt,.md"></div>'
-    +'<div class="btn-row"><button class="btn btn-primary" id="btn-upload-agenda" data-default="Extract agenda items">Extract agenda items</button></div>'
-    +'<div class="hint" style="margin-top:6px">Uploading replaces the current agenda items.</div></div>';
+    +'<div class="btn-row"><button class="btn btn-primary" id="btn-upload-agenda" data-default="Read the topics from this file">Read the topics from this file</button></div>'
+    +(state.items && state.items.length ? '<div class="hint" style="margin-top:6px">This replaces the current topics.</div>' : '')+'</div>';
 
   // Agenda items (the run-the-meeting flow)
   h+='<div class="agenda-bar"><b id="agenda-count"></b><span style="flex:1"></span>'
-    +'<button class="btn-sm" id="btn-agenda-replace">Replace from file</button> '
+    +'<button class="btn-sm" id="btn-agenda-replace">Upload a new agenda…</button> '
     +'<button class="btn-sm" id="btn-add-item" data-default="+ Add topic">+ Add topic</button></div>';
   h+='<div id="items-wrap"></div>';
   h+='</section>';
 
   // Report
   h+='<section data-sec="minutes" hidden><div class="minutes-layout"><div class="minutes-main">'
-    +'<div class="section-title">Report</div>'
+    +'<div class="section-title">Minutes</div>'
     +'<div id="report-msg"></div>'
     +'<div id="report-stale"></div>'
-    +'<div class="btn-row"><button class="btn btn-gold" id="btn-report" data-default="Generate report">Generate report</button>'
+    +'<div class="btn-row"><button class="btn btn-gold" id="btn-report" data-default="Write the minutes">Write the minutes</button>'
     +' <button class="btn btn-secondary" id="btn-report-cancel" hidden>Cancel</button>'
     +'<span id="report-actions" style="display:none">'
     // A plain link in a new tab: the server sends it through Google consent
     // if needed, then on to the new Doc, with no popup blocker involved.
     +'<a class="btn btn-secondary" id="btn-report-gdoc" href="/api/meetings/'+m.id+'/google-doc" target="_blank" rel="noopener">Open in Google Docs</a> '
-    +'<button class="btn btn-secondary" id="btn-report-print">Print PDF</button> '
+    +'<button class="btn btn-primary" id="btn-report-print" title="To save a PDF, choose “Save as PDF” as the printer">Print or save as PDF</button> '
     +'<button class="btn btn-secondary" id="btn-report-undo" title="Take back the last saved change to the minutes">Undo last edit</button>'
     +' <span class="hint" id="report-pages"></span>'
     +' <span class="hint report-save" id="report-save"></span>'
     +'</span></div>'
-    +'<div class="hint" id="report-hint">The report waits for any transcription and summaries still in progress, then writes itself. You can close this page meanwhile.</div>'
+    +'<div class="hint" id="report-hint">If the recording is still being typed up, the minutes are written as soon as it’s done. You can close this page meanwhile.</div>'
     +'<div id="report-box" style="margin-top:14px">'+reportEditorHtml()+'</div>'
     // The chat (plan 5) sits beside the minutes; hidden while it has nothing.
     +'</div><aside id="chat-panel" class="chat-panel" hidden></aside></div></section>';
 
   // The meeting's name stays above every section.
   var head='<div class="mtg-head"><h2 id="d-title-txt">'+esc(m.title)+'</h2>'
-    +'<div class="dmeta" id="d-meta-txt">'+meta+'</div></div>';
+    +'<div class="dmeta" id="d-meta-txt">'+meta+'</div></div>'
+    +'<div id="next-step" class="next-step" role="status"></div>';
   h='<div class="mtg-shell"><nav class="mtg-nav" id="mtg-nav"></nav>'
     +'<select id="mtg-nav-select" class="mtg-nav-select" aria-label="Section"></select>'
     +'<div class="mtg-main">'+head+h+'</div></div>';
@@ -814,6 +859,10 @@ function renderDetail(){
   document.getElementById('btn-report-print').addEventListener('click', function(){ window.print(); });
   document.getElementById('btn-report-undo').addEventListener('click', undoLastEdit);
   document.getElementById('btn-add-guest').addEventListener('click', addGuest);
+  document.getElementById('btn-roll-add').addEventListener('click', addRollPerson);
+  ['ra-name','ra-title'].forEach(function(id){
+    document.getElementById(id).addEventListener('keydown', function(e){ if(e.key==='Enter') addRollPerson(); });
+  });
   document.getElementById('g-name').addEventListener('keydown', function(e){ if(e.key==='Enter') addGuest(); });
   document.getElementById('g-title').addEventListener('keydown', function(e){ if(e.key==='Enter') addGuest(); });
   renderChatPanel();
@@ -860,11 +909,12 @@ function reportEditable(){
 function reportEditorHtml(){
   var m=state.meeting;
   if(!m || !m.report) return '';
-  return '<div class="report report-editor" id="report-editor">'
+  // How to edit goes above the minutes, where it's seen before a long read.
+  return '<div class="alert alert-info report-edit-hint" id="report-edit-hint">Click any line to change it. Changes save as you go.</div>'
+    +'<div class="report report-editor" id="report-editor">'
     +reportLines(m.report).map(function(l, i){
       return '<div class="rblock" tabindex="0" data-line="'+i+'">'+renderMarkdown(l.text+(l.marker?' '+l.marker:''))+'</div>';
-    }).join('')+'</div>'
-    +'<div class="hint" id="report-edit-hint">Click any line to change it. Changes save as you go.</div>';
+    }).join('')+'</div>';
 }
 function renderReportEditor(){
   var box=document.getElementById('report-box'); if(box) box.innerHTML=reportEditorHtml();
@@ -1033,8 +1083,8 @@ function renderChatPanel(){
   var el=document.getElementById('chat-panel'); if(!el || !state.meeting) return;
   el.hidden=false;
   el.innerHTML='<div class="chat-head"><div class="chat-title"><span class="chat-mark" aria-hidden="true">&#10022;</span>'
-    +'<div><b>Assistant</b><div class="chat-sub">Knows this meeting: its recording, topics and minutes</div></div>'
-    +'<button type="button" class="chat-reset" id="btn-chat-reset" title="Start a new conversation">New chat</button></div></div>'
+    +'<div><b>Ask for help with these minutes</b><div class="chat-sub">Ask a question, or ask for a change. It knows this meeting’s recording, topics and minutes.</div></div>'
+    +'<button type="button" class="chat-reset" id="btn-chat-reset" title="Clear this conversation and start a new one">Start over</button></div></div>'
     +'<div class="chat-log" id="chat-log" aria-live="polite"></div>'
     +'<div class="chat-compose"><textarea id="chat-input" rows="1" placeholder="Ask or tell it what to fix…" aria-label="Message"></textarea>'
     +'<button type="button" class="chat-send" id="btn-chat-send" title="Send" aria-label="Send">&#8593;</button></div>'
@@ -1081,6 +1131,8 @@ document.addEventListener('click', function(e){
   input.value=chip.getAttribute('data-text'); state.chatDraft=input.value;
   growChatInput(); input.focus();
 });
+// Each confirm button names what it does, not just "Confirm".
+var CHAT_CONFIRM_LABELS={ remove_topic:'Yes, remove it', regenerate_report:'Yes, rewrite them', reprocess_recording:'Yes, type it up again' };
 function chatCardHtml(c){
   if(c.kind==='clip'){
     var span=fmtSpanTime(c.start)+'–'+fmtSpanTime(c.end);
@@ -1093,7 +1145,7 @@ function chatCardHtml(c){
     return '<div class="chat-card confirm'+(c.done?' done':'')+'"><span class="chat-card-ico" aria-hidden="true">!</span><span>'+esc(c.label)+'</span>'
       +(c.done ? '<span class="chat-card-state">Done</span>'
         : '<button type="button" class="btn-sm chat-confirm" data-action="'+esc(c.action)+'"'+(c.id?' data-card="'+esc(c.id)+'"':'')
-          +(c.itemId!=null?' data-item="'+esc(c.itemId)+'"':'')+(c.fresh?' data-fresh="1"':'')+(c.recordingId!=null?' data-rec="'+esc(c.recordingId)+'"':'')+'>Confirm</button>')
+          +(c.itemId!=null?' data-item="'+esc(c.itemId)+'"':'')+(c.fresh?' data-fresh="1"':'')+(c.recordingId!=null?' data-rec="'+esc(c.recordingId)+'"':'')+'>'+esc(CHAT_CONFIRM_LABELS[c.action]||'Yes, do it')+'</button>')
       +'</div>';
   }
   return '<div class="chat-card change'+(c.undone?' undone':'')+'"><span class="chat-card-ico" aria-hidden="true">&#10003;</span><span>'+esc(c.summary)+'</span>'
@@ -1218,10 +1270,101 @@ document.addEventListener('click', function(e){
 });
 
 // ── Sections and the side menu ──────────────────────────────────────────────
-var SECTIONS=[['details','Details'],['people','People'],['agenda','Agenda'],['recording','Recording'],['speakers','Speakers'],['minutes','Report']];
+// The menu follows a meeting from start to finish, numbered, with Details
+// (title, date, delete) last since it's rarely needed after the meeting is made.
+var SECTIONS=[['agenda','1. Agenda'],['people','2. Attendance'],['recording','3. Record'],
+              ['speakers','4. Voices'],['minutes','5. Minutes'],['details','Details']];
+
+// Where the meeting stands, step by step, worked out from what's in it.
+function meetingProgress(){
+  var m=state.meeting||{}, items=state.items||[];
+  var map=m.speaker_map||{};
+  var unnamed=(state.meetingSpeakerStats||[]).filter(function(st){ return !(map[st.speaker]||'').trim(); }).length;
+  var recorded=(state.meetingRecordings||[]).length>0 || items.some(function(it){ return recordedTranscript(it) || (it.recordings||[]).length; });
+  var r=state.report||{};
+  return {
+    topics: items.length,
+    present: (state.attendeeIds||[]).length+(state.guests||[]).length,
+    recording: meetingRecordingActive(),
+    processing: meetingProcessing() || items.some(isTranscribing),
+    recordError: m.recording_status==='error',
+    recorded: recorded,
+    unnamed: unnamed,
+    hasMinutes: !!m.report,
+    writing: r.status==='pending',
+    stale: !!m.report && r.status!=='pending' && (r.changes||[]).length>0,
+    skipRecording: !!state.skipRecording
+  };
+}
+// Which menu steps are finished, for the ticks beside them.
+function stepsDone(p){
+  return {
+    agenda: p.topics>0,
+    people: p.present>0,
+    recording: p.recorded && !p.recording && !p.processing && !p.recordError,
+    speakers: p.recorded && !p.processing && !p.unnamed,
+    minutes: p.hasMinutes && !p.stale && !p.writing
+  };
+}
+// The one thing to do next: a sentence, and the button that does it.
+function nextStep(){
+  var p=meetingProgress();
+  if(p.recording) return { sec:'recording', kind:'live', text:'Recording now. As each topic comes up, tap it on the note-taking screen.', btn:'Open the note-taking screen', act:'console' };
+  if(p.writing) return { sec:'minutes', kind:'wait', text:'The minutes are being written. This takes a minute or two, and you can close this page meanwhile.' };
+  if(p.processing) return { sec:'recording', kind:'wait', text:'The recording is being typed up. This usually takes a few minutes. You can close this page; it carries on without you.' };
+  if(p.recordError) return { sec:'recording', kind:'warn', text:'The recording couldn’t be typed up.', btn:'See what happened' };
+  if(!p.topics) return { sec:'agenda', step:1, text:'Add the agenda: upload the agenda file, or type the topics in.', btn:'Add the agenda' };
+  if(!p.present && !p.hasMinutes) return { sec:'people', step:2, text:'Mark who is here. Only people marked here can be named as speakers later.', btn:'Take attendance' };
+  if(!p.recorded && !p.hasMinutes && !p.skipRecording) return { sec:'recording', step:3, text:'When the meeting starts, record it. You only press Record once, for the whole meeting.', btn:'● Start recording', act:'record', alt:'No recording? Write the minutes from your notes' };
+  if(p.unnamed) return { sec:'speakers', step:4, text:p.unnamed+' voice'+(p.unnamed===1?'':'s')+' in the recording '+(p.unnamed===1?'needs':'need')+' a name, so the minutes say who said what.', btn:'Name the voices' };
+  if(!p.hasMinutes) return { sec:'minutes', step:5, text:'Everything is ready. Write the minutes.', btn:'Write the minutes', act:'write' };
+  if(p.stale) return { sec:'minutes', kind:'warn', text:'Things have changed since the minutes were written. Update them? Your own edits are kept.', btn:'Update the minutes', act:'write' };
+  return { sec:'minutes', kind:'done', text:'The minutes are ready. Read them over, then print or open them in Google Docs.', btn:'Print or save as PDF', act:'print' };
+}
+// Whether the AI is set up (an API key saved). Without it agendas can't be
+// read and minutes can't be written, so she's told before she starts, not
+// after a summary fails.
+function checkSetup(){
+  api('/api/settings').then(function(res){
+    if(!res || !res.ok) return;
+    state.aiReady=!!res.hasAnthropicKey;
+    var adm=document.getElementById('admin-setup'); if(adm && !state.aiReady) adm.open=true;
+    var el=document.getElementById('next-step'); if(el) el._key=null;
+    renderNextStep();
+  });
+}
+function renderNextStep(){
+  var el=document.getElementById('next-step'); if(!el || !state.meeting) return;
+  var n=nextStep();
+  var key=JSON.stringify(n)+(readOnly()?'ro':'')+(state.aiReady===false?'noai':'');
+  if(el._key===key) return;
+  el._key=key;
+  el.className='next-step ns-'+(n.kind||'todo');
+  el.innerHTML='<span class="ns-label">'+(n.step ? 'Next step · '+n.step+' of 5' : n.kind==='done' ? 'All done' : n.kind==='wait' ? 'Working on it' : n.kind==='live' ? 'Recording' : 'Needs attention')+'</span>'
+    +'<span class="ns-text">'+esc(n.text)+'</span>'
+    +'<span class="ns-actions">'
+    +(n.btn && !(readOnly() && (n.act==='record' || n.act==='write')) ? '<button class="btn btn-primary" id="ns-go">'+esc(n.btn)+'</button>' : '')
+    +(n.alt && !readOnly() ? '<button class="btn-link" id="ns-alt">'+esc(n.alt)+'</button>' : '')
+    +'</span>'
+    +(state.aiReady===false ? '<div class="alert alert-warn ns-setup">The AI part of this app isn’t set up yet, so agendas can’t be read and minutes can’t be written. '
+      +'Ask whoever set up this app to finish it under Settings › Technical setup. You can still take attendance and record.</div>' : '');
+  var go=document.getElementById('ns-go');
+  if(go) go.addEventListener('click', function(){
+    if(n.act==='console'){ openRecConsole(); return; }
+    showSection(n.sec);
+    try { window.scrollTo(0, 0); } catch(e){}
+    if(n.act==='record') toggleMeetingRecording();
+    else if(n.act==='write') generateReport();
+    else if(n.act==='print') window.print();
+  });
+  var alt=document.getElementById('ns-alt');
+  if(alt) alt.addEventListener('click', function(){ state.skipRecording=true; renderNextStep(); renderMeetingNav(); showSection('minutes'); });
+}
+
 function defaultSection(){
   if(state.meeting && state.meeting.report) return 'minutes';
-  return state.items && state.items.length ? 'agenda' : 'details';
+  var n=nextStep();
+  return n.sec || 'agenda';
 }
 // Short status beside each menu entry.
 function navHints(){
@@ -1254,10 +1397,13 @@ function renderMeetingNav(){
     return '<a href="#" class="nav-topic'+(state.section==='agenda' && state.topicFocus===it.id?' active':'')+'" data-topic="'+it.id+'">'
       +(i+1)+'. '+esc(it.title)+(hint?' <span class="nav-hint">'+esc(hint)+'</span>':'')+'</a>';
   }).join('');
+  var done=stepsDone(meetingProgress()), next=nextStep().sec;
   var navHtml=SECTIONS.map(function(s){
     var hint=hints[s[0]];
     var active=state.section===s[0] && !(s[0]==='agenda' && state.topicFocus);
-    return '<a href="#" data-sec="'+s[0]+'"'+(active?' class="active"':'')+'>'+s[1]
+    var cls=(active?'active ':'')+(done[s[0]]?'done ':'')+(next===s[0]?'next':'');
+    return '<a href="#" data-sec="'+s[0]+'"'+(cls.trim()?' class="'+cls.trim()+'"':'')+'>'
+      +(done[s[0]]?'<span class="nav-tick" aria-label="done">✓</span>':'')+s[1]
       +(hint?' <span class="nav-hint">'+esc(hint)+'</span>':'')+'</a>'
       +(s[0]==='agenda' && topics ? '<div class="nav-topics">'+topics+'</div>' : '');
   }).join('');
@@ -1265,7 +1411,7 @@ function renderMeetingNav(){
   // drop keyboard focus and close an open phone picker.
   if(nav._html!==navHtml){ nav.innerHTML=navHtml; nav._html=navHtml; }
   var selHtml=SECTIONS.map(function(s){
-    var opt='<option value="'+s[0]+'">'+s[1]+'</option>';
+    var opt='<option value="'+s[0]+'">'+s[1]+(done[s[0]]?' ✓':'')+'</option>';
     if(s[0]!=='agenda') return opt;
     return opt+(state.items||[]).map(function(it, i){
       return '<option value="topic:'+it.id+'">&nbsp;&nbsp;'+(i+1)+'. '+esc(it.title)+'</option>';
@@ -1274,6 +1420,7 @@ function renderMeetingNav(){
   if(sel._html!==selHtml){ sel.innerHTML=selHtml; sel._html=selHtml; }
   var want = state.section==='agenda' && state.topicFocus ? 'topic:'+state.topicFocus : (state.section||'');
   if(sel.value!==want) sel.value=want;
+  renderNextStep();
 }
 function showSection(sec, topicId){
   state.section=sec;
@@ -1310,8 +1457,16 @@ document.addEventListener('click', function(e){
   try { window.scrollTo(0, 0); } catch(err){}
 });
 
+// Links in hints that point to another step of the meeting.
+document.addEventListener('click', function(e){
+  var a=e.target && e.target.closest ? e.target.closest('[data-goto-sec]') : null;
+  if(!a) return;
+  e.preventDefault();
+  showSection(a.getAttribute('data-goto-sec'));
+  try { window.scrollTo(0, 0); } catch(err){}
+});
+
 // ── Details ─────────────────────────────────────────────────────────────────
-var STATUS_LABELS={ draft:'Draft', in_progress:'In progress', completed:'Completed' };
 function renderDetailsCard(){
   var el=document.getElementById('details-card'); if(!el || !state.meeting) return;
   var m=state.meeting;
@@ -1323,11 +1478,8 @@ function renderDetailsCard(){
                : '<input type="text" id="'+id+'" value="'+esc(value||'')+'" placeholder="'+esc(ph||'')+'">')+'</label>';
     };
     el.innerHTML='<form id="details-form" onsubmit="return false">'
-      +f('df-title','Title',m.title)+f('df-date','Date',m.meeting_date,'e.g. 2026-04-14 or Apr 14, 7pm')
-      +f('df-location','Location',m.location,'e.g. Fellowship Hall / Zoom')+f('df-description','About',m.description,'',true)
-      +'<label class="drow"><span class="dlbl">Status</span><select id="df-status">'
-      +Object.keys(STATUS_LABELS).map(function(k){ return '<option value="'+k+'"'+(m.status===k?' selected':'')+'>'+STATUS_LABELS[k]+'</option>'; }).join('')
-      +'</select></label>'
+      +f('df-title','Title',m.title)+f('df-date','Date and time',m.meeting_date,'e.g. April 14, 7pm')
+      +f('df-location','Where',m.location,'e.g. Fellowship Hall')+f('df-description','About',m.description,'',true)
       +'<div id="details-msg"></div>'
       +'<div class="btn-row"><button class="btn btn-primary" id="btn-details-save" data-default="Save">Save</button>'
       +'<button class="btn btn-secondary" id="btn-details-cancel" type="button">Cancel</button><span style="flex:1"></span>'
@@ -1338,14 +1490,15 @@ function renderDetailsCard(){
     var t=document.getElementById('df-title'); if(t) t.focus();
   } else {
     el.innerHTML='<div class="dcard-head"><span class="ct" style="margin:0">Details</span><span style="flex:1"></span>'
-      +'<button class="btn-sm" id="btn-details-edit">Edit</button></div>'
+      +'<button class="btn-sm" id="btn-details-edit">Edit or delete</button></div>'
+      +(state.detailsSaved ? '<div class="alert alert-ok">Saved.</div>' : '')
       +row('Title', esc(m.title))
       +row('Date', esc(m.meeting_date)||'<span class="muted">Not set</span>')
       +row('Location', esc(m.location)||'<span class="muted">Not set</span>')
       +row('About', esc(m.description)||'<span class="muted">Nothing yet</span>')
-      +row('Status', esc(STATUS_LABELS[m.status]||m.status||'Draft'))
+      +row('Where it stands', esc(meetingStage({ recording_status:m.recording_status, report:m.report, item_count:(state.items||[]).length })[1]))
       +(m.created_by_name||m.created_by_email ? row('Created', 'by '+esc(m.created_by_name||m.created_by_email)+(m.created_at?' · '+esc(fmtDate(m.created_at)):'')) : '');
-    document.getElementById('btn-details-edit').addEventListener('click', function(){ state.editingDetails=true; renderDetailsCard(); });
+    document.getElementById('btn-details-edit').addEventListener('click', function(){ state.editingDetails=true; state.detailsSaved=false; renderDetailsCard(); });
   }
   renderDetailsStats();
   applyReadOnly();
@@ -1361,7 +1514,8 @@ function saveDetails(){
     if(!state.meeting || state.meeting.id!==mid) return;
     if(!res.ok){ setBtn('btn-details-save', false); msg('details-msg','err',res.error||'Could not save.'); return; }
     m.title=v.title; m.meeting_date=v.meetingDate; m.location=v.location; m.description=v.description.trim(); m.status=v.status;
-    state.editingDetails=false;
+    state.editingDetails=false; state.detailsSaved=true;
+    setTimeout(function(){ if(state.detailsSaved){ state.detailsSaved=false; renderDetailsCard(); } }, 3000);
     document.getElementById('d-title-txt').textContent=m.title;
     document.getElementById('d-meta-txt').innerHTML=[m.meeting_date,m.location].filter(Boolean).map(esc).join(' &middot; ');
     renderDetailsCard();
@@ -1375,7 +1529,7 @@ function deleteMeetingDialog(){
     fields: [],
     danger: {
       label: 'Delete meeting',
-      hint: 'Deleting “'+m.title+'” also deletes its agenda items, transcripts, recordings, and report. This cannot be undone.',
+      hint: 'Deleting “'+m.title+'” also deletes its topics, notes, recordings and minutes. This cannot be undone.',
       onConfirm: function(done){
         api('/api/meetings/'+m.id, { method:'DELETE' }).then(function(res){
           if(!res || !res.ok){ done((res && res.error) || 'Could not delete.'); return; }
@@ -1421,7 +1575,7 @@ function renderAttendeeChips(){
       +'<span class="roll-name">'+esc(p.name)+'</span>'
       +(p.title?'<span class="roll-title">'+esc(p.title)+'</span>':'')
       +(on?'':'<span class="roll-absent">absent</span>')+'</button>';
-  }).join('') : '<div class="empty-hint">No people in the list yet — add some under the People tab.</div>';
+  }).join('') : '<div class="empty-hint">No one in the list yet. Add each regular member below.</div>';
   el.querySelectorAll('.roll-row[data-pid]').forEach(function(c){
     c.addEventListener('click', function(){ toggleAttendee(Number(c.getAttribute('data-pid'))); });
   });
@@ -1499,6 +1653,26 @@ function addGuest(){
     guestsChanged();
   });
 }
+// A regular member who isn't in the People list yet: add them to it and mark
+// them present, without leaving the meeting.
+function addRollPerson(){
+  if(readOnly()) return;
+  var name=v('ra-name'), title=v('ra-title');
+  if(!name){ msg('roll-add-msg','err','Type their name first.'); return; }
+  var mid=state.meeting.id;
+  setBtn('btn-roll-add', true, 'Adding…');
+  api('/api/people', { method:'POST', body:{ name:name, title:title } }).then(function(res){
+    setBtn('btn-roll-add', false);
+    if(!state.meeting || state.meeting.id!==mid) return;
+    if(!res.ok){ msg('roll-add-msg','err',res.error); return; }
+    msg('roll-add-msg','','');
+    document.getElementById('ra-name').value=''; document.getElementById('ra-title').value='';
+    var p=state.peopleById[res.id];
+    if(!p){ p={ id:res.id, name:name, title:title, active:true }; state.people.push(p); state.peopleById[p.id]=p; }
+    p.active=true;
+    if(state.attendeeIds.indexOf(p.id)<0) toggleAttendee(p.id); else attendanceChanged();
+  });
+}
 function removeGuest(gid){
   api('/api/guests/'+gid, { method:'DELETE' }).then(function(res){
     if(!res.ok){ msg('guest-msg','err',res.error); return; }
@@ -1516,7 +1690,7 @@ function speakerChoices(){
 }
 function speakerOptions(sel){
   var names=speakerChoices();
-  var o='<option value="">— unlabeled —</option>';
+  var o='<option value="">— choose a name —</option>';
   names.forEach(function(n){ o+='<option value="'+esc(n)+'"'+(sel===n?' selected':'')+'>'+esc(n)+'</option>'; });
   // Keep a currently-set name that is no longer offered as an option too.
   if(sel && names.indexOf(sel)<0) o+='<option value="'+esc(sel)+'" selected>'+esc(sel)+'</option>';
@@ -1567,20 +1741,20 @@ function uploadAgenda(){
 }
 function sendAgenda(fileEl){
   var fd=new FormData(); fd.append('file', fileEl.files[0]);
-  setBtn('btn-upload-agenda', true, 'Extracting...');
-  msg('agenda-msg','info','Extracting agenda items with AI…');
+  setBtn('btn-upload-agenda', true, 'Reading…');
+  msg('agenda-msg','info','Reading the agenda… This takes up to a minute.');
   apiForm('/api/meetings/'+state.meeting.id+'/agenda', fd).then(function(res){
     setBtn('btn-upload-agenda', false);
     if(!res.ok){ msg('agenda-msg','err',res.error); return; }
     state.items=res.items; fileEl.value='';
-    msg('agenda-msg','ok','Extracted '+res.items.length+' agenda item'+(res.items.length===1?'':'s')+'.');
+    msg('agenda-msg','ok','Found '+res.items.length+' topic'+(res.items.length===1?'':'s')+'. Check them below; you can edit, add or remove any.');
     renderItems();
   }).catch(function(e){ setBtn('btn-upload-agenda', false); msg('agenda-msg','err',e.message); });
 }
 function addItemManually(){
   openModal({
-    title: 'Add agenda item',
-    saveLabel: 'Add item',
+    title: 'Add a topic',
+    saveLabel: 'Add topic',
     fields: [
       { id:'title', label:'Title', type:'text', value:'', required:true },
       { id:'desc', label:'Details (optional)', type:'textarea', value:'' }
@@ -1600,7 +1774,7 @@ function addItemManually(){
 
 function editItem(it){
   openModal({
-    title: 'Edit agenda item',
+    title: 'Edit topic',
     fields: [
       { id:'title', label:'Title', type:'text', value:it.title, required:true },
       { id:'desc', label:'Details (optional)', type:'textarea', value:it.description||'' }
@@ -1700,33 +1874,37 @@ function itemHtml(it, idx){
     +'<div class="ibody collapsed" id="ibody-'+it.id+'">'
       +'<div class="sublbl">Presented by</div>'
       +'<div class="pres-groups" id="pres-'+it.id+'"></div>'
-      +'<div class="sublbl">Transcript (AI, with speaker labels)</div>'
-      +'<div class="rec-row" id="recrow-'+it.id+'">'
-        +'<button class="btn-sm" data-rec="'+it.id+'">● Record</button>'
-        +'<label class="btn-sm" style="cursor:pointer">Upload audio<input type="file" accept="audio/*,video/webm" data-audio="'+it.id+'" style="display:none"></label>'
-        +'<span class="rec-status" id="recstat-'+it.id+'"></span>'
-      +'</div>'
+      +'<label class="sublbl" for="nt-'+it.id+'">Your notes</label>'
+      +'<textarea id="nt-'+it.id+'" placeholder="Motions, votes, decisions, anything the minutes must include">'+esc(it.notes)+'</textarea>'
+      +'<div class="hint" style="margin-top:6px">A short summary of this topic is written for you a minute or two after you close it or stop typing, even if you leave the page.</div>'
       // Shown in place of the per-topic controls while the whole meeting is
       // being recorded — that recorder already captures this topic.
+      +'<div id="sum-'+it.id+'">'+summaryHtml(it)+'</div>'
       +'<div class="hint rec-locked" id="reclock-'+it.id+'" hidden>'
-        +'<span class="rec-dot"></span> The meeting recording is capturing this topic. '
-        +'Open a topic as it comes up and the audio is filed under it automatically.'
+        +'<span class="rec-dot"></span> The meeting is being recorded. Tap each topic as it comes up and the recording is filed under it.'
       +'</div>'
+      +'<label class="sublbl" for="tx-'+it.id+'">What was said</label>'
       +'<div class="speakers" id="spk-'+it.id+'"></div>'
-      +'<div class="recordings" id="rec-'+it.id+'"></div>'
       +(recordedTranscript(it)
         ? '<textarea id="tx-'+it.id+'" readonly style="margin-top:6px">'+esc(it.transcript)+'</textarea>'
-          +'<div class="hint">From the recording. Use “Fix a name or word” to correct it.</div>'
-        : '<textarea id="tx-'+it.id+'" placeholder="Record or upload audio to transcribe. Speakers are labeled once you record; you can also edit this text." style="margin-top:6px">'+esc(it.transcript)+'</textarea>')
-      +'<div class="sublbl">Notes (typed)</div>'
-      +'<textarea id="nt-'+it.id+'" placeholder="Optional manual notes">'+esc(it.notes)+'</textarea>'
-      +'<div class="hint" style="margin-top:8px">The summary is written on the server when you close this item, or a couple of minutes after your last edit &mdash; even if you leave the page.</div>'
+          +'<div class="hint">Typed up from the recording. To correct a misheard name, use “Correct a name or word” under 4. Voices.</div>'
+        : '<textarea id="tx-'+it.id+'" placeholder="Filled in from the recording. You can also type or paste what was said here." style="margin-top:6px">'+esc(it.transcript)+'</textarea>')
+      // The everyday way to record is the whole meeting (3. Record); recording
+      // one topic on its own is tucked away here.
+      +'<details class="topic-more"><summary>More options for this topic</summary>'
+        +'<div class="hint" style="margin:6px 0">Usually you record the whole meeting under 3. Record. Use these only to record or add audio for this one topic.</div>'
+        +'<div class="rec-row" id="recrow-'+it.id+'">'
+          +'<button class="btn-sm" data-rec="'+it.id+'">● Record just this topic</button>'
+          +'<label class="btn-sm file-btn">Add an audio file<input type="file" class="visually-hidden" accept="audio/*,video/webm" data-audio="'+it.id+'"></label>'
+          +'<span class="rec-status" id="recstat-'+it.id+'"></span>'
+        +'</div>'
+        +'<div class="recordings" id="rec-'+it.id+'"></div>'
+      +'</details>'
       +'<div class="btn-row">'
-        +'<button class="btn-sm" data-edit-item="'+it.id+'">Edit item</button>'
-        +'<button class="btn btn-danger btn-sm" data-del-item="'+it.id+'">Remove item</button>'
+        +'<button class="btn-sm" data-edit-item="'+it.id+'">Edit topic</button>'
+        +'<button class="btn btn-danger btn-sm" data-del-item="'+it.id+'">Remove topic</button>'
         +'<span id="imsg-'+it.id+'"></span>'
       +'</div>'
-      +'<div id="sum-'+it.id+'">'+summaryHtml(it)+'</div>'
     +'</div>'
   +'</div>';
 }
@@ -1768,14 +1946,14 @@ function isTranscribing(it){
 
 // The header status badge for an item's current transcription + summary state.
 function itemBadgeInner(it){
-  if(it.transcribe_status==='queued') return '<span class="badge b-pending">Queued to transcribe</span>';
-  if(it.transcribe_status==='processing') return '<span class="badge b-pending"><span class="spin" style="border-top-color:var(--pending-fg)"></span> Transcribing&hellip;</span>';
-  if(it.transcribe_status==='error') return '<span class="badge b-rejected">Transcription failed</span>';
-  if(it.summarize_status==='processing') return '<span class="badge b-pending"><span class="spin" style="border-top-color:var(--pending-fg)"></span> Summarizing&hellip;</span>';
-  if(it.summarize_status==='queued') return '<span class="badge b-pending">Summary queued</span>';
-  if(it.summarize_status==='error') return '<span class="badge b-rejected" title="'+esc(it.summarize_error)+'">Summary failed</span>';
+  if(it.transcribe_status==='queued') return '<span class="badge b-pending">Waiting to be typed up</span>';
+  if(it.transcribe_status==='processing') return '<span class="badge b-pending"><span class="spin" style="border-top-color:var(--pending-fg)"></span> Typing up&hellip;</span>';
+  if(it.transcribe_status==='error') return '<span class="badge b-rejected">Couldn’t type up the recording</span>';
+  if(it.summarize_status==='processing') return '<span class="badge b-pending"><span class="spin" style="border-top-color:var(--pending-fg)"></span> Writing summary&hellip;</span>';
+  if(it.summarize_status==='queued') return '<span class="badge b-pending">Summary coming</span>';
+  if(it.summarize_status==='error') return '<span class="badge b-rejected" title="'+esc(it.summarize_error)+'">Summary not written</span>';
   if(it.summary) return '<span class="badge b-approved">Summary ready</span>';
-  if(itemHasContent(it)) return '<span class="badge b-changes_requested">Needs summary</span>';
+  if(itemHasContent(it)) return '<span class="badge b-changes_requested">Summary coming</span>';
   return '';
 }
 function refreshBadge(it){
@@ -1928,7 +2106,7 @@ function renderTranscriptJS(segments, map){
 function renderSpeakerMap(it){
   var el=document.getElementById('spk-'+it.id); if(!el) return;
   if(it.transcript_source==='meeting'){
-    el.innerHTML='<div class="hint">Speakers for this topic are labeled meeting-wide &mdash; use &ldquo;Who spoke in this meeting?&rdquo; above.</div>';
+    el.innerHTML='<div class="hint">Voices are named once for the whole meeting, under <a href="#" data-goto-sec="speakers">4. Voices</a>.</div>';
     return;
   }
   var stats=it.speaker_stats||[];
@@ -1937,15 +2115,13 @@ function renderSpeakerMap(it){
   el.innerHTML='<div class="sublbl">Who is speaking?</div><div class="spk-rows">'
     + stats.map(function(st){
         var cur=(it.speaker_map||{})[st.speaker]||'';
-        var pct=Math.round(st.share*100);
         return '<div class="spk-row"><span class="spk-tag">'+esc(st.label)+'</span>'
-          +'<span class="spk-share">'+pct+'%</span>'
-          +'<select data-spk="'+esc(st.speaker)+'">'+opts(cur)+'</select>'
+          +'<select data-spk="'+esc(st.speaker)+'" aria-label="Who is '+esc(st.label)+'?">'+opts(cur)+'</select>'
           +(st.sample?'<div class="spk-sample">&ldquo;'+esc(st.sample)+'&rdquo;</div>':'')
           +speakerSamplesHtml(st, null)
           +'</div>';
       }).join('')
-    + '</div><div class="hint">Voices are listed by how much they spoke. Several rows can be the same person — set them to the same name and their lines merge. Remapping relabels the transcript.</div>';
+    + '</div><div class="hint">Voices are listed by how much they spoke. If two are the same person, give both the same name.</div>';
   el.querySelectorAll('select[data-spk]').forEach(function(sel){
     sel.addEventListener('change', function(){
       var spk=sel.getAttribute('data-spk');
@@ -2209,9 +2385,9 @@ function voiceMatchHtml(speaker, cur, busy){
   if(!m) return '';
   var pct=Math.round(m.score*100);
   if(cur && cur.trim().toLowerCase()===m.name.trim().toLowerCase()){
-    return '<div class="voice-match agree" title="Matched to voices learned from earlier meetings ('+pct+'% similar)">&#10003; Recognised by voice</div>';
+    return '<div class="voice-match agree" title="Matched to this person’s voice from earlier meetings">&#10003; Recognised by voice</div>';
   }
-  return '<div class="voice-match">Sounds like <strong>'+esc(m.name)+'</strong> <span class="voice-time">('+pct+'% similar)</span>'
+  return '<div class="voice-match">Sounds like <strong>'+esc(m.name)+'</strong> <span class="voice-time">(from earlier meetings)</span>'
     +(readOnly()||busy ? '' : ' <button class="btn-sm" data-voice-use="'+esc(speaker)+'" data-voice-name="'+esc(m.name)+'">Use '+esc(m.name)+'</button>')
     +'</div>';
 }
@@ -2219,7 +2395,14 @@ function voiceMatchHtml(speaker, cur, busy){
 function renderMeetingSpeakerPanel(){
   var el=document.getElementById('meeting-speakers'); if(!el) return;
   var stats=state.meetingSpeakerStats||[];
-  if(!stats.length){ el.innerHTML=''; return; }
+  if(!stats.length){
+    el.innerHTML='<div class="card"><div class="ct">Name the voices</div><div class="empty-hint">'
+      +(meetingProcessing() ? 'The recording is being typed up. The voices in it will appear here when it’s done.'
+        : 'After you record the meeting (3. Record) and it’s typed up, each voice in it appears here for you to name.')
+      +'</div></div>';
+    el._order=null;
+    return;
+  }
   var map=meetingSpeakerMap();
   // Samples are on the processed recording's timeline, so they can be played.
   var recs=state.meetingRecordings||[];
@@ -2239,26 +2422,26 @@ function renderMeetingSpeakerPanel(){
   var saving=mspkPending>0 && state.meeting && mspkMeetingId===state.meeting.id;
   var keepMsg=document.getElementById('mspk-msg');
   keepMsg=keepMsg ? keepMsg.innerHTML : '';
-  el.innerHTML='<div class="card"><div class="ct">Who spoke in this meeting?</div>'
+  el.innerHTML='<div class="card"><div class="ct">Name the voices</div>'
+    +'<div class="hint" style="margin-bottom:10px">For each voice, press ▶ to hear it, then choose who it is. Each name saves as soon as you choose it, and every topic updates.'
+    +(saving ? ' <span class="mspk-saving"><span class="spin" style="border-top-color:var(--navy)"></span> Saving&hellip;</span>' : '')
+    +'</div>'
     +'<div id="mspk-msg">'+keepMsg+'</div>'
     +'<div class="voice-cards">'
     + ordered.map(function(st){
         var cur=map[st.speaker]||'';
-        var pct=Math.round(st.share*100);
         return '<div class="voice-card spk-row'+(cur?'':' unnamed')+'">'
           +'<div class="voice-head"><span class="spk-tag">'+esc(st.label)+'</span>'
-          +'<span class="voice-time">'+mins(st.seconds||0)+' · '+pct+'%</span>'
-          +(cur?'':'<span class="chip warn-chip">unnamed</span>')+'<span style="flex:1"></span>'
-          +'<select data-mspk="'+esc(st.speaker)+'"'+(busy?' disabled':'')+'>'+opts(cur)+'</select></div>'
+          +'<span class="voice-time">spoke for '+mins(st.seconds||0)+'</span>'
+          +(cur?'':'<span class="chip warn-chip">needs a name</span>')+'<span style="flex:1"></span>'
+          +'<select data-mspk="'+esc(st.speaker)+'" aria-label="Who is '+esc(st.label)+'?"'+(busy?' disabled':'')+'>'+opts(cur)+'</select></div>'
           +voiceMatchHtml(st.speaker, cur, busy)
           +(st.sample?'<div class="spk-sample">&ldquo;'+esc(st.sample)+'&rdquo;</div>':'')
           +speakerSamplesHtml(st, recId)
           +'</div>';
       }).join('')
     +'</div>'
-    +'<div class="hint">One set of voices for the whole meeting &mdash; choose a name once and every topic updates. Each name saves as soon as you choose it.'
-    +(saving ? ' <span class="mspk-saving"><span class="spin" style="border-top-color:var(--navy)"></span> Saving&hellip;</span>' : '')
-    +'</div></div>';
+    +'<div class="hint">Someone not in the list? Mark them present under 2. Attendance (or add them as a guest), and they appear here.</div></div>';
   el.querySelectorAll('select[data-mspk]').forEach(function(sel){
     sel.addEventListener('change', function(){
       if(meetingProcessing()) return;
@@ -2724,13 +2907,13 @@ function renderRecBanner(){
     +(meetingRec.failedChunk
         ? '<span class="rb-topic rb-warn" role="alert">'+esc(REC_OFFLINE)+'</span>'
         : meetingRec.topic
-        ? '<span class="rb-topic">Filing under: '+esc(meetingRec.topic)+'</span>'
-        : '<span class="rb-topic rb-warn">No topic opened yet &mdash; audio files under the first item</span>')
+        ? '<span class="rb-topic">Now discussing: '+esc(meetingRec.topic)+'</span>'
+        : '<span class="rb-topic rb-warn">Tap the topic being discussed</span>')
     +'<span class="rb-actions">'
-      +(onThisMeeting ? '<button class="btn-sm" id="rb-console">Recording console</button> ' : '')
+      +(onThisMeeting ? '<button class="btn-sm" id="rb-console">Note-taking screen</button> ' : '')
       +(onThisMeeting && nextTopic() ? '<button class="btn-sm" id="rb-next">Next topic &rsaquo;</button> ' : '')
       +(onThisMeeting ? '' : '<button class="btn-sm" id="rb-open">Open meeting</button> ')
-      +'<button class="btn-sm" id="rb-stop">Stop &amp; process</button>'
+      +'<button class="btn-sm rb-stop" id="rb-stop">■ Stop recording</button>'
     +'</span>';
   el.hidden=false;
   document.body.classList.add('has-rec-banner');
@@ -2749,7 +2932,7 @@ function renderRecTopics(){
   var el=document.getElementById('rec-topics'); if(!el) return;
   var here=meetingRec && state.meeting && meetingRec.meetingId===state.meeting.id;
   if(!here || !(state.items||[]).length){ el.innerHTML=''; return; }
-  el.innerHTML='<div class="hint" style="margin:10px 0 6px">Tap the topic being discussed:</div><div class="rec-topic-grid">'
+  el.innerHTML='<div class="hint" style="margin:10px 0 6px">Tap the topic being discussed now:</div><div class="rec-topic-grid">'
     +state.items.map(function(it, i){
       return '<button type="button" class="rec-topic'+(meetingRec.topicId===it.id?' on':'')+'" data-rec-topic="'+it.id+'">'
         +'<span class="rec-topic-n">'+(i+1)+'</span> '+esc(it.title)+'</button>';
@@ -2861,8 +3044,8 @@ function rcBuild(el, items, topicId){
   var h='<div class="rc-bar"><span class="rec-dot"></span><span class="rc-rec">Recording</span>'
     +'<span class="rc-clock" id="rc-clock"></span>'
     +'<span class="rc-mtg">'+esc(meetingRec.title||'')+'</span>'
-    +'<span class="rc-actions"><button type="button" class="btn-sm" id="rc-full">Full view</button>'
-    +'<button type="button" class="btn rc-stop" id="rc-stop">Stop &amp; process</button></span></div>'
+    +'<span class="rc-actions"><button type="button" class="btn-sm" id="rc-full" title="Leaves this screen; the recording carries on">Show the full page</button>'
+    +'<button type="button" class="btn rc-stop" id="rc-stop">■ Stop recording</button></span></div>'
     +'<div class="rc-net alert alert-err" id="rc-net" role="alert"'+(meetingRec.failedChunk?'':' hidden')+'>'+esc(REC_OFFLINE)+'</div>';
   h+='<div class="rc-body"><nav class="rc-topics" aria-label="Topics"><div class="kicker rc-kicker">Topics</div>'
     +(items.length
@@ -2888,7 +3071,7 @@ function rcBuild(el, items, topicId){
              : '<span class="hint">Last topic</span>')
       +'</div>';
   } else {
-    h+='<div class="rc-empty">Recording. Notes are kept per topic, so add a topic in Full view to take them.</div>';
+    h+='<div class="rc-empty">Recording. Notes are kept per topic, so add a topic on the full page (Show the full page) to take them.</div>';
   }
   h+='</main></div>';
   el.innerHTML=h;
@@ -2923,20 +3106,20 @@ function rcBuild(el, items, topicId){
 function renderRecHistory(){
   var el=document.getElementById('rec-history'); if(!el) return;
   var recs=state.meetingRecordings||[];
-  if(!recs.length){ el.innerHTML='<div class="empty-hint">Nothing recorded yet.</div>'; return; }
+  if(!recs.length){ el.innerHTML='<div class="empty-hint">Nothing recorded yet. Press Start recording above when the meeting begins.</div>'; return; }
   var rs=(state.meeting||{}).recording_status;
   el.innerHTML=recs.map(function(r, i){
     var len = r.started_at && r.finished_at ? fmtSpanTime((new Date(r.finished_at)-new Date(r.started_at))/1000) : 'in progress';
     var last=i===recs.length-1;
     return '<div class="rec-hist-row"><span>'+esc(fmtDate(r.started_at))+'</span><span class="muted">'+esc(len)+'</span><span style="flex:1"></span>'
       +'<a href="/api/meeting-recordings/'+r.id+'/download">Download</a>'
-      +(last && rs==='done' ? ' <button class="btn-sm" id="btn-mrec-reprocess">Reprocess…</button>' : '')+'</div>';
+      +(last && rs==='done' ? ' <button class="btn-sm" id="btn-mrec-reprocess">Type it up again…</button>' : '')+'</div>';
   }).join('');
   var rb=document.getElementById('btn-mrec-reprocess');
   if(rb) rb.addEventListener('click', function(){
     // Reprocessing rewrites every topic's transcript, speakers and summary from
     // the stored audio; the audio itself is untouched.
-    if(!confirm('Reprocess the meeting recording? This replaces every topic\'s transcript, speaker names and summary. The recording itself is kept.')) return;
+    if(!confirm('Type up the meeting recording again? This replaces every topic\'s transcript, voice names and summary. The recording itself is kept.')) return;
     reprocessMeetingRecording();
   });
 }
@@ -2949,6 +3132,7 @@ function renderMeetingRecUi(){
   syncItemRecControls();
   renderRecTopics();
   renderRecHistory();
+  renderNextStep();
   var b=document.getElementById('btn-meeting-rec');
   var st=document.getElementById('mrec-status');
   var ex=document.getElementById('mrec-extra');
@@ -2956,25 +3140,28 @@ function renderMeetingRecUi(){
   if(meetingRec){
     if(!state.meeting || meetingRec.meetingId!==state.meeting.id){
       b.disabled=true;
+      b.classList.remove('rec-live');
       b.textContent='Recording another meeting…';
       if(st) st.textContent='';
       if(ex) ex.innerHTML='';
       return;
     }
     b.disabled=false;
-    b.innerHTML='<span class="rec-dot"></span> Stop &amp; process ('+fmtClock(meetingElapsedSeconds())+')';
+    b.innerHTML='■ Stop recording ('+fmtClock(meetingElapsedSeconds())+')';
+    b.classList.add('rec-live');
     if(st) st.innerHTML='<span class="rec-dot"></span> Recording the whole meeting&hellip;';
     if(ex) ex.innerHTML='';
     return;
   }
   b.disabled = meetingProcessing();
-  b.textContent=b.getAttribute('data-default')||'● Record meeting';
+  b.classList.remove('rec-live');
+  b.textContent=b.getAttribute('data-default')||'● Start recording';
   if(st) st.textContent='';
   if(ex){
     var m=state.meeting||{};
     if(m.recording_status==='recording' && state.meetingRecordings && state.meetingRecordings.length){
-      ex.innerHTML='<div class="hint">A meeting recording was interrupted before it was processed.</div>'
-        +'<button class="btn-sm" id="btn-mrec-resume">Process interrupted recording</button>';
+      ex.innerHTML='<div class="hint">A recording was cut off (the page was closed or lost its connection) before it was typed up.</div>'
+        +'<button class="btn-sm" id="btn-mrec-resume">Type up what was recorded</button>';
       document.getElementById('btn-mrec-resume').addEventListener('click', function(){
         var last=state.meetingRecordings[state.meetingRecordings.length-1];
         api('/api/meeting-recordings/'+last.id+'/finish', { method:'POST' }).then(function(res){
@@ -2986,12 +3173,12 @@ function renderMeetingRecUi(){
       });
     } else {
       var rs=m.recording_status;
-      if(rs==='queued'){ ex.innerHTML='<div class="hint">Queued for processing&hellip;</div>'; }
-      else if(rs==='processing'){ ex.innerHTML='<div class="hint"><span class="spin" style="border-top-color:var(--navy)"></span> Processing the meeting recording&hellip;</div>'; }
+      if(rs==='queued'){ ex.innerHTML='<div class="hint">Waiting to be typed up&hellip; You can close this page; it carries on without you.</div>'; }
+      else if(rs==='processing'){ ex.innerHTML='<div class="hint"><span class="spin" style="border-top-color:var(--navy)"></span> Typing up the recording&hellip; This usually takes a few minutes. You can close this page; it carries on without you.</div>'; }
       else if(rs==='error'){
         ex.innerHTML='<div class="alert alert-err">'+esc(m.recording_error||'Processing failed.')+'</div>'
           +(state.meetingRecordings && state.meetingRecordings.length
-            ? '<button class="btn-sm" id="btn-mrec-retry">Retry processing</button>' : '');
+            ? '<button class="btn-sm" id="btn-mrec-retry">Try again</button>' : '');
         var rb=document.getElementById('btn-mrec-retry');
         if(rb) rb.addEventListener('click', reprocessMeetingRecording);
       }
@@ -3248,7 +3435,7 @@ function pollOnce(){
         if(det.report) state.report = det.report;
         if(reportLanded && state.report.status==='idle' && det.meeting.report){
           showReport(det.meeting.report);
-          msg('report-msg','ok','Report generated.');
+          msg('report-msg','ok','The minutes are written.');
         }
         renderReportState();
         settled.forEach(function(it){
@@ -3285,7 +3472,7 @@ function postReport(){
     if(!state.meeting || state.meeting.id!==mid) return;
     if(!res.ok){ setBtn('btn-report', false); msg('report-msg','err',res.error); return; }
     state.report=res.report;
-    if(typeof res.markdown==='string'){ showReport(res.markdown); msg('report-msg','ok','Report generated.'); }
+    if(typeof res.markdown==='string'){ showReport(res.markdown); msg('report-msg','ok','The minutes are written.'); }
     renderReportState();
     if(reportPending()) startPolling();
   });
@@ -3304,7 +3491,7 @@ function cancelReport(){
 
 // ── Fix a name or word ──────────────────────────────────────────────────────
 var FIX_AREAS=[['transcripts','in transcripts'],['summaries','in summaries'],['actionItems','in action items'],
-  ['report','in the report'],['speakers','in speaker names'],['guests','in guests']];
+  ['report','in the minutes'],['speakers','in voice names'],['guests','in guests']];
 function fixCountsText(res){
   var parts=FIX_AREAS.filter(function(a){ return res.counts && res.counts[a[0]]; })
     .map(function(a){ return res.counts[a[0]]+' '+a[1]; });
@@ -3326,12 +3513,12 @@ function fixKey(){ return [v('fix-from'), v('fix-to'), (document.getElementById(
 function syncFixApply(){
   var b=document.getElementById('btn-fix-apply'); if(!b) return;
   b.disabled = !state.fixChecked || state.fixChecked!==fixKey() || readOnly();
-  b.title = b.disabled ? 'Check first' : '';
+  b.title = b.disabled ? 'Press “Show where it appears” first' : '';
 }
 function runFix(dryRun){
-  if(!dryRun && state.fixChecked!==fixKey()){ msg('fix-msg','err','Check first, to see what it would change.'); return; }
+  if(!dryRun && state.fixChecked!==fixKey()){ msg('fix-msg','err','Press “Show where it appears” first, to see what would change.'); return; }
   var from=v('fix-from'), to=v('fix-to'), scope=document.getElementById('fix-scope').value;
-  if(!from || !to){ msg('fix-msg','err','Say what to replace and what with.'); return; }
+  if(!from || !to){ msg('fix-msg','err','Type the wrong spelling and the right one.'); return; }
   var body={ from: from, to: to }; if(scope) body.itemId=Number(scope); if(dryRun) body.dryRun=true;
   var mid=state.meeting.id;
   msg('fix-msg','','');
@@ -3346,7 +3533,7 @@ function runFix(dryRun){
       syncFixApply();
       out.innerHTML = res.total
         ? '<div class="alert alert-info">Will change '+esc(fixCountsText(res))+'.</div>'+libraryFlagHtml(res)
-        : '<div class="alert alert-info">“'+esc(from)+'” isn’t in this meeting. Capital letters count: “John” and “john” are different.</div>';
+        : '<div class="alert alert-info">“'+esc(from)+'” wasn’t found in this meeting. Check the spelling, including capital letters (“John” and “john” count as different).</div>';
       return;
     }
     state.lastFix=res; state.fixChecked=null;
@@ -3404,34 +3591,37 @@ function renderReportState(){
   var ra=document.getElementById('report-actions'); if(ra) ra.style.display = has ? '' : 'none';
   var pg=document.getElementById('report-pages');
   if(pg) pg.textContent = has && r.pages ? '≈ '+r.pages+' page'+(r.pages===1?'':'s') : '';
-  btn.setAttribute('data-default', has ? 'Regenerate report' : 'Generate report');
+  btn.setAttribute('data-default', has ? 'Rewrite the minutes' : 'Write the minutes');
+  // Once there are minutes, printing them is the goal; rewriting is secondary.
+  btn.className = has ? 'btn btn-secondary' : 'btn btn-gold';
+  btn.title = has ? 'Writes them again from the latest notes and recording. Your own edits are kept.' : '';
   var cancel=document.getElementById('btn-report-cancel'); if(cancel) cancel.hidden = r.status!=='pending';
   if(r.status==='pending'){
-    setBtn('btn-report', true, 'Generating…');
+    setBtn('btn-report', true, 'Writing…');
     var waiting=state.items.filter(function(it){ return isTranscribing(it) || it.summarize_status==='queued' || it.summarize_status==='processing'; }).length;
-    msg('report-msg','info', meetingProcessing() ? 'Waiting for the meeting recording to finish processing…'
-      : waiting ? 'Waiting for '+waiting+' item'+(waiting===1?'':'s')+' to finish transcribing or summarizing…'
-      : 'Writing the report…');
+    msg('report-msg','info', meetingProcessing() ? 'Waiting for the recording to be typed up… You can close this page.'
+      : waiting ? 'Waiting for '+waiting+' topic'+(waiting===1?'':'s')+' to finish being typed up or summarized… You can close this page.'
+      : 'Writing the minutes… You can close this page.');
   } else {
     setBtn('btn-report', false);
     var cur=document.getElementById('report-msg');
-    if(r.status==='error') msg('report-msg','err',r.error||'The report could not be generated.');
+    if(r.status==='error') msg('report-msg','err',r.error||'The minutes could not be written.');
     else if(cur && /alert-(info|err)/.test(cur.innerHTML)) msg('report-msg','','');
   }
   var st=document.getElementById('report-stale');
   if(st){
     var changes=(has && r.status!=='pending') ? (r.changes||[]) : [];
     st.innerHTML = changes.length
-      ? '<div class="alert alert-warn"><strong>This report is out of date.</strong> Since it was generated'
+      ? '<div class="alert alert-warn"><strong>Things have changed since these minutes were written.</strong> Since then'
         +(r.generatedAt?' ('+esc(fmtDate(r.generatedAt))+')':'')+':<ul>'
         +changes.map(function(c){ return '<li>'+esc(c)+'</li>'; }).join('')
-        +'</ul>Regenerate it to bring it up to date.</div>'
-      : (has && r.status!=='pending' ? '<div class="hint report-current">Up to date with the agenda item summaries'
-        +(r.generatedAt?' &middot; generated '+esc(fmtDate(r.generatedAt)):'')+'.</div>' : '');
+        +'</ul>Press <b>Rewrite the minutes</b> to bring them up to date. Your own edits are kept.</div>'
+      : (has && r.status!=='pending' ? '<div class="hint report-current">The minutes are up to date'
+        +(r.generatedAt?' &middot; written '+esc(fmtDate(r.generatedAt)):'')+'.</div>' : '');
   }
   var eh=document.getElementById('report-edit-hint');
   if(eh) eh.textContent = readOnly() ? 'Someone else is editing these minutes.'
-    : r.status==='pending' ? 'The report is being written; editing opens again when it’s done.'
+    : r.status==='pending' ? 'The minutes are being written; you can edit them again when it’s done.'
     : 'Click any line to change it. Changes save as you go.';
   var ed=document.getElementById('report-editor'); if(ed) ed.classList.toggle('editable', reportEditable());
   var ub=document.getElementById('btn-report-undo');
@@ -3442,4 +3632,5 @@ function renderReportState(){
 
 // ── Boot ────────────────────────────────────────────────────────────────────
 loadMe();
+checkSetup();
 loadMeetings();

@@ -32,16 +32,21 @@
 
   <!-- Meetings -->
   <div class="panel active" id="p-meetings">
-    <div class="card">
+    <div class="list-bar">
+      <button class="btn btn-primary" id="btn-show-new">+ New meeting</button>
+      <input type="search" id="m-search" placeholder="Find a meeting by name, date or place" aria-label="Find a meeting">
+    </div>
+    <div class="card" id="new-meeting-card" hidden>
       <div class="ct">New meeting</div>
       <div id="new-msg"></div>
-      <div class="field"><label>Title</label><input type="text" id="m-title" placeholder="e.g. April Board Meeting"></div>
+      <div class="field"><label for="m-title">Title</label><input type="text" id="m-title" placeholder="e.g. April Board Meeting"></div>
       <div class="grid2">
-        <div class="field"><label>Date</label><input type="text" id="m-date" placeholder="e.g. 2026-04-14 or Apr 14, 7pm"></div>
-        <div class="field"><label>Location</label><input type="text" id="m-loc" placeholder="e.g. Fellowship Hall / Zoom"></div>
+        <div class="field"><label for="m-date">Date and time</label><input type="text" id="m-date" placeholder="e.g. April 14, 7pm"></div>
+        <div class="field"><label for="m-loc">Where</label><input type="text" id="m-loc" placeholder="e.g. Fellowship Hall"></div>
       </div>
-      <div class="field"><label>Description (optional)</label><textarea id="m-desc" placeholder="Purpose or context"></textarea></div>
-      <div class="btn-row"><button class="btn btn-primary" id="btn-new-meeting" data-default="Create meeting">Create meeting</button></div>
+      <div class="field"><label for="m-desc">Description (optional)</label><textarea id="m-desc" placeholder="What the meeting is for"></textarea></div>
+      <div class="btn-row"><button class="btn btn-primary" id="btn-new-meeting" data-default="Create meeting">Create meeting</button>
+        <button class="btn btn-secondary" id="btn-cancel-new">Cancel</button></div>
     </div>
     <div id="meetings-list"><div class="empty">Loading&hellip;</div></div>
   </div>
@@ -49,17 +54,18 @@
   <!-- People library -->
   <div class="panel" id="p-people">
     <div class="card">
-      <div class="ct">Add to the people library</div>
+      <div class="ct">Add a regular member</div>
+      <div class="hint" style="margin-bottom:10px">Everyone here appears in the attendance list of every meeting.</div>
       <div id="person-msg"></div>
       <div class="grid2">
-        <div class="field"><label>Name</label><input type="text" id="pr-name" placeholder="Full name"></div>
-        <div class="field"><label>Role / title (optional)</label><input type="text" id="pr-title" placeholder="e.g. Treasurer"></div>
+        <div class="field"><label for="pr-name">Name</label><input type="text" id="pr-name" placeholder="Full name"></div>
+        <div class="field"><label for="pr-title">Role (optional)</label><input type="text" id="pr-title" placeholder="e.g. Treasurer"></div>
       </div>
-      <div class="field"><label>Email (optional)</label><input type="text" id="pr-email" placeholder="name@grmc.org"></div>
+      <div class="field"><label for="pr-email">Email (optional)</label><input type="text" id="pr-email" placeholder="name@grmc.org"></div>
       <div class="btn-row"><button class="btn btn-gold" id="btn-add-person" data-default="Add person">Add person</button></div>
     </div>
     <div class="card">
-      <div class="ct">Library</div>
+      <div class="ct">Everyone</div>
       <div id="people-list"><div class="empty">Loading&hellip;</div></div>
     </div>
   </div>
@@ -67,34 +73,36 @@
   <!-- Settings -->
   <div class="panel" id="p-settings">
     <div class="card">
+      <div class="ct">How the minutes are written</div>
+      <div class="hint" style="margin-bottom:10px">Guides how every meeting’s minutes are written. Both are optional; changes apply the next time minutes are written.</div>
+      <div id="style-msg"></div>
+      <div class="field style-field">
+        <label for="s-report-instructions">Standing instructions</label>
+        <textarea id="s-report-instructions" placeholder="e.g. Treasurer’s report: give each schedule its own section, with the opening balance, receipts, disbursements and closing balance for each."></textarea>
+        <div class="hint">House rules: how particular reports should be laid out, what to always include, names or terms to use.</div>
+      </div>
+      <div class="field style-field">
+        <label for="s-report-example">Example of good minutes</label>
+        <textarea id="s-report-example" placeholder="Paste past minutes you were happy with."></textarea>
+        <div class="hint">New minutes follow its layout and level of detail, never its facts. The title, attendance and action items in it are ignored.</div>
+      </div>
+      <div class="btn-row"><button class="btn btn-primary" id="btn-save-style" data-default="Save">Save</button></div>
+    </div>
+    <details class="card admin-setup" id="admin-setup">
+      <summary class="ct">Technical setup <span class="hint">(for whoever set up this app)</span></summary>
+    <div class="admin-block">
       <div class="ct">AI settings</div>
       <div id="settings-msg"></div>
       <div class="field">
-        <label>Anthropic API key</label>
+        <label for="s-anthropic">Anthropic API key</label>
         <input type="password" id="s-anthropic" placeholder="sk-ant-...">
         <div class="hint" id="s-anthropic-hint">Used to extract agendas, summarize items, and write the report.</div>
       </div>
       <div class="btn-row"><button class="btn btn-primary" id="btn-save-settings" data-default="Save settings">Save settings</button></div>
     </div>
-    <div class="card">
-      <div class="ct">Report style</div>
-      <div class="hint" style="margin-bottom:10px">Guides how Claude writes every meeting report. Both are optional; changes apply the next time a report is generated.</div>
-      <div id="style-msg"></div>
-      <div class="field style-field">
-        <label for="s-report-instructions">Standing instructions</label>
-        <textarea id="s-report-instructions" placeholder="e.g. Treasurer’s report: give each schedule its own section, with the opening balance, receipts, disbursements and closing balance for each."></textarea>
-        <div class="hint">House rules for the minutes: how particular reports should be laid out, what to always include, names or terms to use.</div>
-      </div>
-      <div class="field style-field">
-        <label for="s-report-example">Example report</label>
-        <textarea id="s-report-example" placeholder="Paste a past report you were happy with."></textarea>
-        <div class="hint">Claude follows its structure and level of detail, never its facts. Paste it as it appears in the app; the title, attendance and action items in it are ignored.</div>
-      </div>
-      <div class="btn-row"><button class="btn btn-primary" id="btn-save-style" data-default="Save report style">Save report style</button></div>
-    </div>
-    <div class="card">
+    <div class="admin-block">
       <div class="ct">Voice recognition</div>
-      <div class="hint" style="margin-bottom:10px">The app learns each person&rsquo;s voice from the names you choose under &ldquo;Who spoke in this meeting?&rdquo; and from meetings whose minutes have been generated. It then recognises them in later recordings. Only a voice print (a list of numbers) is kept, never extra audio. Anyone&rsquo;s voice can be forgotten from the People tab.</div>
+      <div class="hint" style="margin-bottom:10px">The app learns each person&rsquo;s voice from the names chosen under &ldquo;4. Voices&rdquo; and from meetings whose minutes have been written. It then recognises them in later recordings. Only a voice print (a list of numbers) is kept, never extra audio. Anyone&rsquo;s voice can be forgotten from the People tab.</div>
       <div id="voice-msg"></div>
       <div class="field">
         <label for="s-voice-mode">When a voice is recognised</label>
@@ -107,10 +115,11 @@
       <div id="voice-check"></div>
       <div class="btn-row"><button class="btn btn-gold" id="btn-voice-check">Check against past meetings</button></div>
     </div>
-    <div class="card">
+    <div class="admin-block">
       <div class="ct">Transcription</div>
       <div class="hint">Live and uploaded-audio transcription run on a self-hosted Whisper service on your own server — no API key, no per-minute cost, and audio never leaves your machine. Live transcription streams your mic in real time; use a good microphone for best results.</div>
     </div>
+    </details>
   </div>
 </div>
 

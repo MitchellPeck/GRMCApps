@@ -30,7 +30,7 @@ async function callClaude(
   timeoutMs = CLAUDE_TIMEOUT_MS
 ): Promise<string> {
   const key = await getSetting(pool, "anthropic_api_key");
-  if (!key) throw new Error("No Anthropic API key. Add one in Settings.");
+  if (!key) throw new Error("The AI isn’t set up yet: it needs an Anthropic API key. Ask whoever set up this app to add it under Settings › Technical setup.");
 
   // Every Claude call runs on a serial queue (transcription or AI work), so
   // one request that never returns would stall every later job. Bound it.

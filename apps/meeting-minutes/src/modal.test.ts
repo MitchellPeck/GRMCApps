@@ -185,7 +185,7 @@ test("opening a topic while recording names it in the banner", { skip }, () => {
     renderMeetingRecUi();
     postTopicMarker(1);
   `);
-  assert.match(doc.getElementById("rec-banner").textContent, /Filing under: Budget/);
+  assert.match(doc.getElementById("rec-banner").textContent, /Now discussing: Budget/);
 });
 
 // The red bar outlived the microphone: finalizeMeetingRecording() cleared the
@@ -293,7 +293,7 @@ test("an out-of-date report says what changed and offers Docs and PDF", { skip }
     state.report = { status: 'idle', error: '', generatedAt: null, changes: ['Summary changed: Budget'] };
     renderDetail();
   `);
-  assert.match(doc.getElementById("report-stale").textContent, /out of date.*Summary changed: Budget/s);
+  assert.match(doc.getElementById("report-stale").textContent, /changed since these minutes were written.*Summary changed: Budget.*edits are kept/s);
   assert.equal(doc.getElementById("report-actions").style.display, "");
   assert.equal(doc.getElementById("btn-report-gdoc").getAttribute("href"), "/api/meetings/42/google-doc");
   assert.ok(doc.getElementById("btn-report-print"));
@@ -614,7 +614,7 @@ test("checking a fix shows how many places would change", { skip }, async () => 
   doc.getElementById("btn-fix-preview").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
   await flush();
   assert.deepEqual(posts[0], { path: "/api/meetings/42/fix", body: { from: "John", to: "Jon", dryRun: true } });
-  assert.match(doc.getElementById("fix-result").textContent, /Will change 6 places: 3 in transcripts, 1 in summaries, 2 in the report/);
+  assert.match(doc.getElementById("fix-result").textContent, /Will change 6 places: 3 in transcripts, 1 in summaries, 2 in the minutes/);
 });
 
 test("applying a fix offers Undo, and Undo sends the change back", { skip }, async () => {
@@ -815,10 +815,12 @@ function bootTwoTopics() {
 
 test("the meeting opens on the section that fits where it is", { skip }, () => {
   const { w, doc } = boot();
+  // It opens on the next step: attendance once there's an agenda, the agenda
+  // when there isn't one yet.
   w.eval("state.section = null; renderDetail()");
-  assert.deepEqual(visible(doc), ["agenda"]);
+  assert.deepEqual(visible(doc), ["people"]);
   w.eval("state.section = null; state.items = []; renderDetail()");
-  assert.deepEqual(visible(doc), ["details"]);
+  assert.deepEqual(visible(doc), ["agenda"]);
   w.eval("state.section = null; state.meeting.report = '# M'; renderDetail()");
   assert.deepEqual(visible(doc), ["minutes"]);
 });
@@ -1349,11 +1351,11 @@ test("an unsaved minutes edit is saved before the chat runs", { skip }, async ()
 
 test("a chat error shows in the conversation", { skip }, async () => {
   const { w, doc } = bootChat((p, o) => p.endsWith("/chat") && o.method === "POST"
-    ? { ok: false, status: 503, error: "Add an Anthropic API key in Settings to use the chat." } : { ok: true, messages: [] });
+    ? { ok: false, status: 503, error: "The AI isn’t set up yet: it needs an Anthropic API key. Ask whoever set up this app to add it under Settings › Technical setup." } : { ok: true, messages: [] });
   doc.getElementById("chat-input").value = "Hi";
   doc.getElementById("btn-chat-send").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
   await flush();
-  assert.match(doc.getElementById("chat-log").textContent, /API key in Settings/);
+  assert.match(doc.getElementById("chat-log").textContent, /API key.*Settings › Technical setup/);
   assert.equal(doc.getElementById("chat-input").value, "Hi", "the message is kept to try again");
 });
 
@@ -1854,7 +1856,7 @@ test("voices: a recognised voice is offered as a one-tap name, then marked recog
   const { w, doc, calls } = bootVoices();
   w.eval("state.voiceMatches = [{ speaker: 'S0', personId: 9, name: 'Alice', score: 0.712 }]; renderMeetingSpeakerPanel();");
   const card = doc.querySelector('select[data-mspk="S0"]').closest(".voice-card");
-  assert.match(card.textContent, /Sounds like Alice \(71% similar\)/);
+  assert.match(card.textContent, /Sounds like Alice \(from earlier meetings\)/);
   assert.equal(doc.querySelector('select[data-mspk="S1"]').closest(".voice-card").querySelector(".voice-match"), null);
   card.querySelector("[data-voice-use]").click();
   await flush();
@@ -2063,4 +2065,98 @@ test("a recording whose uploads are failing says so while it records", { skip },
   assert.equal(doc.getElementById("rc-net").hidden, false);
   w.eval("closeRecConsole()");
   assert.match(doc.getElementById("rec-banner").textContent, /Connection lost/);
+});
+
+// ── Review board, phase 2: the app says what to do next ────────────────────
+
+test("the next-step bar walks the meeting from agenda to printed minutes", { skip }, () => {
+  const { w, doc } = boot();
+  const step = () => { w.eval("renderMeetingNav()"); return doc.getElementById("next-step").textContent; };
+  w.eval("state.items = []; renderDetail()");
+  assert.match(step(), /Next step · 1 of 5.*Add the agenda/);
+  w.eval(`state.items = [{ id: 1, title: 'Budget', transcript_segments: [], recordings: [], presenter_ids: [], action_items: [] }]`);
+  assert.match(step(), /2 of 5.*Mark who is here/);
+  w.eval("state.attendeeIds = [5]");
+  assert.match(step(), /3 of 5.*record it/);
+  w.eval("state.meetingRecordings = [{ id: 9 }]; state.meeting.recording_status = 'processing'");
+  assert.match(step(), /being typed up.*close this page/);
+  w.eval(`state.meeting.recording_status = 'done'; state.meetingSpeakerStats = [{ speaker: 'S1', label: 'Speaker 1' }]`);
+  assert.match(step(), /4 of 5.*1 voice .* needs a name/);
+  w.eval("state.meeting.speaker_map = { S1: 'Ann' }");
+  assert.match(step(), /5 of 5.*Write the minutes/);
+  w.eval("state.meeting.report = '# Minutes'; state.report = { status: 'idle', changes: [] }");
+  assert.match(step(), /minutes are ready/);
+  w.eval("state.report = { status: 'idle', changes: ['Summary changed: Budget'] }");
+  assert.match(step(), /Update the minutes/);
+});
+
+test("a meeting with no recording can skip straight to the minutes", { skip }, () => {
+  const { w, doc } = boot();
+  w.eval("state.attendeeIds = [5]; renderDetail()");
+  doc.getElementById("ns-alt").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  assert.match(doc.getElementById("next-step").textContent, /Write the minutes/);
+  assert.deepEqual(visible(doc), ["minutes"]);
+});
+
+test("the menu is numbered in meeting order and ticks off finished steps", { skip }, () => {
+  const { w, doc } = boot();
+  w.eval("renderDetail()");
+  const labels = Array.from(doc.querySelectorAll("#mtg-nav > a")).map((a: any) => a.textContent);
+  assert.deepEqual(labels, ["✓1. Agenda", "2. Attendance", "3. Record", "4. Voices", "5. Minutes", "Details"]);
+  assert.ok(doc.querySelector('#mtg-nav [data-sec="people"]').classList.contains("next"));
+});
+
+test("someone missing from the roll call is added and marked present in one go", { skip }, async () => {
+  const { w, doc } = boot();
+  w.eval("renderDetail()");
+  const calls = stubFetch(w, (p) => p === "/api/people" ? { ok: true, id: 77 } : { ok: true });
+  doc.getElementById("ra-name").value = "Grace Lee";
+  doc.getElementById("btn-roll-add").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  await flush();
+  assert.deepEqual(calls[0].body, { name: "Grace Lee", title: "" });
+  assert.deepEqual(Array.from(w.eval("state.attendeeIds")), [77]);
+  assert.match(doc.getElementById("attendee-list").textContent, /Grace Lee/);
+  assert.ok(calls.some((c) => c.path === "/api/meetings/42/attendees" && c.body.personIds[0] === 77));
+});
+
+test("recording a single topic is tucked under More options", { skip }, () => {
+  const { w, doc } = boot();
+  w.eval("renderDetail()");
+  const rec = doc.querySelector('[data-rec="1"]');
+  assert.ok(rec.closest("details.topic-more"), "inside the disclosure");
+  assert.equal(rec.closest("details").open, false);
+});
+
+test("without an API key the meeting page says the AI isn't set up", { skip }, async () => {
+  const { w, doc } = boot();
+  stubFetch(w, (p) => p === "/api/settings" ? { ok: true, hasAnthropicKey: false } : { ok: true });
+  w.eval("renderDetail(); checkSetup()");
+  await flush();
+  assert.match(doc.getElementById("next-step").textContent, /isn’t set up yet/);
+  assert.equal(doc.getElementById("admin-setup").open, true);
+});
+
+test("once there are minutes, printing them is the main button", { skip }, () => {
+  const { w, doc } = boot();
+  w.eval("state.meeting.report = '# Minutes'; state.report = { status: 'idle', changes: [] }; renderDetail()");
+  assert.equal(doc.getElementById("btn-report").className, "btn btn-secondary");
+  assert.equal(doc.getElementById("btn-report").textContent, "Rewrite the minutes");
+  assert.match(doc.getElementById("btn-report-print").className, /btn-primary/);
+});
+
+test("the meetings list shows where each meeting stands, and can be searched", { skip }, async () => {
+  const { w, doc } = boot();
+  stubFetch(w, () => ({ ok: true, meetings: [
+    { id: 1, title: "April Board", item_count: 3, attendee_count: 4, recording_status: "done" },
+    { id: 2, title: "May Board", item_count: 0, attendee_count: 0, recording_status: "idle", report_generated_at: "2026-05-01" },
+  ] }));
+  w.eval("loadMeetings()");
+  await flush();
+  const text = doc.getElementById("meetings-list").textContent;
+  assert.match(text, /April Board.*Recorded · minutes not written/);
+  assert.match(text, /May Board.*Minutes written/);
+  doc.getElementById("m-search").value = "may";
+  w.eval("loadMeetings()");
+  await flush();
+  assert.doesNotMatch(doc.getElementById("meetings-list").textContent, /April/);
 });

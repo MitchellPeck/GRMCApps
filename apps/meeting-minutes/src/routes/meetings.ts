@@ -673,7 +673,7 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
     const message = typeof b.message === "string" ? b.message.trim() : "";
     if (!message) { reply.code(400); return { ok: false, error: "Type a message first." }; }
     const key = await getSetting(pool, "anthropic_api_key");
-    if (!key) { reply.code(503); return { ok: false, error: "Add an Anthropic API key in Settings to use the chat." }; }
+    if (!key) { reply.code(503); return { ok: false, error: "The AI isn’t set up yet: it needs an Anthropic API key. Ask whoever set up this app to add it under Settings › Technical setup." }; }
     // The turn runs in the background (it can outlast a proxy's request
     // timeout); the page polls GET …/chat until working is false.
     if (!startChatTurn(pool, id, message, getIdentity(req), anthropicChatModel(key))) {
