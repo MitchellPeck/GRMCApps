@@ -259,4 +259,9 @@ CREATE TABLE IF NOT EXISTS meeting_voices (
 CREATE INDEX IF NOT EXISTS meeting_voices_person_idx ON meeting_voices (person_id, learned_at) WHERE person_id IS NOT NULL;
 -- Turned off, a person's voice is neither learned nor kept.
 ALTER TABLE people ADD COLUMN IF NOT EXISTS learn_voice boolean NOT NULL DEFAULT true;
+-- The walkthrough's practice meeting (demo.ts): one per user, seen only by
+-- them, with practice people who never join the shared People list.
+ALTER TABLE people   ADD COLUMN IF NOT EXISTS is_demo boolean NOT NULL DEFAULT false;
+ALTER TABLE meetings ADD COLUMN IF NOT EXISTS is_demo boolean NOT NULL DEFAULT false;
+CREATE INDEX IF NOT EXISTS meetings_demo_owner_idx ON meetings (is_demo, created_by_email);
 `;

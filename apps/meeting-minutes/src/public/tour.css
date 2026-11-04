@@ -1,0 +1,20 @@
+/* Walkthrough overlay (tour.js). Above the recording console (95) so the
+   tour can point into it; below dialogs (100) so a confirmation it leads to
+   is never hidden behind it. */
+#tour .tour-dim{position:fixed;z-index:96;background:rgba(9,45,62,.45);transition:all .12s ease-out}
+#tour .tour-ring{position:fixed;z-index:97;border:3px solid var(--gold);border-radius:10px;pointer-events:none;
+  box-shadow:0 0 0 4px rgba(211,176,43,.25);transition:all .12s ease-out}
+#tour .tour-card{position:fixed;z-index:98;width:380px;max-width:calc(100vw - 24px);background:var(--card);color:var(--ink);
+  border-radius:var(--r-lg);box-shadow:var(--shadow-lg);padding:18px 20px 14px;font-size:16px;line-height:1.55}
+#tour .tour-card.docked{right:20px;bottom:20px;left:auto !important;top:auto !important}
+#tour .tour-count{font-size:13px;font-weight:700;color:var(--gold-text,#735d16);margin-bottom:4px}
+#tour h3{font-size:21px;margin:0 0 8px}
+#tour .tour-body p{margin:0 0 10px}
+#tour .tour-wait{font-size:14.5px;color:var(--info-fg);background:var(--info-bg);border-radius:var(--r);padding:8px 10px;margin:4px 0 8px}
+#tour .tour-actions{display:flex;gap:10px;align-items:center;margin-top:8px}
+#tour .tour-close{display:block;margin:10px 0 0 auto;background:none;border:none;color:var(--muted);font:inherit;font-size:13.5px;text-decoration:underline;cursor:pointer}
+#tour .tour-finish{margin:4px 0 6px}
+.tour-offer{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center;padding:14px 18px;margin-bottom:16px;
+  background:var(--info-bg);color:var(--info-fg);border-radius:var(--r-lg);font-size:16px}
+.tour-offer span{flex:1 1 300px}
+@media print{ #tour{display:none !important} }

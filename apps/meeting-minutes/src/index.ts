@@ -8,6 +8,7 @@ import { meRoutes } from "./routes/me";
 import { settingsRoutes } from "./routes/settings";
 import { peopleRoutes } from "./routes/people";
 import { meetingsRoutes } from "./routes/meetings";
+import { practiceRoutes } from "./routes/practice";
 import { recoverPendingJobs, recoverPendingMeetingJobs } from "./transcribeQueue";
 import { warmUpWhisper } from "./whisper";
 import { recoverMinutesWork } from "./minutesWork";
@@ -21,6 +22,7 @@ app.register(meRoutes);
 app.register(settingsRoutes);
 app.register(peopleRoutes);
 app.register(meetingsRoutes);
+app.register(practiceRoutes);
 
 app.get("/healthz", async () => ({ ok: true }));
 

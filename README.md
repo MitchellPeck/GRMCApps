@@ -94,8 +94,17 @@ between apps. Both are served to each app at `/assets/` (see *Shared UI* below).
   checklist. Transcription runs on a **self-hosted Whisper service** with
   diarization (the `whisper` container) — no API key, no per-minute cost, and
   audio never leaves the host. Add only the Anthropic key (for
-  extraction/summaries/report) in Settings; everything is stored in the
-  `meetingminutes` database.
+  extraction/summaries/report) in Settings › Technical setup; everything is
+  stored in the `meetingminutes` database.
+
+  A bar under each meeting's title always names the next step (agenda →
+  attendance → record → name the voices → minutes), and the menu ticks off
+  finished steps. The **Walkthrough** button in the header runs a guided tour on
+  a **practice meeting** made for whoever starts it: it's listed only for them,
+  its four practice people never join the shared People list, it never teaches
+  anyone's voice, and the tour's last step deletes it. Two of its topics come
+  already recorded and summarized, so the tour works with no microphone; the
+  third is empty to try recording on.
   
   Transcription speed is tuned through the `whisper` service in
   `docker-compose.yml`, and every value can be overridden from `.env` without a

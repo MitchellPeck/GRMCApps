@@ -32,6 +32,7 @@ export interface MeetingRow {
   created_by_name: string;
   created_at: string;
   updated_at: string;
+  is_demo: boolean;
 }
 
 export type TranscribeStatus = "idle" | "queued" | "processing" | "done" | "error";
@@ -106,14 +107,16 @@ export async function createMeeting(
   return { ok: true, status: 200, id: Number(r.rows[0].id) };
 }
 
-export async function listMeetings(pool: Pool): Promise<Array<MeetingRow & { item_count: number; attendee_count: number }>> {
+// A practice meeting is listed only for the person it was made for.
+export async function listMeetings(pool: Pool, viewerEmail = ""): Promise<Array<MeetingRow & { item_count: number; attendee_count: number }>> {
   const r = await pool.query(`
     SELECT m.*,
       (SELECT count(*) FROM agenda_items ai WHERE ai.meeting_id = m.id) AS item_count,
       (SELECT count(*) FROM meeting_attendees ma WHERE ma.meeting_id = m.id) AS attendee_count
     FROM meetings m
+    WHERE NOT m.is_demo OR m.created_by_email = $1
     ORDER BY m.created_at DESC
-  `);
+  `, [viewerEmail]);
   return r.rows.map((row) => ({
     ...row,
     id: Number(row.id),
@@ -733,8 +736,11 @@ export async function listTopicMarkers(
   return r.rows.map((row) => ({ itemId: Number(row.item_id), atSeconds: Number(row.at_seconds) }));
 }
 
+// Merges into the stored map: names given to voices this run never heard
+// (an earlier recording's, or the practice meeting's seeded ones) are kept,
+// while a voice it did hear takes the fresh name.
 export async function setMeetingSpeakerMap(pool: Pool, meetingId: number, map: SpeakerMap): Promise<void> {
-  await pool.query("UPDATE meetings SET speaker_map = $2, updated_at = now() WHERE id = $1", [
+  await pool.query("UPDATE meetings SET speaker_map = speaker_map || $2::jsonb, updated_at = now() WHERE id = $1", [
     meetingId,
     JSON.stringify(map),
   ]);

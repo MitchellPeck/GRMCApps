@@ -706,7 +706,7 @@ function openMeeting(id){
   stopPolling();
   showDetail();
   document.getElementById('detail-body').innerHTML='<div class="empty">Loading&hellip;</div>';
-  Promise.all([ api('/api/people?all=1'), api('/api/meetings/'+id) ]).then(function(r){
+  Promise.all([ api('/api/people?all=1&meetingId='+id), api('/api/meetings/'+id) ]).then(function(r){
     var peopleRes=r[0], det=r[1];
     if(!det.ok || !det.meeting){ document.getElementById('detail-body').innerHTML='<div class="alert alert-err">'+esc(det.error||'Could not load the meeting.')+'</div>'; return; }
     if(!state.meeting || state.meeting.id!==det.meeting.id){ state.lastFix=null; state.section=null; state.topicFocus=null; state.skipRecording=false; }

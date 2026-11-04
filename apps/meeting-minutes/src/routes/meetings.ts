@@ -146,8 +146,8 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // List all meetings.
-  app.get("/api/meetings", async () => {
-    try { return { ok: true, meetings: await listMeetings(pool) }; }
+  app.get("/api/meetings", async (req) => {
+    try { return { ok: true, meetings: await listMeetings(pool, getIdentity(req).email) }; }
     catch (e) { return { ok: false, error: (e as Error).message }; }
   });
 
@@ -155,7 +155,10 @@ export async function meetingsRoutes(app: FastifyInstance): Promise<void> {
   app.get("/api/meetings/:id", async (req, reply) => {
     const id = Number((req.params as { id: string }).id);
     const meeting = await getMeeting(pool, id);
-    if (!meeting) { reply.code(404); return { ok: false, error: "Meeting not found." }; }
+    // Someone else's practice meeting is not there, as far as anyone else knows.
+    if (!meeting || (meeting.is_demo && meeting.created_by_email !== getIdentity(req).email)) {
+      reply.code(404); return { ok: false, error: "Meeting not found." };
+    }
     const items = await listAgendaItems(pool, id);
     const withRecordings = await Promise.all(
       items.map(async (it) => ({ ...it, recordings: await listRecordings(pool, it.id) }))

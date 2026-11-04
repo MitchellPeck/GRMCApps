@@ -6,6 +6,7 @@
 <title>GRMC Meeting Minutes</title>
 <link rel="stylesheet" href="/assets/grmc.css">
 <link rel="stylesheet" href="/app.css">
+<link rel="stylesheet" href="/tour.css">
 </head>
 <body>
 <!-- Whole-meeting recording status. Fixed to the viewport and rendered from the
@@ -32,6 +33,7 @@
 
   <!-- Meetings -->
   <div class="panel active" id="p-meetings">
+    <div class="tour-offer" id="tour-offer" hidden></div>
     <div class="list-bar">
       <button class="btn btn-primary" id="btn-show-new">+ New meeting</button>
       <input type="search" id="m-search" placeholder="Find a meeting by name, date or place" aria-label="Find a meeting">
@@ -132,5 +134,7 @@
 <script src="/assets/grmc-nav.js"></script>
 <div id="modal-root"></div>
 <script src="/app.js"></script>
+<script src="/tour.js"></script>
+<script src="/tour-steps.js"></script>
 </body>
 </html>

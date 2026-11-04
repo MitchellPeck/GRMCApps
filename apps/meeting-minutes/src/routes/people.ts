@@ -2,6 +2,7 @@ import { FastifyInstance } from "fastify";
 import { pool } from "../db";
 import { addPerson, listPeople, setPersonActive, updatePerson } from "../people";
 import { learnedVoiceCounts, setLearnVoice } from "../voices";
+import { getIdentity } from "../identity";
 
 interface AddBody { name?: string; email?: string; title?: string; active?: boolean }
 interface ToggleBody { active?: boolean }
@@ -9,8 +10,19 @@ interface ToggleBody { active?: boolean }
 export async function peopleRoutes(app: FastifyInstance): Promise<void> {
   app.get("/api/people", async (req) => {
     try {
-      const includeInactive = (req.query as { all?: string })?.all === "1";
-      const people = await listPeople(pool, includeInactive);
+      const q = (req.query ?? {}) as { all?: string; meetingId?: string };
+      const includeInactive = q.all === "1";
+      // Practice people stay out of the shared list; they're offered only
+      // inside the practice meeting they belong to, to whoever owns it.
+      const demo = await pool.query(
+        `SELECT p.id,
+                EXISTS (SELECT 1 FROM meeting_attendees ma JOIN meetings m ON m.id = ma.meeting_id
+                         WHERE ma.person_id = p.id AND m.id = $1 AND m.is_demo AND m.created_by_email = $2) AS shown
+           FROM people p WHERE p.is_demo`,
+        [Number(q.meetingId) || 0, getIdentity(req).email]
+      );
+      const hidden = new Set(demo.rows.filter((r) => !r.shown).map((r) => Number(r.id)));
+      const people = (await listPeople(pool, includeInactive)).filter((p) => !hidden.has(p.id));
       // Whether each person's voice is learned, and from how many meetings.
       const learning = new Map((await pool.query("SELECT id, learn_voice FROM people")).rows
         .map((r) => [Number(r.id), r.learn_voice as boolean]));

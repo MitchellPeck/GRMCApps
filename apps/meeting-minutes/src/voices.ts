@@ -241,6 +241,9 @@ function resolvePerson(name: string, present: PersonRow[], everyone: PersonRow[]
 // brought in line with the map (when minutes are generated). A voice named no
 // one, a guest, or someone not learning stops being anyone's print.
 export async function learnMeetingVoices(pool: Pool, meetingId: number, map: SpeakerMap, speakers?: string[]): Promise<number> {
+  // A practice meeting teaches nobody's voice: its names are made up.
+  const demo = await pool.query("SELECT is_demo FROM meetings WHERE id = $1", [meetingId]);
+  if (demo.rows[0]?.is_demo) return 0;
   const everyone: PersonRow[] = (await pool.query("SELECT id, name, learn_voice FROM people")).rows
     .map((r) => ({ id: Number(r.id), name: r.name, learn_voice: r.learn_voice }));
   const presentIds = new Set((await pool.query("SELECT person_id FROM meeting_attendees WHERE meeting_id = $1", [meetingId])).rows
