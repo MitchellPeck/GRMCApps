@@ -11,9 +11,13 @@ export function isIsoDate(s: string): boolean {
 
 // The church's own calendar day. The host runs in the church's timezone, so
 // the local date is the one people mean by "today".
-export function todayIso(now = new Date()): string {
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}`;
+// The church's date, not the server's: the container runs in UTC, which is
+// already tomorrow every evening in Central time.
+export const CHURCH_TIME_ZONE = process.env.CHURCH_TIME_ZONE || "America/Chicago";
+
+export function todayIso(now = new Date(), timeZone = CHURCH_TIME_ZONE): string {
+  // en-CA formats as YYYY-MM-DD.
+  return new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
 }
 
 // null for anything that is not a usable amount — "abc", "", negatives,

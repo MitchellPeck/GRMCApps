@@ -101,9 +101,11 @@ export async function chargeCodeUsage(pool: Pool, id: number): Promise<number> {
   const r = await pool.query(
     `SELECT count(*)::int AS n FROM requests q
       WHERE EXISTS (SELECT 1 FROM charge_codes c
+                     LEFT JOIN charge_codes p ON p.id = c.parent_id
                      WHERE (c.id = $1 OR c.parent_id = $1)
                        AND ((c.parent_id IS NULL AND q.charge_code = c.code)
-                         OR (c.parent_id IS NOT NULL AND q.sub_charge_code = c.code)))`,
+                         OR (c.parent_id IS NOT NULL AND q.sub_charge_code = c.code
+                             AND q.charge_code = p.code)))`,
     [id]
   );
   return r.rows[0]?.n ?? 0;

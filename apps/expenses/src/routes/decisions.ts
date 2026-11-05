@@ -85,7 +85,8 @@ export async function decisionRoutes(app: FastifyInstance): Promise<void> {
 
       // The signature is the approver's even when the office types it in; the
       // event's actor records who did the typing.
-      const signer = checkDecision(found.request, identity.email, perms, "approve", "x", allowSelf).ok
+      const assigned = found.request.approver_email.trim().toLowerCase();
+      const signer = !assigned || assigned === identity.email.trim().toLowerCase()
         ? identity.email
         : found.request.approver_email;
       await approveRequest(db, Number(id), {

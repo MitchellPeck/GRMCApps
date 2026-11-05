@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { SubmissionInput, isIsoDate, itemsMatch, parseMoney, validateSubmission } from "./validate";
+import { SubmissionInput, isIsoDate, itemsMatch, parseMoney, todayIso, validateSubmission } from "./validate";
 
 test("isIsoDate accepts real calendar dates only", () => {
   assert.equal(isIsoDate("2026-11-05"), true);
@@ -79,4 +79,11 @@ test("you cannot name yourself, or the purchaser, as approver", () => {
 
 test("a reimbursement needs no card", () => {
   assert.equal(validateSubmission(input({ paymentMethod: "reimbursement", cardId: null }), ctx), null);
+});
+
+test("today is the church's date, not the server's UTC date", () => {
+  // 9pm Central on Nov 5 is already Nov 6 in UTC.
+  const evening = new Date("2026-11-06T03:00:00Z");
+  assert.equal(todayIso(evening, "America/Chicago"), "2026-11-05");
+  assert.equal(todayIso(evening, "UTC"), "2026-11-06");
 });

@@ -36,6 +36,17 @@ export async function chargeCodeRoutes(app: FastifyInstance): Promise<void> {
   app.patch("/api/charge-codes/:id", { preHandler: requirePermission("manage") }, async (req, reply) => {
     const { id } = req.params as { id: string };
     const body = (req.body ?? {}) as { code?: string; label?: string; active?: boolean; glAccount?: string };
+    // Requests keep the code as text, so renaming one in use would strand its
+    // history exactly as deleting it would.
+    if (body.code !== undefined) {
+      const current = (await listChargeCodes(pool)).find((c) => c.id === Number(id));
+      if (current && current.code !== String(body.code).trim() && (await chargeCodeUsage(pool, Number(id))) > 0) {
+        return reply.code(409).send({
+          ok: false,
+          error: "Requests already use this code, so its number can't change. Add a new code and turn this one off.",
+        });
+      }
+    }
     const ok = await updateChargeCode(pool, Number(id), body);
     if (!ok) return reply.code(404).send({ ok: false, error: "Charge code not found." });
     return { ok: true };

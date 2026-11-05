@@ -81,18 +81,29 @@ const SELECT_COLUMNS = `
 // that person may see — the same rule as lifecycle.canSee, in SQL.
 export async function listRequests(
   pool: Pool,
-  scope?: { email: string; all: boolean }
+  scope?: { email: string; all: boolean },
+  status?: string
 ): Promise<ExpenseRequestRow[]> {
   const limited = scope && !scope.all;
+  const where: string[] = [];
+  const params: unknown[] = [];
+  if (limited) {
+    params.push(scope.email.trim().toLowerCase());
+    where.push(`$1 <> '' AND $1 IN (lower(r.submitted_by_email), lower(r.purchased_by_email),
+                                    lower(r.created_by_email), lower(r.approver_email))`);
+  }
+  if (status) {
+    params.push(status);
+    where.push(`r.status = $${params.length}`);
+  }
   const r = await pool.query<ExpenseRequestRow>(
     `SELECT ${SELECT_COLUMNS},
             (SELECT count(*)::int FROM request_items i WHERE i.request_id = r.id) AS item_count
        FROM requests r
        LEFT JOIN cards c ON c.id = r.card_id
-      ${limited ? `WHERE $1 <> '' AND $1 IN (lower(r.submitted_by_email), lower(r.purchased_by_email),
-                                            lower(r.created_by_email), lower(r.approver_email))` : ""}
+      ${where.length ? "WHERE " + where.join(" AND ") : ""}
       ORDER BY r.created_at DESC, r.id DESC`,
-    limited ? [scope.email.trim().toLowerCase()] : []
+    params
   );
   return r.rows;
 }

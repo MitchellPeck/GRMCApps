@@ -44,9 +44,11 @@ export const NO_PERMISSIONS: Permissions = {
 // Derived, so no caller has to remember the combinations.
 // An approver who is also the office may decide any request, not just those
 // assigned to them — that is how the old "manage" behaved.
+// approvesAny implies seesAll (it needs manage), so visibility checks need only
+// seesAll. Reports go to the same people who see every request.
 export const approvesAny = (p: Permissions) => p.approve && p.manage;
 export const seesAll = (p: Permissions) => p.manage || p.pay || p.audit;
-export const seesReports = (p: Permissions) => p.manage || p.pay || p.audit;
+export const seesReports = seesAll;
 export const isMember = (p: Permissions) =>
   p.submit || p.approve || p.manage || p.pay || p.audit || p.admin;
 

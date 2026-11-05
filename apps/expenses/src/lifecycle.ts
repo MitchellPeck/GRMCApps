@@ -99,7 +99,7 @@ export function isOwner(req: ExpenseRequest, email: string): boolean {
 // Who may see a request at all. The office, the payer and the CPA see every
 // one; everyone else sees what they own, keyed in, or were asked to approve.
 export function canSee(req: ExpenseRequest, email: string, perms: Permissions): boolean {
-  if (seesAll(perms) || approvesAny(perms)) return true;
+  if (seesAll(perms)) return true;
   if (!email.trim()) return false;
   return isOwner(req, email) ||
     (!!req.created_by_email && same(req.created_by_email, email)) ||
@@ -284,7 +284,10 @@ export function checkReimburse(
     return deny(409, "Add the actual amount and receipts before reimbursing.");
   }
   if (req.reimbursed_at) return deny(409, "This request has already been marked paid.");
-  if (isOwner(req, actorEmail)) return deny(403, "Someone else must record paying you.");
+  // The payee is who the money goes to. The office keying a purchase for
+  // someone else is its submitter, but is not being paid by it.
+  const payee = req.purchased_by_email || req.submitted_by_email;
+  if (same(payee, actorEmail)) return deny(403, "Someone else must record paying you.");
   return ok;
 }
 

@@ -377,3 +377,42 @@ test("the sender marks mail sent, retries a failure, and gives up after five tri
   assert.equal(last.status, "failed");
   assert.equal(last.attempts, 5);
 });
+
+test("review fixes: retired card, unbought pre-purchase amount, paper signer, sub-code usage", { skip }, async () => {
+  // An edit that leaves a since-retired card alone still saves.
+  const id = await submit();
+  await pool.query("UPDATE cards SET active = false");
+  let d = await detail(id);
+  const keep = await app.inject({ method: "PATCH", url: `/api/requests/${id}`, headers: ANN,
+    payload: { cardId: d.request.card_id, vendor: "Michaels", version: d.request.version } });
+  assert.equal(keep.statusCode, 200, keep.body);
+  await pool.query("UPDATE cards SET active = true");
+
+  // An approved, unbought pre-purchase keeps amount 0 whatever the form sends.
+  const pre = await submit(ANN, { kind: "pre_purchase", amount: 0, estimatedAmount: 300,
+                                   items: [{ title: "Paint", price: 300 }] });
+  assert.equal((await decide(pre, "approve")).statusCode, 200);
+  d = await detail(pre, OFFICE);
+  await app.inject({ method: "PATCH", url: `/api/requests/${pre}`, headers: OFFICE,
+    payload: { amount: 300, vendor: "Sherwin", version: d.request.version } });
+  assert.equal((await detail(pre, OFFICE)).request.amount, 0);
+
+  // Office with approve+manage records Pastor's paper form: Pastor is the signer.
+  const paper = await submit();
+  d = await detail(paper, OFFICE);
+  const res = await app.inject({ method: "POST", url: `/api/requests/${paper}/paper-approval`, headers: OFFICE,
+    payload: { approvedOn: today, version: d.request.version } });
+  assert.equal(res.statusCode, 200, res.body);
+  assert.equal((await detail(paper)).request.approved_by_email, "pastor@x.org");
+
+  // A sub-code is "in use" only under its own parent.
+  const { chargeCodeUsage } = await import("./charge-codes");
+  await pool.query("DELETE FROM charge_codes");
+  const add = async (code: string, parent: number | null) => (await pool.query(
+    "INSERT INTO charge_codes (code, label, parent_id) VALUES ($1, 'x', $2) RETURNING id::int AS id", [code, parent])).rows[0].id;
+  const a1 = await add("01", await add("5100", null));
+  const b1 = await add("01", await add("6200", null));
+  await pool.query("UPDATE requests SET charge_code = '6200', sub_charge_code = '01' WHERE id = $1", [id]);
+  assert.equal(await chargeCodeUsage(pool, a1), 0);
+  assert.equal(await chargeCodeUsage(pool, b1), 1);
+});

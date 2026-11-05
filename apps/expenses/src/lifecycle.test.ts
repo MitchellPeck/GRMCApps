@@ -486,3 +486,10 @@ test("the accountant can do nothing to a request but comment", () => {
     assert.ok(Object.values(rest).every((v) => v === false), JSON.stringify(a));
   }
 });
+
+test("the office pays someone for a purchase it keyed for them; the payee still cannot", () => {
+  const r = req({ status: "approved", payment_method: "reimbursement",
+                  submitted_by_email: "office@grmc.app", purchased_by_email: "jane@grmc.app" });
+  assert.equal(checkReimburse(r, "office@grmc.app", assistant).ok, true);
+  assert.equal(checkReimburse(r, "jane@grmc.app", { ...NO_PERMISSIONS, pay: true }).ok, false);
+});

@@ -94,7 +94,7 @@ export async function requestRoutes(app: FastifyInstance): Promise<void> {
     const perms = await loadPermissions(req);
     const rows = await listRequests(pool, {
       email: getIdentity(req).email,
-      all: seesAll(perms) || approvesAny(perms),
+      all: seesAll(perms),
     });
     return { ok: true, requests: rows.map((r) => ({ ...r, stage: stageOf(r) })) };
   });
@@ -227,9 +227,13 @@ export async function requestRoutes(app: FastifyInstance): Promise<void> {
       // always has a card.
       const cardId = b.cardId === undefined || b.cardId === null || b.cardId === "" ? undefined : Number(b.cardId);
 
+      // Until it is bought, a pre-purchase's money is its estimate; its amount
+      // stays 0 so an approved but unbought request reports nothing spent. The
+      // edit form sends the line total regardless, so it is ignored here.
+      const isPreWithoutActuals = before.kind === "pre_purchase" && !before.actuals_completed_at;
       const patch: Partial<ExpenseRequestInput> = {
         requestDate: b.requestDate === undefined ? undefined : String(b.requestDate),
-        amount: money(b.amount, "amount"),
+        amount: isPreWithoutActuals ? undefined : money(b.amount, "amount"),
         estimatedAmount: money(b.estimatedAmount, "estimate"),
         reason: b.reason === undefined ? undefined : String(b.reason).trim(),
         vendor: b.vendor === undefined ? undefined : String(b.vendor),
@@ -244,7 +248,9 @@ export async function requestRoutes(app: FastifyInstance): Promise<void> {
         throw new Refusal(400, "Enter an estimated amount.");
       }
 
-      if (patch.cardId !== undefined) {
+      // Only a changed card is checked: a request may sit on a card since
+      // retired, and that must not block fixing its charge code.
+      if (patch.cardId !== undefined && patch.cardId !== before.card_id) {
         const subject = before.purchased_by_email || before.submitted_by_email;
         const usable = visibleCardsFor(subject, await listCards(db)).filter((c) => c.active);
         if (!usable.some((c) => c.id === patch.cardId)) {
@@ -252,11 +258,11 @@ export async function requestRoutes(app: FastifyInstance): Promise<void> {
         }
       }
       if (patch.approverEmail !== undefined) {
-        const approvers = (await listApprovers(pool)).map((a) => a.email);
+        const approvers = (await listApprovers(db)).map((a) => a.email);
         if (!approvers.includes(patch.approverEmail)) {
           throw new Refusal(400, "That person can't approve expenses. Choose someone from the list.");
         }
-        if (!(await selfApprovalAllowed(pool)) &&
+        if (!(await selfApprovalAllowed(db)) &&
             [before.submitted_by_email, before.purchased_by_email].includes(patch.approverEmail)) {
           throw new Refusal(400, "The approver can't be the person who submitted or bought it.");
         }
@@ -264,7 +270,6 @@ export async function requestRoutes(app: FastifyInstance): Promise<void> {
 
       const amount = patch.amount ?? before.amount;
       const items = patch.items ?? found.items;
-      const isPreWithoutActuals = before.kind === "pre_purchase" && !before.actuals_completed_at;
       if (!isPreWithoutActuals && items.length && (patch.items || patch.amount !== undefined) &&
           !itemsMatch(items, amount)) {
         throw new Refusal(400, "The line items don't add up to the amount. Fix one or the other.");
@@ -391,8 +396,7 @@ export async function requestRoutes(app: FastifyInstance): Promise<void> {
 
     const me = identity.email.toLowerCase();
     const allowSelf = await selfApprovalAllowed(pool);
-    const rows = (await listRequests(pool)).filter((r) => {
-      if (r.status !== "pending") return false;
+    const rows = (await listRequests(pool, { email: identity.email, all: approvesAny(perms) }, "pending")).filter((r) => {
       if (!approvesAny(perms) && r.approver_email.toLowerCase() !== me) return false;
       if (!allowSelf && (r.submitted_by_email.toLowerCase() === me || r.purchased_by_email.toLowerCase() === me)) {
         return false;

@@ -93,7 +93,7 @@ export async function removePermissionRow(pool: Pool, email: string): Promise<bo
 
 // Users who may be chosen as an approver. The office is not one unless it was
 // also given approve.
-export async function listApprovers(pool: Pool): Promise<PermissionRow[]> {
+export async function listApprovers(pool: Pick<Pool, "query">): Promise<PermissionRow[]> {
   const r = await pool.query<PermissionRow>(
     `SELECT ${COLUMNS} FROM app_users WHERE can_approve = true ORDER BY email`
   );
