@@ -17,16 +17,30 @@
   var HUB = "https://hub." + location.hostname.split(".").slice(1).join(".");
 
   // ── helpers ──────────────────────────────────────────────────────────────
-  function msg(el, text, kind) {
+  // `keep` holds an "ok" message on screen instead of fading it after 3s —
+  // for confirmations the user has to read, not just glimpse.
+  function msg(el, text, kind, keep) {
     var box = $(el);
-    if (!box) return;
-    if (!text) { box.innerHTML = ""; return; }
+    if (!box) return null;
+    if (!text) { box.innerHTML = ""; return null; }
     var d = document.createElement("div");
     d.className = "alert alert-" + (kind || "info");
+    d.setAttribute("role", kind === "err" ? "alert" : "status");
     d.textContent = text;
     box.innerHTML = "";
     box.appendChild(d);
-    if (kind === "ok") setTimeout(function () { if (box.firstChild === d) box.innerHTML = ""; }, 3000);
+    if (kind === "ok" && !keep) setTimeout(function () { if (box.firstChild === d) box.innerHTML = ""; }, 3000);
+    return d;
+  }
+
+  // A message with one button in it, e.g. "Reload" after a stale save.
+  function msgAction(el, text, kind, label, fn) {
+    var d = msg(el, text, kind, true);
+    if (!d) return;
+    var b = el_("button", "btn", label);
+    b.style.marginLeft = "10px";
+    b.addEventListener("click", fn);
+    d.appendChild(b);
   }
 
   function busy(id, on, label) {
@@ -44,7 +58,13 @@
       credentials: "same-origin"
     });
     var data = await res.json().catch(function () { return {}; });
-    if (!res.ok || data.ok === false) throw new Error(data.error || "That didn't work. Try again.");
+    if (!res.ok || data.ok === false) {
+      // The body rides along so callers can read flags such as `stale`.
+      var err = new Error(data.error || "That didn't work. Try again.");
+      err.status = res.status;
+      err.data = data;
+      throw err;
+    }
     return data;
   }
 
@@ -93,7 +113,7 @@
   function can(p) { return !!me.permissions[p]; }
 
   function stageClass(stage) {
-    if (stage === "Withdrawn") return "st-void";
+    if (stage === "Withdrawn" || stage === "Voided") return "st-void";
     if (stage === "Rejected") return "st-rej";
     if (stage === "Complete") return "st-ok";
     if (stage === "Changes requested") return "st-warn";
@@ -105,6 +125,33 @@
     if (cls) e.className = cls;
     if (text !== undefined) e.textContent = text;
     return e;
+  }
+  var el_ = el;   // msg() takes a parameter named `el`
+
+  // Options are built as nodes, never HTML strings: code labels, card
+  // nicknames and people's names are typed by users and would otherwise be
+  // parsed as markup. `rows` is [[value, text], …]; `blank` adds a first
+  // empty-valued option with that text.
+  function setOptions(target, rows, blank) {
+    target.textContent = "";
+    if (blank !== undefined) target.appendChild(new Option(blank, ""));
+    rows.forEach(function (r) { target.appendChild(new Option(r[1], String(r[0]))); });
+  }
+
+  // Sets a select's value only when that option exists, otherwise the blank.
+  function selectValue(sel, value) {
+    sel.value = value || "";
+    if (sel.value !== (value || "")) sel.value = "";
+  }
+
+  // On a 409 the server says the request moved on since this page loaded;
+  // anything sent now would act on numbers the user hasn't seen.
+  function showActionError(box, err, id) {
+    if (err.data && err.data.stale) {
+      msgAction(box, err.message, "warn", "Reload", function () { openDetail(id); });
+    } else {
+      msg(box, err.message, "err");
+    }
   }
 
   // ── tabs ─────────────────────────────────────────────────────────────────
@@ -245,7 +292,6 @@
         return { id: newId(), title: i.title, price: Number(i.price) || 0, autoType: i.autoType || null };
       });
       renderItems();
-      updateAmountFromItems();
       if (data.vendor) $("f_vendor").value = data.vendor;
       if (data.reason) $("f_reason").value = data.reason;
       if (data.chargeCode) {
@@ -276,10 +322,18 @@
     return items.reduce(function (s, i) { return s + (parseFloat(i.price) || 0); }, 0);
   }
 
-  function updateAmountFromItems() { $("f_amount").value = itemsTotal().toFixed(2); }
+  // With line items on the form the amount is their total, never typed — so
+  // the two cannot disagree on the record. With none it is typed by hand.
+  function syncAmount() {
+    var locked = items.length > 0;
+    $("f_amount").readOnly = locked;
+    if (locked) $("f_amount").value = itemsTotal().toFixed(2);
+    $("amount-hint").hidden = !locked;
+  }
 
   function renderItems() {
     var wrap = $("items-wrap");
+    syncAmount();
     if (!items.length) {
       wrap.innerHTML = '<div class="empty">No items yet — add receipts and extract, or add an item manually.</div>';
       return;
@@ -300,6 +354,7 @@
       pi.addEventListener("input", function () {
         it.price = parseFloat(pi.value) || 0;
         $("items-total").textContent = fmtAmount(itemsTotal());
+        syncAmount();
       });
       td2.appendChild(pi);
 
@@ -323,17 +378,13 @@
     var strong = el("strong", "", fmtAmount(itemsTotal()));
     strong.id = "items-total";
     tot.appendChild(strong);
-    var sync = el("button", "btn btn-gold", "Update amount from items");
-    sync.addEventListener("click", updateAmountFromItems);
-    foot.appendChild(tot); foot.appendChild(sync);
+    foot.appendChild(tot);
     wrap.appendChild(foot);
   }
 
   // ── charge codes ─────────────────────────────────────────────────────────
   function buildChargeDatalist() {
-    $("chargeCodeList").innerHTML = codeTree.map(function (c) {
-      return '<option value="' + c.code + '">' + c.code + " — " + c.label + "</option>";
-    }).join("");
+    setOptions($("chargeCodeList"), codeTree.map(function (c) { return [c.code, c.code + " — " + c.label]; }));
     onChargeCodeChange();
   }
 
@@ -343,9 +394,7 @@
     var subs = parent ? parent.subs : [];
     $("sub-field").style.display = subs.length ? "" : "none";
     if (!subs.length) { $("f_subChargeCode").value = ""; return; }
-    $("subChargeCodeList").innerHTML = subs.map(function (s) {
-      return '<option value="' + s.code + '">' + s.code + " — " + s.label + "</option>";
-    }).join("");
+    setOptions($("subChargeCodeList"), subs.map(function (s) { return [s.code, s.code + " — " + s.label]; }));
   }
   $("f_chargeCode").addEventListener("input", onChargeCodeChange);
 
@@ -359,15 +408,21 @@
       cards = data.cards || [];
     } catch (e) { cards = []; }
     var sel = $("f_card");
-    sel.innerHTML = '<option value="">— choose a card —</option>' + cards.map(function (c) {
-      return '<option value="' + c.id + '">' + c.nickname + " ••" + c.last4 + "</option>";
-    }).join("");
-    $("card-hint").textContent = cards.length ? "" : "You are not listed on any card.";
+    var keep = sel.value;
+    setOptions(sel, cards.map(function (c) { return [c.id, c.nickname + " ••" + c.last4]; }),
+               "— choose a card —");
+    selectValue(sel, keep);
+    $("card-hint").textContent = cards.length ? "" :
+      (subject && subject.toLowerCase() !== me.email.toLowerCase()
+        ? "They are not listed on any card." : "You are not listed on any card.");
   }
 
   function findEmailByName(name) {
     var n = String(name || "").trim().toLowerCase();
-    var hit = people.find(function (p) { return (p.name || "").trim().toLowerCase() === n; });
+    // People without a name are listed (and so picked) by their email.
+    var hit = people.find(function (p) {
+      return (p.name || "").trim().toLowerCase() === n || String(p.email || "").toLowerCase() === n;
+    });
     return hit ? hit.email : "";
   }
 
@@ -377,13 +432,12 @@
       var data = await res.json();
       people = data.users || [];
     } catch (e) { people = []; }
-    $("peopleList").innerHTML = people.map(function (p) {
-      return '<option value="' + (p.name || p.email) + '">' + p.email + "</option>";
-    }).join("");
-    var opts = '<option value="">— choose —</option>' + people.map(function (p) {
-      return '<option value="' + p.email + '">' + (p.name || p.email) + "</option>";
-    }).join("");
-    if ($("c-primary")) $("c-primary").innerHTML = opts;
+    setOptions($("peopleList"), people.map(function (p) { return [p.name || p.email, p.email]; }));
+    if ($("c-primary")) setOptions($("c-primary"), peopleRows(), "— choose —");
+  }
+
+  function peopleRows() {
+    return people.map(function (p) { return [p.email, p.name || p.email]; });
   }
 
   async function loadApprovers() {
@@ -391,13 +445,33 @@
       var data = await api("GET", "/api/approvers");
       approvers = data.approvers || [];
     } catch (e) { approvers = []; }
-    var def = me.permissions.defaultApprover || "";
-    $("f_approver").innerHTML = '<option value="">— choose an approver —</option>' +
-      approvers.map(function (a) {
-        return '<option value="' + a.email + '"' + (a.email === def ? " selected" : "") + ">" +
-               (a.name || a.email) + "</option>";
-      }).join("");
+    renderApproverOptions();
   }
+
+  // Nobody approves their own spending: not the person keying it in, and not
+  // the person who bought it when that is someone else. The server refuses
+  // both; leaving them out of the list stops the choice being offered.
+  function renderApproverOptions() {
+    var sel = $("f_approver");
+    var keep = sel.value || me.permissions.defaultApprover || "";
+    var out = {};
+    if (!settings.allowSelfApproval) {
+      out[String(me.email || "").toLowerCase()] = true;
+      var buyer = findEmailByName($("f_purchasedBy").value);
+      if (buyer) out[buyer.toLowerCase()] = true;
+    }
+    setOptions(sel, approvers
+      .filter(function (a) { return !out[String(a.email).toLowerCase()]; })
+      .map(function (a) { return [a.email, a.name || a.email]; }),
+      "— choose an approver —");
+    selectValue(sel, keep);
+  }
+
+  // The purchaser decides whose cards are listed and who may approve.
+  $("f_purchasedBy").addEventListener("change", function () {
+    renderApproverOptions();
+    loadCards();
+  });
 
   // ── submit ───────────────────────────────────────────────────────────────
   $("btn-save").addEventListener("click", async function () {
@@ -426,19 +500,27 @@
         })
       };
       var saved = await api("POST", "/api/requests", body);
+      var approverName = body.approvedBy || "the approver";
 
       // Receipts attach after the request exists — the same endpoint the
-      // pre-purchase completion flow uses days later.
-      if (queued.length) {
-        var fd = new FormData();
-        queued.forEach(function (q) { fd.append("files", q.file, q.file.name); });
-        await fetch("/api/requests/" + saved.id + "/receipts",
-                    { method: "POST", body: fd, credentials: "same-origin" });
-      }
+      // pre-purchase completion flow uses days later. The request is saved
+      // either way, so a failed upload must not read as success.
+      var files = queued.map(function (q) { return q.file; });
+      var up = files.length ? await uploadReceipts(saved.id, files) : { failed: [] };
 
-      msg("form-msg", "Submitted for approval.", "ok");
       resetForm();
       loadQueue();
+      await openDetail(saved.id);
+      if (up.failed.length) {
+        var failedFiles = files.filter(function (f) { return up.failed.indexOf(f.name) !== -1; });
+        msgAction("receipts-msg",
+          "Your request was saved, but these receipts didn't upload: " + up.failed.join(", ") +
+          ". Add them below." + (up.error ? " (" + up.error + ")" : ""),
+          "warn", "Try again",
+          function () { addReceipts(saved.id, failedFiles.length ? failedFiles : files); });
+      } else {
+        msg("detail-note", "Sent to " + approverName + ". You'll see their decision here.", "ok", true);
+      }
     } catch (err) {
       msg("form-msg", err.message, "err");
     } finally {
@@ -466,6 +548,8 @@
     $("f_purchasedBy").readOnly = locked;
     $("f_submittedBy").readOnly = locked;
     $("behalf-hint").hidden = locked;
+    renderApproverOptions();
+    loadCards();
   }
 
   // ── PDF (unchanged layout) ───────────────────────────────────────────────
@@ -662,6 +746,8 @@
 
   // ── detail ───────────────────────────────────────────────────────────────
   async function openDetail(id) {
+    // A different request starts at the top; a redraw of this one stays put.
+    if (detailId !== id) window.scrollTo(0, 0);
     detailId = id;
     showTab("detail");
     var body = $("detail-body");
@@ -675,6 +761,40 @@
     }
   }
 
+  // All-or-nothing on the server: a non-2xx means none of the files were
+  // stored. Never throws; resolves to the names that did not make it.
+  async function uploadReceipts(id, files) {
+    var names = files.map(function (f) { return f.name; });
+    try {
+      var fd = new FormData();
+      files.forEach(function (f) { fd.append("files", f, f.name); });
+      var res = await fetch("/api/requests/" + id + "/receipts",
+                            { method: "POST", body: fd, credentials: "same-origin" });
+      var data = await res.json().catch(function () { return {}; });
+      if (!res.ok || data.ok === false) return { added: [], failed: names, error: data.error || "" };
+      return { added: data.added || [], failed: data.rejected || [], error: "" };
+    } catch (e) {
+      return { added: [], failed: names, error: "The connection dropped." };
+    }
+  }
+
+  // Upload from the detail page, then redraw so the list shows the new files.
+  // Whatever failed stays in hand behind a "Try again" button.
+  async function addReceipts(id, files) {
+    if (!files.length) return;
+    msg("receipts-msg", "Uploading " + files.length + " file" + (files.length > 1 ? "s" : "") + "…", "info");
+    var up = await uploadReceipts(id, files);
+    await openDetail(id);
+    if (up.failed.length) {
+      var retry = files.filter(function (f) { return up.failed.indexOf(f.name) !== -1; });
+      msgAction("receipts-msg", "These receipts didn't upload: " + up.failed.join(", ") + "." +
+                (up.error ? " " + up.error : ""), "warn", "Try again",
+                function () { addReceipts(id, retry.length ? retry : files); });
+    } else {
+      msg("receipts-msg", "Added " + up.added.length + " receipt" + (up.added.length === 1 ? "" : "s") + ".", "ok");
+    }
+  }
+
   function field(label, value) {
     var f = el("div", "dfield");
     f.appendChild(el("div", "dlabel", label));
@@ -683,18 +803,6 @@
   }
 
   // ── editing ────────────────────────────────────────────────────────────────
-
-  // Mirrors checkEdit on the server, which is the gate that actually counts.
-  // The submitter revises their own request until it is decided; manage reaches
-  // one step further, into an approved request whose real charge came in
-  // different from the one that was approved.
-  function canEditRequest(r) {
-    var mine = r.submitted_by_email.toLowerCase() === me.email.toLowerCase();
-    if (can("manage")) {
-      return r.status === "pending" || r.status === "changes_requested" || r.status === "approved";
-    }
-    return mine && (r.status === "pending" || r.status === "changes_requested");
-  }
 
   function editField(label, id, type, value, attrs) {
     var f = el("div", "field");
@@ -712,6 +820,11 @@
 
   function editPanel(d) {
     var r = d.request;
+    var allowed = d.allowed || {};
+    // Saving a request the approver sent back also sends it back to them —
+    // otherwise the edit sits in "changes requested" where nobody looks.
+    var sendBack = r.status === "changes_requested" && allowed.resubmit;
+    var undecided = r.status === "pending" || r.status === "changes_requested";
     // Kept separate from the `items` global, which belongs to the new-request
     // form — both can be alive at once.
     var editItems = d.items.map(function (i) {
@@ -726,9 +839,19 @@
 
     var g1 = el("div", "grid2");
     g1.appendChild(editField("Date", "e_date", "date", r.request_date || ""));
-    g1.appendChild(editField("Amount", "e_amount", "number", Number(r.amount).toFixed(2),
-      { step: "0.01", min: "0" }));
+    var af = editField("Amount", "e_amount", "number", Number(r.amount).toFixed(2),
+      { step: "0.01", min: "0", inputmode: "decimal" });
+    var ah = el("div", "hint", "Total of the line items");
+    ah.id = "e_amount_hint";
+    af.appendChild(ah);
+    g1.appendChild(af);
     wrap.appendChild(g1);
+
+    if (r.kind === "pre_purchase" && undecided) {
+      wrap.appendChild(editField("Estimate", "e_estimate", "number",
+        r.estimated_amount === null || r.estimated_amount === undefined ? "" : Number(r.estimated_amount).toFixed(2),
+        { step: "0.01", min: "0", inputmode: "decimal" }));
+    }
 
     wrap.appendChild(editField("Vendor", "e_vendor", "text", r.vendor));
 
@@ -749,9 +872,9 @@
     function syncSubCodes() {
       var typed = wrap.querySelector("#e_chargeCode").value.trim();
       var parent = codeTree.find(function (c) { return c.code === typed; });
-      dl.innerHTML = ((parent && parent.subs) || []).map(function (sub) {
-        return '<option value="' + sub.code + '">' + sub.code + " — " + sub.label + "</option>";
-      }).join("");
+      setOptions(dl, ((parent && parent.subs) || []).map(function (sub) {
+        return [sub.code, sub.code + " — " + sub.label];
+      }));
     }
 
     wrap.appendChild(editField("Reason", "e_reason", "textarea", r.reason));
@@ -768,10 +891,10 @@
       if (r.card_id && !opts.some(function (c) { return c.id === r.card_id; })) {
         opts.unshift({ id: r.card_id, nickname: r.card_label || r.card || "Current card", last4: "" });
       }
-      sel.innerHTML = opts.map(function (c) {
-        var label = c.last4 ? c.nickname + " ••" + c.last4 : c.nickname;
-        return '<option value="' + c.id + '"' + (c.id === r.card_id ? " selected" : "") + ">" + label + "</option>";
-      }).join("");
+      setOptions(sel, opts.map(function (c) {
+        return [c.id, c.last4 ? c.nickname + " ••" + c.last4 : c.nickname];
+      }));
+      selectValue(sel, r.card_id === null || r.card_id === undefined ? "" : String(r.card_id));
       cf.appendChild(sel);
       wrap.appendChild(cf);
     }
@@ -787,6 +910,15 @@
     function total() {
       return editItems.reduce(function (sum, i) { return sum + (Number(i.price) || 0); }, 0);
     }
+    // Same rule as the new-request form: items present → amount is their total.
+    // Scoped to `wrap`: the first call runs before the panel is attached.
+    function syncAmount() {
+      var a = wrap.querySelector("#e_amount");
+      var locked = editItems.length > 0;
+      a.readOnly = locked;
+      if (locked) a.value = total().toFixed(2);
+      wrap.querySelector("#e_amount_hint").hidden = !locked;
+    }
     function drawItems() {
       rows.innerHTML = "";
       editItems.forEach(function (it, idx) {
@@ -799,13 +931,12 @@
         pr.type = "number"; pr.step = "0.01"; pr.min = "0"; pr.value = Number(it.price).toFixed(2);
         pr.addEventListener("input", function () {
           it.price = parseFloat(pr.value) || 0;
-          $("e_amount").value = total().toFixed(2);
+          syncAmount();
         });
         var rm = el("button", "btn", "Remove");
         rm.addEventListener("click", function () {
           editItems.splice(idx, 1);
           drawItems();
-          $("e_amount").value = total().toFixed(2);
         });
         priceWrap.appendChild(pr);
         priceWrap.appendChild(rm);
@@ -814,6 +945,7 @@
         rows.appendChild(row);
       });
       if (!editItems.length) rows.appendChild(el("div", "empty", "No line items."));
+      syncAmount();
     }
     drawItems();
 
@@ -827,12 +959,14 @@
     wrap.appendChild(editField("Note (optional)", "e_note", "text", "",
       { placeholder: "What changed, and why" }));
 
-    var save = el("button", "btn btn-primary", "Save changes");
+    var saveLabel = sendBack ? "Save and send back to approver" : "Save changes";
+    var save = el("button", "btn btn-primary", saveLabel);
     save.id = "btn-edit-save";
-    save.setAttribute("data-default", "Save changes");
+    save.setAttribute("data-default", saveLabel);
     save.addEventListener("click", async function () {
       busy("btn-edit-save", true, "Saving…");
       var payload = {
+        version: r.version,
         requestDate: $("e_date").value,
         amount: parseFloat($("e_amount").value) || 0,
         vendor: $("e_vendor").value,
@@ -843,14 +977,34 @@
         note: $("e_note").value
       };
       if ($("e_card") && $("e_card").value) payload.cardId = Number($("e_card").value);
+      if ($("e_estimate")) payload.estimatedAmount = parseFloat($("e_estimate").value) || 0;
+      var out;
       try {
-        var out = await api("PATCH", "/api/requests/" + r.id, payload);
+        out = await api("PATCH", "/api/requests/" + r.id, payload);
+      } catch (err) {
+        showActionError("edit-msg", err, r.id);
+        busy("btn-edit-save", false);
+        return;
+      }
+      try {
+        if (sendBack) {
+          // PATCH bumped the version; resubmit against the one it returned.
+          try {
+            await api("POST", "/api/requests/" + r.id + "/resubmit", { version: out.version });
+          } catch (err) {
+            await openDetail(r.id);
+            msg("detail-msg", "Your changes were saved, but the request wasn't sent back: " +
+                err.message, "err");
+            return;
+          }
+          await openDetail(r.id);
+          msg("detail-msg", "Saved and sent back to " + approverLabel(r) + ".", "ok", true);
+          return;
+        }
         await openDetail(r.id);
         msg("detail-msg", out.reapprovalRequired
           ? "Saved. That is a large enough change that the request has gone back to the approver."
           : "Saved.", "ok");
-      } catch (err) {
-        msg("edit-msg", err.message, "err");
       } finally {
         busy("btn-edit-save", false);
       }
@@ -885,12 +1039,79 @@
     });
   }
 
+  var EVENT_LABELS = {
+    submitted: "Submitted", approved: "Approved", rejected: "Rejected",
+    changes_requested: "Changes requested", approved_on_paper: "Approved on paper",
+    comment: "Comment", receipt_added: "Receipt added", receipt_removed: "Receipt removed",
+    actuals_completed: "Actual cost recorded", reapproval_required: "Sent back for re-approval",
+    reimbursed: "Reimbursed", edited: "Edited", withdrawn: "Withdrawn",
+    resubmitted: "Sent back to approver", voided: "Voided"
+  };
+
+  function has(v) { return v !== undefined && v !== null; }
+
+  function approverLabel(r) { return r.approved_by || r.approver_email || "the approver"; }
+
+  function lastEvent(events, types) {
+    for (var i = events.length - 1; i >= 0; i--) {
+      if (types.indexOf(events[i].type) !== -1) return { at: i, e: events[i] };
+    }
+    return null;
+  }
+
+  // "approved $X, now $Y" while a request is back with the approver because
+  // its amount moved after approval. Events arrive oldest first, so the later
+  // index is the more recent one.
+  function reapprovalText(r, events) {
+    if (r.status !== "pending") return "";
+    var back = lastEvent(events, ["reapproval_required"]);
+    if (!back) return "";
+    var ok = lastEvent(events, ["approved", "approved_on_paper"]);
+    if (ok && ok.at > back.at) return "";
+    var m = back.e.meta || {};
+    var was = has(m.approvedAmount) ? m.approvedAmount : m.estimate;
+    var now = has(m.approvedAmount) ? m.amount : m.actual;
+    if (!has(was) || !has(now)) return "Back for re-approval.";
+    return "Back for re-approval: approved " + fmtAmount(was) + ", now " + fmtAmount(now);
+  }
+
+  // A small form hidden behind the button that reveals it, so rarely used
+  // actions (paper approval, void) don't crowd the common ones.
+  function reveal(btn, box, focus) {
+    box.hidden = true;
+    btn.setAttribute("aria-expanded", "false");
+    btn.addEventListener("click", function () {
+      box.hidden = !box.hidden;
+      btn.setAttribute("aria-expanded", String(!box.hidden));
+      if (!box.hidden && focus) focus.focus();
+    });
+  }
+
+  function labelled(text, input) {
+    var f = el("div", "field");
+    var l = el("label", "", text);
+    l.setAttribute("for", input.id);
+    f.appendChild(l);
+    f.appendChild(input);
+    return f;
+  }
+
+  function dateInput(id) {
+    var i = el("input");
+    i.type = "date"; i.id = id; i.max = todayISO(); i.value = todayISO();
+    return i;
+  }
+
   function renderDetail(d) {
     var r = d.request;
+    var allowed = d.allowed || {};
     var body = $("detail-body");
     body.innerHTML = "";
 
     var head = el("div", "card");
+    head.appendChild(el("div", "", "")).id = "detail-note";
+    var again = reapprovalText(r, d.events);
+    if (again) head.appendChild(el("div", "alert alert-warn", again));
     var title = el("div", "ct", r.reason || "(no reason given)");
     head.appendChild(title);
     var badges = el("div", "", "");
@@ -903,6 +1124,9 @@
     var grid = el("div", "dgrid");
     grid.appendChild(field("Amount", fmtAmount(r.amount)));
     if (r.estimated_amount) grid.appendChild(field("Estimated", fmtAmount(r.estimated_amount)));
+    if (has(r.approved_amount) && Math.abs(Number(r.approved_amount) - Number(r.amount)) >= 0.005) {
+      grid.appendChild(field("Approved amount", fmtAmount(r.approved_amount)));
+    }
     grid.appendChild(field("Date", fmtDate(r.request_date)));
     grid.appendChild(field("Vendor", r.vendor));
     grid.appendChild(field("Charge code", displayCode(r.charge_code)));
@@ -913,6 +1137,8 @@
     grid.appendChild(field("Approver", r.approved_by || r.approver_email));
     if (r.reimbursed_at) grid.appendChild(field("Reimbursed", fmtDate(r.reimbursed_at) +
       (r.reimbursement_reference ? " · " + r.reimbursement_reference : "")));
+    if (r.voided_at) grid.appendChild(field("Voided", fmtDate(r.voided_at) +
+      (r.void_reason ? " · " + r.void_reason : "")));
     head.appendChild(grid);
 
     var pdfBtn = el("button", "btn btn-gold", "Download PDF");
@@ -952,6 +1178,7 @@
     // Receipts
     var rc = el("div", "card");
     rc.appendChild(el("div", "ct", "Receipts"));
+    rc.appendChild(el("div", "", "")).id = "receipts-msg";
     if (!d.receipts.length) {
       rc.appendChild(el("div", "empty", "No receipts attached."));
     } else {
@@ -970,60 +1197,122 @@
         rc.appendChild(row);
       });
     }
+    if (allowed.addReceipts) {
+      // The input stays in the tab order (sr-only, not `hidden`) so the
+      // label-styled button is reachable from the keyboard.
+      var up = el("label", "btn btn-gold file-btn", "Add receipts");
+      var fi = el("input", "sr-only");
+      fi.type = "file"; fi.multiple = true; fi.accept = "application/pdf,image/*";
+      fi.addEventListener("change", async function () {
+        var picked = Array.from(fi.files || []);
+        fi.value = "";
+        var files = [];
+        for (var i = 0; i < picked.length; i++) files.push(await shrinkImage(picked[i]));
+        addReceipts(r.id, files);
+      });
+      up.appendChild(fi);
+      var urow = el("div", "btn-row");
+      urow.appendChild(up);
+      rc.appendChild(urow);
+    }
     body.appendChild(rc);
 
     // Actions
     var ac = el("div", "card");
     ac.appendChild(el("div", "ct", "Actions"));
     ac.appendChild(el("div", "", "")).id = "detail-msg";
-    var mine = r.submitted_by_email.toLowerCase() === me.email.toLowerCase();
-    var canDecide = can("approve") && r.status === "pending" &&
-                    (can("manage") || r.approver_email.toLowerCase() === me.email.toLowerCase()) &&
-                    (!mine || settings.allowSelfApproval);
 
-    if (canDecide) {
+    if (allowed.resubmit) {
+      var asked = lastEvent(d.events, ["changes_requested"]);
+      var banner = el("div", "alert alert-warn");
+      banner.appendChild(el("strong", "", "Changes were requested"));
+      if (asked && asked.e.comment) {
+        banner.appendChild(el("div", "", (asked.e.actor_name || asked.e.actor_email) + ": " + asked.e.comment));
+      }
+      banner.appendChild(el("div", "", "Make the changes with Edit request, then send it back."));
+      ac.appendChild(banner);
+      var reply = el("textarea");
+      reply.id = "d-reply";
+      reply.placeholder = "Reply to the approver (optional)";
+      reply.setAttribute("aria-label", "Reply to the approver (optional)");
+      ac.appendChild(reply);
+      var sbrow = el("div", "btn-row");
+      var sb = el("button", "btn btn-primary", "Send back to approver");
+      sb.id = "btn-resubmit";
+      sb.setAttribute("data-default", "Send back to approver");
+      sb.addEventListener("click", function () { resubmit(r); });
+      sbrow.appendChild(sb);
+      ac.appendChild(sbrow);
+    }
+
+    if (allowed.decide) {
       var comment = el("textarea");
       comment.id = "d-comment";
-      comment.placeholder = "Comment (required when requesting changes)";
+      comment.placeholder = "Comment (required to reject or request changes)";
+      comment.setAttribute("aria-label", "Comment (required to reject or request changes)");
       ac.appendChild(comment);
       var brow = el("div", "btn-row");
       [["approve", "Approve", "btn btn-primary"],
        ["request_changes", "Request changes", "btn btn-gold"],
-       ["reject", "Reject", "btn"]].forEach(function (a) {
+       ["reject", "Reject", "btn btn-danger"]].forEach(function (a) {
         var b = el("button", a[2], a[1]);
-        b.addEventListener("click", function () { decide(r.id, a[0]); });
+        b.addEventListener("click", function () { decide(r, a[0]); });
         brow.appendChild(b);
       });
-      var paper = el("button", "btn", "Record paper approval");
-      paper.addEventListener("click", function () { paperApprove(r.id); });
-      brow.appendChild(paper);
       ac.appendChild(brow);
     }
 
-    if (r.status === "approved" && r.kind === "pre_purchase" && !r.actuals_completed_at && (mine || can("manage"))) {
+    if (allowed.paperApprove) {
+      var prow = el("div", "btn-row");
+      var paper = el("button", "btn", "Record paper approval");
+      prow.appendChild(paper);
+      ac.appendChild(prow);
+      var pbox = el("div", "subform");
+      var pdate = dateInput("d-paper-date");
+      var pnote = el("input"); pnote.type = "text"; pnote.id = "d-paper-note";
+      pnote.placeholder = "Who signed, where the paper is kept";
+      var pg = el("div", "grid2");
+      pg.appendChild(labelled("Date it was signed", pdate));
+      pg.appendChild(labelled("Note (optional)", pnote));
+      pbox.appendChild(pg);
+      var pb = el("button", "btn btn-primary", "Record");
+      pb.addEventListener("click", function () { paperApprove(r); });
+      var pbrow = el("div", "btn-row");
+      pbrow.appendChild(pb);
+      pbox.appendChild(pbrow);
+      ac.appendChild(pbox);
+      reveal(paper, pbox, pdate);
+    }
+
+    if (allowed.completeActuals) {
       var arow = el("div", "btn-row");
-      var actual = el("input"); actual.type = "number"; actual.step = "0.01";
+      var actual = el("input"); actual.type = "number"; actual.step = "0.01"; actual.min = "0";
+      actual.setAttribute("inputmode", "decimal");
       actual.id = "d-actual"; actual.placeholder = "Actual amount";
+      actual.setAttribute("aria-label", "Actual amount");
       arow.appendChild(actual);
       var ab = el("button", "btn btn-primary", "Complete with actuals");
-      ab.addEventListener("click", function () { completeActuals(r.id); });
+      ab.addEventListener("click", function () { completeActuals(r); });
       arow.appendChild(ab);
       ac.appendChild(arow);
     }
 
-    if (r.status === "approved" && r.payment_method === "reimbursement" && !r.reimbursed_at && can("manage")) {
+    if (allowed.reimburse) {
+      var rg = el("div", "grid2");
+      rg.appendChild(labelled("Paid on", dateInput("d-paidon")));
+      var ref = el("input"); ref.type = "text"; ref.id = "d-ref"; ref.placeholder = "Cheque no., transfer";
+      rg.appendChild(labelled("Reference", ref));
+      ac.appendChild(rg);
       var rrow = el("div", "btn-row");
-      var ref = el("input"); ref.type = "text"; ref.id = "d-ref"; ref.placeholder = "Reference (cheque no., transfer)";
-      rrow.appendChild(ref);
       var rb = el("button", "btn btn-primary", "Mark reimbursed");
-      rb.addEventListener("click", function () { markReimbursed(r.id); });
+      rb.addEventListener("click", function () { markReimbursed(r); });
       rrow.appendChild(rb);
       ac.appendChild(rrow);
     }
 
     var lastRow = el("div", "btn-row");
 
-    if (canEditRequest(r)) {
+    if (allowed.edit) {
       var editBtn = el("button", "btn", "Edit request");
       editBtn.addEventListener("click", function () {
         var panel = $("edit-panel");
@@ -1035,31 +1324,40 @@
       lastRow.appendChild(editBtn);
     }
 
-    // Deleting your own request is always on offer; what it means depends on
-    // whether anything has been decided. checkDelete on the server decides for
-    // real — this only has to label the button honestly.
-    var canWithdraw = mine && r.status !== "withdrawn";
-    var undecided = r.status === "pending" || r.status === "changes_requested";
-    if (can("manage") || canWithdraw) {
-      var hard = can("manage") || undecided;
-      var del = el("button", "btn", hard ? "Delete request" : "Withdraw request");
-      del.addEventListener("click", async function () {
-        if (!confirm(hard
-          ? "Delete this request and its receipts? This cannot be undone."
-          : "Withdraw this request? It stays on the record and drops out of spend reports."
-        )) return;
-        try {
-          await api("DELETE", "/api/requests/" + r.id);
-          if (hard) { showTab("history"); loadHistory(); }
-          else { await openDetail(r.id); msg("detail-msg", "Withdrawn.", "ok"); }
-        } catch (err) { msg("detail-msg", err.message, "err"); }
-      });
-      lastRow.appendChild(del);
+    // The server decides which of these applies (and refuses both once money
+    // has moved); the labels only have to say honestly what will happen.
+    if (allowed.delete) {
+      lastRow.appendChild(removeButton(r, "Delete request",
+        "Delete this request? Nothing has been decided on it yet, so it is removed completely."));
+    }
+    if (allowed.withdraw) {
+      lastRow.appendChild(removeButton(r, "Withdraw request",
+        "Withdraw this request? It stays on the record, marked withdrawn."));
+    }
+
+    var vbox = null;
+    if (allowed.void) {
+      var vb = el("button", "btn btn-danger", "Void…");
+      lastRow.appendChild(vb);
+      vbox = el("div", "subform");
+      vbox.appendChild(el("p", "hint", "Voiding keeps the request and its history but takes it off the books."));
+      var vreason = el("input"); vreason.type = "text"; vreason.id = "d-void-reason";
+      vreason.placeholder = "Why it is being voided";
+      vbox.appendChild(labelled("Reason", vreason));
+      var vrow = el("div", "btn-row");
+      var vgo = el("button", "btn btn-danger", "Void request");
+      vgo.addEventListener("click", function () { voidRequest(r); });
+      vrow.appendChild(vgo);
+      vbox.appendChild(vrow);
+      reveal(vb, vbox, vreason);
     }
     if (lastRow.childNodes.length) ac.appendChild(lastRow);
+    if (vbox) ac.appendChild(vbox);
+    // Kept even when empty: its message box also reports comment errors.
+    if (ac.childNodes.length === 2) ac.appendChild(el("div", "empty", "Nothing for you to do on this request."));
     body.appendChild(ac);
 
-    if (canEditRequest(r)) body.appendChild(editPanel(d));
+    if (allowed.edit) body.appendChild(editPanel(d));
 
     // Timeline + comments
     var tc = el("div", "card");
@@ -1067,20 +1365,28 @@
     var tl = el("div", "timeline");
     d.events.forEach(function (e) {
       var item = el("div", "tl-item");
-      item.appendChild(el("div", "tl-type", e.type.replace(/_/g, " ")));
+      item.appendChild(el("div", "tl-type", EVENT_LABELS[e.type] || e.type.replace(/_/g, " ")));
       var who = (e.actor_name || e.actor_email) + " · " + fmtWhen(e.created_at);
       item.appendChild(el("div", "tl-who", who));
       if (e.comment) item.appendChild(el("div", "tl-comment", e.comment));
-      if (e.meta && e.meta.estimate !== undefined && e.meta.estimate !== null) {
+      var m = e.meta || {};
+      if (has(m.estimate)) {
         item.appendChild(el("div", "tl-comment",
-          "Estimated " + fmtAmount(e.meta.estimate) + ", actual " + fmtAmount(e.meta.actual)));
+          "Estimated " + fmtAmount(m.estimate) + ", actual " + fmtAmount(m.actual)));
       }
-      if (e.meta && e.meta.previousAmount !== undefined && e.meta.previousAmount !== null) {
+      if (has(m.approvedAmount)) {
         item.appendChild(el("div", "tl-comment",
-          "Approved at " + fmtAmount(e.meta.previousAmount) + ", corrected to " + fmtAmount(e.meta.amount)));
+          "Approved at " + fmtAmount(m.approvedAmount) + ", now " + fmtAmount(m.amount)));
       }
-      if (e.meta && e.meta.changes) {
-        describeChanges(e.meta.changes).forEach(function (line) {
+      // Older events carry the pre-edit amount under this name.
+      if (has(m.previousAmount)) {
+        item.appendChild(el("div", "tl-comment",
+          "Approved at " + fmtAmount(m.previousAmount) + ", corrected to " + fmtAmount(m.amount)));
+      }
+      if (m.approvedOn) item.appendChild(el("div", "tl-comment", "Signed on " + fmtDate(m.approvedOn)));
+      if (m.paidOn) item.appendChild(el("div", "tl-comment", "Paid on " + fmtDate(m.paidOn)));
+      if (m.changes) {
+        describeChanges(m.changes).forEach(function (line) {
           item.appendChild(el("div", "tl-comment", line));
         });
       }
@@ -1088,55 +1394,114 @@
     });
     tc.appendChild(tl);
 
-    var cbox = el("textarea"); cbox.id = "d-newcomment"; cbox.placeholder = "Add a comment";
-    tc.appendChild(cbox);
-    var crow = el("div", "btn-row");
-    var cb = el("button", "btn btn-gold", "Comment");
-    cb.addEventListener("click", async function () {
-      var text = $("d-newcomment").value.trim();
-      if (!text) return;
-      try { await api("POST", "/api/requests/" + r.id + "/comments", { comment: text }); openDetail(r.id); }
-      catch (err) { msg("detail-msg", err.message, "err"); }
-    });
-    crow.appendChild(cb);
-    tc.appendChild(crow);
+    if (allowed.comment) {
+      var cbox = el("textarea"); cbox.id = "d-newcomment"; cbox.placeholder = "Add a comment";
+      cbox.setAttribute("aria-label", "Add a comment");
+      tc.appendChild(cbox);
+      var crow = el("div", "btn-row");
+      var cb = el("button", "btn btn-gold", "Comment");
+      cb.addEventListener("click", async function () {
+        var text = $("d-newcomment").value.trim();
+        if (!text) return;
+        try { await api("POST", "/api/requests/" + r.id + "/comments", { comment: text }); openDetail(r.id); }
+        catch (err) { msg("detail-msg", err.message, "err"); }
+      });
+      crow.appendChild(cb);
+      tc.appendChild(crow);
+    }
     body.appendChild(tc);
   }
 
-  async function decide(id, action) {
-    try {
-      await api("POST", "/api/requests/" + id + "/decision",
-                { action: action, comment: ($("d-comment") || {}).value || "" });
-      openDetail(id); loadQueue();
-    } catch (err) { msg("detail-msg", err.message, "err"); }
+  function removeButton(r, label, question) {
+    var b = el("button", "btn btn-danger", label);
+    b.addEventListener("click", async function () {
+      if (!confirm(question)) return;
+      try {
+        var out = await api("DELETE", "/api/requests/" + r.id, { version: r.version });
+        if (out.mode === "hard") {
+          showTab("history"); loadHistory(); loadQueue();
+          msg("history-msg", "Request deleted.", "ok");
+        } else {
+          await openDetail(r.id);
+          msg("detail-msg", "Withdrawn.", "ok");
+        }
+      } catch (err) { showActionError("detail-msg", err, r.id); }
+    });
+    return b;
   }
 
-  async function paperApprove(id) {
-    var on = prompt("Date it was approved on paper (YYYY-MM-DD):", todayISO());
-    if (on === null) return;
+  async function decide(r, action) {
+    var comment = (($("d-comment") || {}).value || "").trim();
+    if (action !== "approve" && !comment) {
+      msg("detail-msg", action === "reject"
+        ? "Say why you are rejecting it, so they know."
+        : "Say what needs to change, so they know what to do.", "warn");
+      $("d-comment").focus();
+      return;
+    }
     try {
-      await api("POST", "/api/requests/" + id + "/paper-approval", { approvedOn: on });
-      openDetail(id); loadQueue();
-    } catch (err) { msg("detail-msg", err.message, "err"); }
+      await api("POST", "/api/requests/" + r.id + "/decision",
+                { action: action, comment: comment, version: r.version });
+      await openDetail(r.id); loadQueue();
+      msg("detail-msg", action === "approve" ? "Approved."
+        : action === "reject" ? "Rejected." : "Sent back for changes.", "ok");
+    } catch (err) { showActionError("detail-msg", err, r.id); }
   }
 
-  async function completeActuals(id) {
+  async function resubmit(r) {
+    busy("btn-resubmit", true, "Sending…");
     try {
-      var out = await api("POST", "/api/requests/" + id + "/actuals",
-                          { amount: parseFloat(($("d-actual") || {}).value) || 0 });
+      await api("POST", "/api/requests/" + r.id + "/resubmit",
+                { comment: (($("d-reply") || {}).value || "").trim(), version: r.version });
+      await openDetail(r.id); loadQueue();
+      msg("detail-msg", "Sent back to " + approverLabel(r) + ".", "ok", true);
+    } catch (err) {
+      showActionError("detail-msg", err, r.id);
+      busy("btn-resubmit", false);
+    }
+  }
+
+  async function paperApprove(r) {
+    var on = ($("d-paper-date") || {}).value || "";
+    if (!on) { msg("detail-msg", "Choose the date it was signed.", "warn"); return; }
+    try {
+      await api("POST", "/api/requests/" + r.id + "/paper-approval",
+                { approvedOn: on, note: ($("d-paper-note") || {}).value || "", version: r.version });
+      await openDetail(r.id); loadQueue();
+      msg("detail-msg", "Paper approval recorded.", "ok");
+    } catch (err) { showActionError("detail-msg", err, r.id); }
+  }
+
+  async function completeActuals(r) {
+    try {
+      var out = await api("POST", "/api/requests/" + r.id + "/actuals",
+                          { amount: parseFloat(($("d-actual") || {}).value) || 0, version: r.version });
+      await openDetail(r.id);
       if (out.reapprovalRequired) {
         msg("detail-msg", "That is over the approved estimate, so it has gone back for re-approval.", "warn");
       }
-      openDetail(id);
-    } catch (err) { msg("detail-msg", err.message, "err"); }
+    } catch (err) { showActionError("detail-msg", err, r.id); }
   }
 
-  async function markReimbursed(id) {
+  async function markReimbursed(r) {
+    var paidOn = ($("d-paidon") || {}).value || "";
+    if (!paidOn) { msg("detail-msg", "Choose the date it was paid.", "warn"); return; }
     try {
-      await api("POST", "/api/requests/" + id + "/reimburse",
-                { paidOn: todayISO(), reference: ($("d-ref") || {}).value || "" });
-      openDetail(id);
-    } catch (err) { msg("detail-msg", err.message, "err"); }
+      await api("POST", "/api/requests/" + r.id + "/reimburse",
+                { paidOn: paidOn, reference: ($("d-ref") || {}).value || "", version: r.version });
+      await openDetail(r.id);
+      msg("detail-msg", "Marked reimbursed.", "ok");
+    } catch (err) { showActionError("detail-msg", err, r.id); }
+  }
+
+  async function voidRequest(r) {
+    var reason = (($("d-void-reason") || {}).value || "").trim();
+    if (!reason) { msg("detail-msg", "Say why it is being voided.", "warn"); return; }
+    try {
+      await api("POST", "/api/requests/" + r.id + "/void", { reason: reason, version: r.version });
+      await openDetail(r.id); loadQueue();
+      msg("detail-msg", "Voided. It stays on the record but no longer counts as spend.", "ok");
+    } catch (err) { showActionError("detail-msg", err, r.id); }
   }
 
   // ── reports ──────────────────────────────────────────────────────────────
@@ -1229,10 +1594,8 @@
         });
         var dt = el("td");
         var sel = el("select");
-        sel.innerHTML = '<option value="">—</option>' + people.map(function (u) {
-          return '<option value="' + u.email + '"' +
-            (p.default_approver_email === u.email ? " selected" : "") + ">" + (u.name || u.email) + "</option>";
-        }).join("");
+        setOptions(sel, peopleRows(), "—");
+        selectValue(sel, p.default_approver_email || "");
         sel.addEventListener("change", async function () {
           try { await api("PUT", "/api/permissions/" + encodeURIComponent(p.email),
                           { default_approver_email: sel.value }); msg("perm-msg", "Saved.", "ok"); }
@@ -1262,9 +1625,7 @@
         row.appendChild(m);
 
         var addSel = el("select");
-        addSel.innerHTML = '<option value="">+ add user</option>' + people.map(function (u) {
-          return '<option value="' + u.email + '">' + (u.name || u.email) + "</option>";
-        }).join("");
+        setOptions(addSel, peopleRows(), "+ add user");
         addSel.addEventListener("change", async function () {
           if (!addSel.value) return;
           var next = c.additional.concat([addSel.value]);
@@ -1315,8 +1676,8 @@
       list.appendChild(box);
     });
     if ($("cc-parent")) {
-      $("cc-parent").innerHTML = '<option value="">Top-level code</option>' +
-        codeTree.map(function (p) { return '<option value="' + p.id + '">Sub-code of ' + p.code + "</option>"; }).join("");
+      setOptions($("cc-parent"), codeTree.map(function (p) { return [p.id, "Sub-code of " + p.code]; }),
+                 "Top-level code");
     }
   }
 
@@ -1425,11 +1786,10 @@
     await loadPeople();
     try { await loadCodes(); } catch (e) { /* charge codes are optional to render */ }
     await loadApprovers();
-    await loadCards();
 
     $("f_date").value = todayISO();
     applyKindPayment();
-    applyDefaults();
+    applyDefaults();   // also loads the purchaser's cards
     renderItems();
     loadQueue();
   })();

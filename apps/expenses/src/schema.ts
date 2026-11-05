@@ -114,4 +114,48 @@ CREATE TABLE IF NOT EXISTS request_events (
   created_at  timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS request_events_request_idx ON request_events (request_id, created_at);
+
+-- version: bumped by every UPDATE, so a decision made on a stale page is
+-- refused rather than applied to numbers the approver never saw.
+-- approved_amount: what was last approved, so later corrections are measured
+-- against the approval and not against the previous correction.
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS version         integer NOT NULL DEFAULT 0;
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS approved_amount numeric(12,2);
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS voided_at       timestamptz;
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS voided_by_email text;
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS void_reason     text;
+
+UPDATE requests
+   SET approved_amount = CASE WHEN kind = 'pre_purchase' AND actuals_completed_at IS NULL
+                              THEN estimated_amount ELSE amount END
+ WHERE status = 'approved' AND approved_amount IS NULL;
+
+-- Requests already back for re-approval before this column existed: what was
+-- approved is the estimate (actuals path) or the amount before the correction
+-- (edit path, kept on the event). Then drop the stale approval they still
+-- show — the events keep it.
+UPDATE requests r
+   SET approved_amount = COALESCE(
+         (SELECT (e.meta->>'previousAmount')::numeric FROM request_events e
+           WHERE e.request_id = r.id AND e.type = 'reapproval_required'
+           ORDER BY e.created_at DESC, e.id DESC LIMIT 1),
+         r.estimated_amount, r.amount)
+ WHERE r.status = 'pending' AND r.approval_method IS NOT NULL AND r.approved_amount IS NULL;
+UPDATE requests
+   SET approval_method = NULL, approved_by_email = NULL, approved_at = NULL
+ WHERE status = 'pending' AND approval_method IS NOT NULL AND approved_amount IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS receipts_request_idx  ON receipts (request_id);
+CREATE INDEX IF NOT EXISTS requests_status_idx   ON requests (status);
+CREATE INDEX IF NOT EXISTS requests_approver_idx ON requests (approver_email);
+
+-- The audit trail is append-only. Deleting stays possible only through the
+-- cascade from a request that was never decided (see checkDelete).
+CREATE OR REPLACE FUNCTION request_events_no_update() RETURNS trigger AS $$
+BEGIN
+  RAISE EXCEPTION 'request_events is append-only';
+END $$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS request_events_no_update ON request_events;
+CREATE TRIGGER request_events_no_update BEFORE UPDATE ON request_events
+  FOR EACH ROW EXECUTE FUNCTION request_events_no_update();
 `;

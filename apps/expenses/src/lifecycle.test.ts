@@ -2,9 +2,15 @@ import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import {
   ExpenseRequest,
+  allowedActions,
+  checkActuals,
+  checkAddReceipts,
   checkDecision,
   checkDelete,
   checkEdit,
+  checkReimburse,
+  checkResubmit,
+  checkVoid,
   describeEdit,
   needsReapproval,
   reapprovalAfterEdit,
@@ -21,12 +27,16 @@ function req(over: Partial<ExpenseRequest> = {}): ExpenseRequest {
     payment_method: "church_card",
     status: "pending",
     submitted_by_email: "a@grmc.app",
+    purchased_by_email: "",
     approver_email: "b@grmc.app",
     amount: 100,
     estimated_amount: null,
     approved_at: null,
     actuals_completed_at: null,
     reimbursed_at: null,
+    approved_amount: null,
+    voided_at: null,
+    version: 0,
     ...over,
   };
 }
@@ -132,6 +142,18 @@ test("a decided request cannot be decided again", () => {
   assert.match((out as { error: string }).error, /no longer awaiting/i);
 });
 
+test("the purchaser cannot approve a request the office keyed for them", () => {
+  const r = req({ submitted_by_email: "office@grmc.app", purchased_by_email: "b@grmc.app" });
+  const out = checkDecision(r, "b@grmc.app", approver, "approve", "", false);
+  assert.equal(out.ok, false);
+  assert.match((out as { error: string }).error, /own request/i);
+});
+
+test("rejecting requires a comment", () => {
+  assert.equal(checkDecision(req(), "b@grmc.app", approver, "reject", "", false).ok, false);
+  assert.deepEqual(checkDecision(req(), "b@grmc.app", approver, "reject", "Not in budget", false), { ok: true });
+});
+
 test("requesting changes requires a comment", () => {
   assert.equal(
     checkDecision(req(), "b@grmc.app", approver, "request_changes", "   ", false).ok,
@@ -175,8 +197,18 @@ test("manage may correct an approved request \u2014 the charge came in different
   assert.deepEqual(checkEdit(req({ status: "approved" }), "z@grmc.app", manager), { ok: true });
 });
 
+test("nobody edits a paid reimbursement", () => {
+  const out = checkEdit(req({ status: "approved", reimbursed_at: "2026-11-01" }), "z@grmc.app", manager);
+  assert.equal(out.ok, false);
+});
+
+test("the purchaser may edit a request the office keyed for them", () => {
+  const r = req({ submitted_by_email: "office@grmc.app", purchased_by_email: "a@grmc.app" });
+  assert.deepEqual(checkEdit(r, "a@grmc.app", submitter), { ok: true });
+});
+
 test("not even manage edits a dead record", () => {
-  for (const status of ["rejected", "withdrawn"] as const) {
+  for (const status of ["rejected", "withdrawn", "voided"] as const) {
     const out = checkEdit(req({ status }), "z@grmc.app", manager);
     assert.equal(out.ok, false, `expected manage to be refused on ${status}`);
     assert.equal((out as { status: number }).status, 409);
@@ -191,28 +223,129 @@ test("a submitter deletes their own undecided request outright", () => {
   }
 });
 
-test("once decided, the submitter withdraws rather than deletes", () => {
-  for (const status of ["approved", "rejected"] as const) {
-    assert.deepEqual(checkDelete(req({ status }), "a@grmc.app", submitter), { ok: true, mode: "withdraw" });
+test("an approved pre-purchase not yet bought is withdrawn, not deleted", () => {
+  const r = req({ status: "approved", kind: "pre_purchase", approved_amount: 100 });
+  assert.deepEqual(checkDelete(r, "a@grmc.app", submitter), { ok: true, mode: "withdraw" });
+});
+
+test("money already spent cannot be withdrawn", () => {
+  const cases = [
+    req({ status: "approved", approved_amount: 100 }),
+    req({ status: "approved", kind: "pre_purchase", approved_amount: 100, actuals_completed_at: "2026-11-01" }),
+    req({ status: "approved", payment_method: "reimbursement", approved_amount: 100, reimbursed_at: "2026-11-01" }),
+  ];
+  for (const r of cases) {
+    const out = checkDelete(r, "a@grmc.app", submitter);
+    assert.equal(out.ok, false);
+    assert.match((out as { error: string }).error, /already been spent/);
   }
 });
 
-test("a withdrawn request cannot be withdrawn again", () => {
-  const out = checkDelete(req({ status: "withdrawn" }), "a@grmc.app", submitter);
+test("a request that was ever approved is never hard-deleted, even back in pending", () => {
+  const r = req({ status: "pending", approved_amount: 100 });
+  assert.equal(checkDelete(r, "a@grmc.app", submitter).ok, false);
+  assert.equal(checkDelete(r, "z@grmc.app", manager).ok, false);
+});
+
+test("manage hard-deletes only undecided requests, and is pointed at Void otherwise", () => {
+  assert.deepEqual(checkDelete(req(), "z@grmc.app", manager), { ok: true, mode: "hard" });
+  const out = checkDelete(req({ status: "approved", approved_amount: 100 }), "z@grmc.app", manager);
   assert.equal(out.ok, false);
-  assert.equal((out as { status: number }).status, 409);
+  assert.match((out as { error: string }).error, /Void/);
 });
 
-test("manage keeps a real delete at every status", () => {
-  for (const status of ["pending", "changes_requested", "approved", "rejected", "withdrawn"] as const) {
-    assert.deepEqual(checkDelete(req({ status }), "z@grmc.app", manager), { ok: true, mode: "hard" });
-  }
+test("a rejected request is a dead record, not a withdrawal", () => {
+  assert.equal(checkDelete(req({ status: "rejected" }), "a@grmc.app", submitter).ok, false);
+});
+
+test("the purchaser counts as an owner for deleting", () => {
+  const r = req({ submitted_by_email: "office@grmc.app", purchased_by_email: "a@grmc.app" });
+  assert.deepEqual(checkDelete(r, "a@grmc.app", submitter), { ok: true, mode: "hard" });
 });
 
 test("a bystander may not delete someone else's request", () => {
   const out = checkDelete(req(), "z@grmc.app", submitter);
   assert.equal(out.ok, false);
   assert.equal((out as { status: number }).status, 403);
+});
+
+// ── checkVoid ───────────────────────────────────────────────────────────────
+
+test("manage voids a decided request with a reason", () => {
+  assert.deepEqual(checkVoid(req({ status: "approved" }), manager, "Duplicate of #12"), { ok: true });
+});
+
+test("voiding needs a reason, manage, and an unpaid live request", () => {
+  assert.equal(checkVoid(req({ status: "approved" }), manager, "  ").ok, false);
+  assert.equal(checkVoid(req({ status: "approved" }), approver, "dup").ok, false);
+  assert.equal(checkVoid(req({ status: "voided" }), manager, "dup").ok, false);
+  assert.equal(checkVoid(req({ status: "approved", reimbursed_at: "2026-11-01" }), manager, "dup").ok, false);
+});
+
+// ── checkResubmit ───────────────────────────────────────────────────────────
+
+test("the owner sends a changes-requested request back", () => {
+  assert.deepEqual(checkResubmit(req({ status: "changes_requested" }), "a@grmc.app", submitter), { ok: true });
+  const keyed = req({ status: "changes_requested", submitted_by_email: "office@grmc.app", purchased_by_email: "a@grmc.app" });
+  assert.deepEqual(checkResubmit(keyed, "a@grmc.app", submitter), { ok: true });
+  assert.deepEqual(checkResubmit(req({ status: "changes_requested" }), "z@grmc.app", manager), { ok: true });
+});
+
+test("only changes-requested can be resubmitted, and only by its owner or manage", () => {
+  assert.equal(checkResubmit(req({ status: "pending" }), "a@grmc.app", submitter).ok, false);
+  assert.equal(checkResubmit(req({ status: "changes_requested" }), "z@grmc.app", submitter).ok, false);
+});
+
+// ── checkActuals / checkReimburse / checkAddReceipts ────────────────────────
+
+const approvedPre = req({ status: "approved", kind: "pre_purchase", estimated_amount: 100, approved_amount: 100, amount: 0 });
+
+test("actuals are recorded once", () => {
+  assert.deepEqual(checkActuals(approvedPre, "a@grmc.app", submitter), { ok: true });
+  const done = { ...approvedPre, actuals_completed_at: "2026-11-01" };
+  assert.equal(checkActuals(done, "a@grmc.app", submitter).ok, false);
+});
+
+test("the purchaser records actuals on a request keyed by the office", () => {
+  const r = { ...approvedPre, submitted_by_email: "office@grmc.app", purchased_by_email: "a@grmc.app" };
+  assert.deepEqual(checkActuals(r, "a@grmc.app", submitter), { ok: true });
+});
+
+const owed = req({ status: "approved", payment_method: "reimbursement", approved_amount: 100 });
+
+test("manage pays an approved reimbursement once", () => {
+  assert.deepEqual(checkReimburse(owed, "z@grmc.app", manager), { ok: true });
+  assert.equal(checkReimburse({ ...owed, reimbursed_at: "2026-11-01" }, "z@grmc.app", manager).ok, false);
+});
+
+test("nobody records paying themselves", () => {
+  const out = checkReimburse(owed, "a@grmc.app", manager);
+  assert.equal(out.ok, false);
+  assert.match((out as { error: string }).error, /Someone else/);
+  const keyed = { ...owed, submitted_by_email: "office@grmc.app", purchased_by_email: "p@grmc.app" };
+  assert.equal(checkReimburse(keyed, "p@grmc.app", manager).ok, false);
+});
+
+test("receipts can be added by owners until the request is dead", () => {
+  assert.deepEqual(checkAddReceipts(req({ status: "approved" }), "a@grmc.app", submitter), { ok: true });
+  for (const status of ["rejected", "withdrawn", "voided"] as const) {
+    assert.equal(checkAddReceipts(req({ status }), "a@grmc.app", submitter).ok, false);
+  }
+  assert.equal(checkAddReceipts(req(), "z@grmc.app", submitter).ok, false);
+});
+
+// ── allowedActions ──────────────────────────────────────────────────────────
+
+test("allowedActions reflects the same rules the routes enforce", () => {
+  const a = allowedActions(req({ status: "changes_requested" }), "a@grmc.app", submitter, false);
+  assert.equal(a.resubmit, true);
+  assert.equal(a.edit, true);
+  assert.equal(a.decide, false);
+  assert.equal(a.delete, true);
+  const b = allowedActions(req(), "b@grmc.app", approver, false);
+  assert.equal(b.decide, true);
+  assert.equal(b.paperApprove, true);
+  assert.equal(b.edit, false);
 });
 
 // ── reapprovalAfterEdit ─────────────────────────────────────────────────────
@@ -228,6 +361,12 @@ test("a large overrun on an approved total goes back for re-approval", () => {
 
 test("a correction downward never needs re-approval", () => {
   assert.equal(reapprovalAfterEdit("approved", 1000, 400, 0.1, 25), false);
+});
+
+test("corrections are measured against the approval, not the last correction", () => {
+  // Approved at $100; already corrected to $120; now $140. $140 vs $100 is
+  // over the $25 floor even though each step was under it.
+  assert.equal(reapprovalAfterEdit("approved", 100, 140, 0.1, 25), true);
 });
 
 test("an undecided request is not re-approved \u2014 it was never approved", () => {

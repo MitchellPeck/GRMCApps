@@ -57,7 +57,7 @@ export async function upsertPermissionRow(
        can_approve            = COALESCE($6, app_users.can_approve),
        can_manage             = COALESCE($7, app_users.can_manage),
        is_admin               = COALESCE($8, app_users.is_admin),
-       default_approver_email = COALESCE($9, app_users.default_approver_email),
+       default_approver_email = CASE WHEN $10 THEN $9 ELSE app_users.default_approver_email END,
        updated_at             = now()`,
     [
       norm(email),
@@ -69,6 +69,9 @@ export async function upsertPermissionRow(
       f.can_manage ?? null,
       f.is_admin ?? null,
       f.default_approver_email === undefined ? null : f.default_approver_email,
+      // Whether the default approver is being set at all — null is a real
+      // value ("no default"), so it cannot double as "leave it alone".
+      f.default_approver_email !== undefined,
     ]
   );
 }

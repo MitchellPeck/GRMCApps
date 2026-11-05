@@ -1,13 +1,15 @@
 import { FastifyInstance } from "fastify";
 import { pool } from "../db";
 import { getIdentity } from "../identity";
-import { loadPermissions, requirePermission } from "../guard";
-import { createCard, deleteCard, listCards, updateCard } from "../cards";
+import { loadPermissions, rejectBadIds, requirePermission } from "../guard";
+import { cardUsage, createCard, deleteCard, listCards, updateCard } from "../cards";
 import { visibleCardsFor } from "../cards-logic";
 
 const LAST4 = /^\d{4}$/;
 
 export async function cardRoutes(app: FastifyInstance): Promise<void> {
+  rejectBadIds(app);
+
   // Admins see every card to manage them; everyone else sees only the cards
   // they may actually charge to. `for` lets a submitter-on-behalf list the
   // cards of the person who made the purchase.
@@ -63,6 +65,15 @@ export async function cardRoutes(app: FastifyInstance): Promise<void> {
 
   app.delete("/api/cards/:id", { preHandler: requirePermission("admin") }, async (req, reply) => {
     const { id } = req.params as { id: string };
+    // Deleting a used card would blank the card on every past request and cut
+    // them off from the statement they belong to.
+    const used = await cardUsage(pool, Number(id));
+    if (used > 0) {
+      return reply.code(409).send({
+        ok: false,
+        error: `${used} request${used === 1 ? " was" : "s were"} charged to this card, so it can't be deleted. Mark it inactive instead.`,
+      });
+    }
     const ok = await deleteCard(pool, Number(id));
     if (!ok) return reply.code(404).send({ ok: false, error: "Card not found." });
     return { ok: true };

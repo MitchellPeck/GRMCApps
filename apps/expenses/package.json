@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "main": "dist/index.js",
-  "scripts": { "build": "tsc", "start": "node dist/index.js", "test": "tsc && node --test --test-concurrency=1 \"dist/*.test.js\"" },
+  "scripts": { "build": "tsc", "start": "node dist/index.js", "test": "tsc && EXPENSES_DB_USER=test EXPENSES_DB_PASSWORD=test EXPENSES_DB_NAME=test node --test --test-concurrency=1 \"dist/*.test.js\"" },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.126.0",
     "@fastify/multipart": "^9.0.1",

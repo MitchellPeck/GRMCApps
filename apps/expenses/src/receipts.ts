@@ -1,4 +1,7 @@
 import { Pool } from "pg";
+import { createHash } from "node:crypto";
+
+type Db = Pick<Pool, "query">;
 
 export interface ReceiptMeta {
   id: number;
@@ -10,7 +13,7 @@ export interface ReceiptMeta {
 }
 
 export async function addReceipt(
-  pool: Pool,
+  pool: Db,
   requestId: number,
   file: { name: string; mimeType: string; buffer: Buffer },
   uploaderEmail: string
@@ -21,6 +24,10 @@ export async function addReceipt(
     [requestId, file.name, file.mimeType, file.buffer.length, file.buffer, uploaderEmail]
   );
   return r.rows[0].id;
+}
+
+export function sha256(buffer: Buffer): string {
+  return createHash("sha256").update(buffer).digest("hex");
 }
 
 // Metadata only — the bytes are deliberately not selected here, so listing a
@@ -46,14 +53,15 @@ export async function getReceipt(
   return r.rows[0] ?? null;
 }
 
+// Returns the removed file's name so the audit event can say which one it was.
 export async function deleteReceipt(
-  pool: Pool,
+  pool: Db,
   requestId: number,
   receiptId: number
-): Promise<boolean> {
+): Promise<string | null> {
   const r = await pool.query(
-    "DELETE FROM receipts WHERE id = $1 AND request_id = $2 RETURNING id",
+    "DELETE FROM receipts WHERE id = $1 AND request_id = $2 RETURNING file_name",
     [receiptId, requestId]
   );
-  return r.rowCount !== null && r.rowCount > 0;
+  return r.rows[0]?.file_name ?? null;
 }

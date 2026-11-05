@@ -14,7 +14,9 @@ export type EventType =
   | "reapproval_required"
   | "reimbursed"
   | "edited"
-  | "withdrawn";
+  | "withdrawn"
+  | "resubmitted"
+  | "voided";
 
 export interface RequestEvent {
   id: number;
@@ -27,7 +29,7 @@ export interface RequestEvent {
 }
 
 export async function addEvent(
-  pool: Pool,
+  pool: Pick<Pool, "query">,
   requestId: number,
   type: EventType,
   actor: Identity,

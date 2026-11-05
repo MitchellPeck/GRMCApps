@@ -65,9 +65,9 @@
           they run in parallel. On a phone you can take a picture of the receipt directly.
         </p>
         <div class="btn-row" style="margin-top:0">
-          <label class="btn btn-gold" style="cursor:pointer">
+          <label class="btn btn-gold file-btn">
             Upload files
-            <input type="file" id="f-receipts" accept="application/pdf,image/*" multiple hidden>
+            <input type="file" id="f-receipts" class="sr-only" accept="application/pdf,image/*" multiple>
           </label>
           <button class="btn btn-primary" id="btn-extract" data-default="Extract &amp; fill form">Extract &amp; fill form</button>
           <button class="btn" id="btn-add-item">Add item manually</button>
@@ -84,7 +84,8 @@
           <div class="field"><label for="f_date">Date</label><input type="date" id="f_date"></div>
           <div class="field" id="amount-field">
             <label for="f_amount">Amount</label>
-            <input type="number" id="f_amount" step="0.01" min="0" placeholder="0.00">
+            <input type="number" id="f_amount" step="0.01" min="0" placeholder="0.00" inputmode="decimal">
+            <div class="hint" id="amount-hint" hidden>Total of the line items</div>
           </div>
         </div>
 
@@ -165,6 +166,7 @@
           <option>Approved — awaiting reimbursement</option>
           <option>Complete</option>
           <option>Withdrawn</option>
+          <option>Voided</option>
         </select>
         <input type="text" id="h-search" placeholder="Search reason, vendor or person">
         <select id="h-payment">

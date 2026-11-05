@@ -14,7 +14,7 @@ const SELECT_CARDS = `
    GROUP BY c.id
    ORDER BY c.active DESC, c.nickname`;
 
-export async function listCards(pool: Pool): Promise<Card[]> {
+export async function listCards(pool: Pick<Pool, "query">): Promise<Card[]> {
   const r = await pool.query<Card>(SELECT_CARDS);
   return r.rows;
 }
@@ -95,6 +95,11 @@ export async function updateCard(pool: Pool, id: number, f: CardFields): Promise
   } finally {
     client.release();
   }
+}
+
+export async function cardUsage(pool: Pool, id: number): Promise<number> {
+  const r = await pool.query("SELECT count(*)::int AS n FROM requests WHERE card_id = $1", [id]);
+  return r.rows[0]?.n ?? 0;
 }
 
 export async function deleteCard(pool: Pool, id: number): Promise<boolean> {

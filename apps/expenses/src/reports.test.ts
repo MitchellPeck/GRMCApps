@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { ReportRow, spendByCode, toCsv } from "./reports";
+import { ReportRow, inPeriod, spendByCode, toCsv } from "./reports";
 
 const rows: ReportRow[] = [
   { id: 1, request_date: "2026-09-01", amount: 100, charge_code: "5540", sub_charge_code: "5404", vendor: "Sweetwater", reason: "Converter", status: "approved", stage: "Complete", kind: "post_purchase", payment_method: "church_card", submitted_by_email: "a@grmc.app" },
@@ -47,4 +47,39 @@ test("toCsv neutralises every dangerous lead character", () => {
 
 test("an empty set still produces a header", () => {
   assert.match(toCsv([]).trim(), /^id,date,amount,/);
+});
+
+test("money spent before a re-approval is still spend, whatever the approver decides", () => {
+  const out = spendByCode([
+    { ...rows[0], status: "pending", actuals_completed: true },
+    { ...rows[1], status: "rejected", actuals_completed: true },
+  ]);
+  assert.deepEqual(out, [{ chargeCode: "5540", total: 150.5, count: 2 }]);
+});
+
+test("voided and withdrawn requests are off the books", () => {
+  const out = spendByCode([
+    { ...rows[0], status: "voided", actuals_completed: true },
+    { ...rows[1], status: "withdrawn" },
+  ]);
+  assert.deepEqual(out, []);
+});
+
+test("toCsv leaves numbers as numbers", () => {
+  const csv = toCsv([{ ...rows[0], amount: -12.5 }]);
+  assert.match(csv.split("\n")[1], /^1,2026-09-01,-12.5,/);
+});
+
+test("toCsv carries who approved and who paid", () => {
+  const header = toCsv([]).trim();
+  for (const col of ["purchased_by", "card", "approver", "approval_method", "approved_at", "paid_on", "paid_reference", "voided_reason"]) {
+    assert.match(header, new RegExp(`(^|,)${col}(,|$)`));
+  }
+});
+
+test("inPeriod drops undated rows once a range is set", () => {
+  assert.equal(inPeriod(null, { from: "2026-01-01" }), false);
+  assert.equal(inPeriod(null, {}), true);
+  assert.equal(inPeriod("2026-02-01", { from: "2026-01-01", to: "2026-01-31" }), false);
+  assert.equal(inPeriod("2026-01-15", { from: "2026-01-01", to: "2026-01-31" }), true);
 });

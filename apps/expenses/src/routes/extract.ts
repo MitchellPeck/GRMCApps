@@ -1,12 +1,13 @@
 import { FastifyInstance } from "fastify";
 import { pool } from "../db";
+import { requirePermission } from "../guard";
 import { EXTRACTABLE_TYPES, MISSING_KEY_ERROR, UploadedDoc, extractDocuments } from "../extract";
 
 export const MAX_FILES = 10;
 export const MAX_FILE_BYTES = 15 * 1024 * 1024;
 
 export async function extractRoutes(app: FastifyInstance): Promise<void> {
-  app.post("/api/extract", async (req, reply) => {
+  app.post("/api/extract", { preHandler: requirePermission("submit") }, async (req, reply) => {
     if (!req.isMultipart()) {
       return reply.code(400).send({ ok: false, error: "Upload the receipts as form data." });
     }

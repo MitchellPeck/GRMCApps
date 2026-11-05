@@ -1,7 +1,10 @@
-import { Pool } from "pg";
+import { Pool, PoolClient } from "pg";
 import type { Identity } from "./identity";
 import type { AutoType } from "./extract-logic";
 import type { ExpenseRequest, PaymentMethod, RequestKind, RequestStatus } from "./lifecycle";
+
+// A pool or a client inside a transaction — the queries do not care which.
+export type Db = Pick<Pool, "query">;
 
 export interface RequestItem {
   title: string;
@@ -45,6 +48,8 @@ export interface ExpenseRequestRow extends ExpenseRequest {
   approved_by_email: string | null;
   reimbursed_by_email: string | null;
   reimbursement_reference: string | null;
+  voided_by_email: string | null;
+  void_reason: string | null;
   created_by_email: string;
   created_by_name: string;
   created_at: string;
@@ -67,6 +72,8 @@ const SELECT_COLUMNS = `
   r.kind, r.payment_method, r.status,
   r.approval_method, r.approved_at, r.approved_by_email,
   r.actuals_completed_at, r.reimbursed_at, r.reimbursed_by_email, r.reimbursement_reference,
+  r.approved_amount::float8 AS approved_amount, r.version,
+  r.voided_at, r.voided_by_email, r.void_reason,
   r.created_by_email, r.created_by_name, r.created_at,
   CASE WHEN c.id IS NULL THEN NULL ELSE c.nickname || ' ••' || c.last4 END AS card_label`;
 
@@ -83,19 +90,26 @@ export async function listRequests(pool: Pool): Promise<ExpenseRequestRow[]> {
   return r.rows;
 }
 
+export interface FoundRequest {
+  request: ExpenseRequestRow;
+  items: RequestItem[];
+}
+
 export async function getRequest(
-  pool: Pool,
-  id: number
-): Promise<{ request: ExpenseRequestRow; items: RequestItem[] } | null> {
-  const r = await pool.query<ExpenseRequestRow>(
+  db: Db,
+  id: number,
+  opts: { forUpdate?: boolean } = {}
+): Promise<FoundRequest | null> {
+  if (!Number.isSafeInteger(id) || id <= 0) return null;
+  const r = await db.query<ExpenseRequestRow>(
     `SELECT ${SELECT_COLUMNS} FROM requests r
        LEFT JOIN cards c ON c.id = r.card_id
-      WHERE r.id = $1`,
+      WHERE r.id = $1${opts.forUpdate ? " FOR UPDATE OF r" : ""}`,
     [id]
   );
   if (!r.rows[0]) return null;
 
-  const items = await pool.query(
+  const items = await db.query(
     "SELECT title, price::float8 AS price, auto_type FROM request_items WHERE request_id = $1 ORDER BY idx",
     [id]
   );
@@ -110,7 +124,7 @@ export async function getRequest(
 }
 
 async function replaceItems(
-  client: { query: (q: string, v?: unknown[]) => Promise<unknown> },
+  client: Db,
   id: number,
   items: RequestItem[]
 ): Promise<void> {
@@ -174,117 +188,154 @@ export async function saveRequest(
   }
 }
 
-export async function updateRequest(
+// Every state change runs here: one transaction, the row locked against a
+// concurrent decision or edit, the change and its audit event committed
+// together or not at all. null when the request does not exist.
+export async function withRequest<T>(
   pool: Pool,
   id: number,
-  input: Partial<ExpenseRequestInput>
-): Promise<boolean> {
+  fn: (db: PoolClient, found: FoundRequest) => Promise<T>
+): Promise<T | null> {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const r = await client.query(
-      `UPDATE requests SET
-         request_date    = COALESCE($2, request_date),
-         amount          = COALESCE($3, amount),
-         reason          = COALESCE($4, reason),
-         vendor          = COALESCE($5, vendor),
-         charge_code     = COALESCE($6, charge_code),
-         sub_charge_code = COALESCE($7, sub_charge_code),
-         card_id         = COALESCE($8, card_id),
-         approver_email  = COALESCE($9, approver_email),
-         approved_by     = COALESCE($10, approved_by),
-         updated_at      = now()
-       WHERE id = $1 RETURNING id`,
-      [
-        id,
-        input.requestDate ?? null,
-        input.amount ?? null,
-        input.reason ?? null,
-        input.vendor ?? null,
-        input.chargeCode ?? null,
-        input.subChargeCode ?? null,
-        input.cardId ?? null,
-        input.approverEmail ? input.approverEmail.toLowerCase() : null,
-        input.approvedBy ?? null,
-      ]
-    );
-    if (!r.rows[0]) {
+    const found = await getRequest(client, id, { forUpdate: true });
+    if (!found) {
       await client.query("ROLLBACK");
-      return false;
+      return null;
     }
-    if (input.items) await replaceItems(client, id, input.items);
+    const out = await fn(client, found);
     await client.query("COMMIT");
-    return true;
+    return out;
   } catch (err) {
-    await client.query("ROLLBACK");
+    await client.query("ROLLBACK").catch(() => undefined);
     throw err;
   } finally {
     client.release();
   }
 }
 
-export async function setStatus(
-  pool: Pool,
+export async function updateRequest(
+  db: Db,
   id: number,
-  status: RequestStatus,
-  fields: {
-    approvalMethod?: string | null;
-    approvedByEmail?: string | null;
-    approvedAt?: string | null;
-  } = {}
+  input: Partial<ExpenseRequestInput>
+): Promise<number> {
+  const r = await db.query(
+    `UPDATE requests SET
+       request_date     = COALESCE($2, request_date),
+       amount           = COALESCE($3, amount),
+       reason           = COALESCE($4, reason),
+       vendor           = COALESCE($5, vendor),
+       charge_code      = COALESCE($6, charge_code),
+       sub_charge_code  = COALESCE($7, sub_charge_code),
+       card_id          = COALESCE($8, card_id),
+       approver_email   = COALESCE($9, approver_email),
+       approved_by      = COALESCE($10, approved_by),
+       estimated_amount = COALESCE($11, estimated_amount),
+       version          = version + 1,
+       updated_at       = now()
+     WHERE id = $1 RETURNING version`,
+    [
+      id,
+      input.requestDate ?? null,
+      input.amount ?? null,
+      input.reason ?? null,
+      input.vendor ?? null,
+      input.chargeCode ?? null,
+      input.subChargeCode ?? null,
+      input.cardId ?? null,
+      input.approverEmail ? input.approverEmail.toLowerCase() : null,
+      input.approvedBy ?? null,
+      input.estimatedAmount ?? null,
+    ]
+  );
+  if (input.items) await replaceItems(db, id, input.items);
+  return r.rows[0].version;
+}
+
+export async function setStatus(db: Db, id: number, status: RequestStatus): Promise<void> {
+  await db.query(
+    "UPDATE requests SET status = $2, version = version + 1, updated_at = now() WHERE id = $1",
+    [id, status]
+  );
+}
+
+// What is being approved is the estimate while nothing has been bought yet,
+// and the real amount after.
+export async function approveRequest(
+  db: Db,
+  id: number,
+  f: { method: "digital" | "paper"; byEmail: string; at: string }
 ): Promise<void> {
-  await pool.query(
-    `UPDATE requests SET status = $2,
-       approval_method   = COALESCE($3, approval_method),
-       approved_by_email = COALESCE($4, approved_by_email),
-       approved_at       = COALESCE($5::timestamptz, approved_at),
-       updated_at        = now()
+  await db.query(
+    `UPDATE requests SET status = 'approved',
+       approval_method   = $2,
+       approved_by_email = $3,
+       approved_at       = $4::timestamptz,
+       approved_amount   = CASE WHEN kind = 'pre_purchase' AND actuals_completed_at IS NULL
+                                THEN estimated_amount ELSE amount END,
+       version = version + 1, updated_at = now()
      WHERE id = $1`,
-    [id, status, fields.approvalMethod ?? null, fields.approvedByEmail ?? null, fields.approvedAt ?? null]
+    [id, f.method, f.byEmail.toLowerCase(), f.at]
+  );
+}
+
+// Back to the approver. The old approval no longer stands, so its method, date
+// and approver are cleared — a pending request showing "Approved digitally"
+// contradicts itself. approved_amount stays: it is what the new figure is
+// measured against, and the events keep the full history.
+export async function returnForReapproval(db: Db, id: number): Promise<void> {
+  await db.query(
+    `UPDATE requests SET status = 'pending',
+       approval_method = NULL, approved_by_email = NULL, approved_at = NULL,
+       version = version + 1, updated_at = now()
+     WHERE id = $1`,
+    [id]
   );
 }
 
 export async function completeActuals(
-  pool: Pool,
+  db: Db,
   id: number,
   amount: number,
   items: RequestItem[]
 ): Promise<void> {
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    await client.query(
-      "UPDATE requests SET amount = $2, actuals_completed_at = now(), updated_at = now() WHERE id = $1",
-      [id, amount]
-    );
-    await replaceItems(client, id, items);
-    await client.query("COMMIT");
-  } catch (err) {
-    await client.query("ROLLBACK");
-    throw err;
-  } finally {
-    client.release();
-  }
+  await db.query(
+    `UPDATE requests SET amount = $2, actuals_completed_at = now(),
+       version = version + 1, updated_at = now() WHERE id = $1`,
+    [id, amount]
+  );
+  await replaceItems(db, id, items);
 }
 
 export async function markReimbursed(
-  pool: Pool,
+  db: Db,
   id: number,
   byEmail: string,
-  paidOn: string | null,
+  paidOn: string,
   reference: string
 ): Promise<void> {
-  await pool.query(
-    `UPDATE requests SET reimbursed_at = COALESCE($3::date, now()),
+  await db.query(
+    `UPDATE requests SET reimbursed_at = $3::date,
                          reimbursed_by_email = $2,
                          reimbursement_reference = $4,
+                         version = version + 1,
                          updated_at = now()
       WHERE id = $1`,
-    [id, byEmail.toLowerCase(), paidOn || null, reference ?? ""]
+    [id, byEmail.toLowerCase(), paidOn, reference ?? ""]
   );
 }
 
-export async function deleteRequest(pool: Pool, id: number): Promise<boolean> {
-  const r = await pool.query("DELETE FROM requests WHERE id = $1 RETURNING id", [id]);
+export async function voidRequest(db: Db, id: number, byEmail: string, reason: string): Promise<void> {
+  await db.query(
+    `UPDATE requests SET status = 'voided', voided_at = now(), voided_by_email = $2, void_reason = $3,
+       version = version + 1, updated_at = now()
+     WHERE id = $1`,
+    [id, byEmail.toLowerCase(), reason]
+  );
+}
+
+export async function deleteRequest(db: Db, id: number): Promise<boolean> {
+  const r = await db.query("DELETE FROM requests WHERE id = $1 RETURNING id", [id]);
   return r.rowCount !== null && r.rowCount > 0;
 }

@@ -248,6 +248,20 @@ between apps. Both are served to each app at `/assets/` (see *Shared UI* below).
   back to the approver with both figures shown. Reimbursements are marked paid,
   with a date and reference, by anyone with manage rights.
 
+  **Who owns a request.** The submitter *and* the purchaser: when the office
+  keys a purchase for someone, that person can add receipts, record the actual
+  cost and answer the approver — and cannot approve it or record paying
+  themselves. "Changes requested" goes back to the approver with **Send back to
+  approver**. Every change runs in one transaction with its audit event, and a
+  decision made on a page that has since changed is refused, not applied. The
+  history is append-only in the database.
+
+  **Taking a request off the books.** A request nothing has been decided on can
+  be deleted. An approved purchase not yet made can be withdrawn. Anything else
+  is money that moved: it stays, and manage can **void** it with a reason (not
+  once it has been paid). Corrections to an approved total are measured against
+  the approved amount, so small edits cannot walk it past the tolerance.
+
   **Permissions** are per-app, on top of who the hub lets in: submit, submit on
   another's behalf, edit own, approve, manage (implies approve; acts on
   anyone's requests and edits charge codes) and admin (permissions, cards and

@@ -1,6 +1,6 @@
 import { Pool } from "pg";
 
-export async function getSetting(pool: Pool, key: string): Promise<string> {
+export async function getSetting(pool: Pick<Pool, "query">, key: string): Promise<string> {
   const r = await pool.query("SELECT value FROM settings WHERE key = $1", [key]);
   return r.rows[0] ? r.rows[0].value : "";
 }
@@ -11,6 +11,25 @@ export async function setSetting(pool: Pool, key: string, value: string): Promis
      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
     [key, value]
   );
+}
+
+// An empty or unreadable value falls back; a deliberate 0 is kept. The old
+// `Number(x) || fallback` turned a tolerance of 0 back into the default.
+export function numberSetting(raw: string, fallback: number): number {
+  if (raw.trim() === "") return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+
+export async function getTolerances(pool: Pick<Pool, "query">): Promise<{ pct: number; abs: number }> {
+  return {
+    pct: numberSetting(await getSetting(pool as Pool, "overage_tolerance_pct"), 0.1),
+    abs: numberSetting(await getSetting(pool as Pool, "overage_tolerance_abs"), 25),
+  };
+}
+
+export async function selfApprovalAllowed(pool: Pick<Pool, "query">): Promise<boolean> {
+  return (await getSetting(pool as Pool, "allow_self_approval")) === "true";
 }
 
 export interface SettingsView {
@@ -32,8 +51,8 @@ export async function getSettingsView(pool: Pool): Promise<SettingsView> {
   const key = await getSetting(pool, "anthropic_api_key");
   return {
     allowSelfApproval: (await getSetting(pool, "allow_self_approval")) === "true",
-    overageTolerancePct: Number(await getSetting(pool, "overage_tolerance_pct")) || 0.1,
-    overageToleranceAbs: Number(await getSetting(pool, "overage_tolerance_abs")) || 25,
+    overageTolerancePct: numberSetting(await getSetting(pool, "overage_tolerance_pct"), 0.1),
+    overageToleranceAbs: numberSetting(await getSetting(pool, "overage_tolerance_abs"), 25),
     orgName: await getSetting(pool, "org_name"),
     defaultPurchasedBy: await getSetting(pool, "default_purchased_by"),
     defaultCard: await getSetting(pool, "default_card"),

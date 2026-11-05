@@ -76,6 +76,20 @@ export async function updateChargeCode(
   return r.rowCount !== null && r.rowCount > 0;
 }
 
+// Requests store the code as text, so deleting one that is in use would leave
+// history pointing at nothing. Returns how many requests use it or a sub-code.
+export async function chargeCodeUsage(pool: Pool, id: number): Promise<number> {
+  const r = await pool.query(
+    `SELECT count(*)::int AS n FROM requests q
+      WHERE EXISTS (SELECT 1 FROM charge_codes c
+                     WHERE (c.id = $1 OR c.parent_id = $1)
+                       AND ((c.parent_id IS NULL AND q.charge_code = c.code)
+                         OR (c.parent_id IS NOT NULL AND q.sub_charge_code = c.code)))`,
+    [id]
+  );
+  return r.rows[0]?.n ?? 0;
+}
+
 // Sub-codes cascade via the foreign key.
 export async function deleteChargeCode(pool: Pool, id: number): Promise<boolean> {
   const r = await pool.query("DELETE FROM charge_codes WHERE id = $1 RETURNING id", [id]);

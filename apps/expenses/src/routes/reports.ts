@@ -2,7 +2,7 @@ import { FastifyInstance } from "fastify";
 import { pool } from "../db";
 import { requirePermission } from "../guard";
 import { listRequests } from "../requests";
-import { ReportRow, spendByCode, toCsv } from "../reports";
+import { ReportRow, inPeriod, spendByCode, toCsv } from "../reports";
 import { stageOf } from "../lifecycle";
 
 interface Filters {
@@ -16,9 +16,7 @@ async function filteredRows(f: Filters): Promise<ReportRow[]> {
   const rows = await listRequests(pool);
   return rows
     .filter((r) => {
-      const d = r.request_date ?? "";
-      if (f.from && d && d < f.from) return false;
-      if (f.to && d && d > f.to) return false;
+      if (!inPeriod(r.request_date, f)) return false;
       if (f.status && r.status !== f.status) return false;
       if (f.chargeCode && r.charge_code !== f.chargeCode) return false;
       return true;
@@ -36,6 +34,15 @@ async function filteredRows(f: Filters): Promise<ReportRow[]> {
       kind: r.kind,
       payment_method: r.payment_method,
       submitted_by_email: r.submitted_by_email,
+      actuals_completed: !!r.actuals_completed_at,
+      purchased_by: r.purchased_by_email || r.purchased_by,
+      card: r.card_label ?? r.card,
+      approver: r.approved_by_email ?? "",
+      approval_method: r.approval_method ?? "",
+      approved_at: r.approved_at ? new Date(r.approved_at).toISOString().slice(0, 10) : "",
+      paid_on: r.reimbursed_at ? new Date(r.reimbursed_at).toISOString().slice(0, 10) : "",
+      paid_reference: r.reimbursement_reference ?? "",
+      voided_reason: r.void_reason ?? "",
     }));
 }
 

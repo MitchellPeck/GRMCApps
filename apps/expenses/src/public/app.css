@@ -74,7 +74,7 @@
 
 .timeline { border-left:2px solid var(--rule); margin:6px 0 14px; padding-left:14px }
 .tl-item { margin-bottom:14px }
-.tl-type { font-weight:600; font-size:13px; text-transform:capitalize }
+.tl-type { font-weight:600; font-size:13px }
 .tl-who { font-size:11.5px; color:var(--hint) }
 .tl-comment { font-size:13px; margin-top:4px; background:var(--paper);
               border:1px solid var(--rule); border-radius:var(--r); padding:7px 10px }
@@ -85,3 +85,18 @@
 .umatrix th { font-size:11px; text-transform:uppercase; letter-spacing:.04em;
               color:var(--muted); font-weight:600 }
 .umatrix td.c, .umatrix th.c { text-align:center }
+
+/* A file input that stays focusable: visually gone, but its label-button
+   shows the focus ring when it is tabbed to. */
+.sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px;
+           overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; border:0 }
+.file-btn { position:relative; cursor:pointer }
+.file-btn:focus-within { outline:2px solid var(--navy); outline-offset:2px }
+
+/* Amount fixed by the line items */
+input[readonly] { background:var(--paper); color:var(--ink-soft) }
+
+/* Paper approval / void forms revealed under their button */
+.subform { border:1px solid var(--rule); border-radius:var(--r); background:var(--paper);
+           padding:12px 14px; margin-top:12px }
+.subform .hint { margin:0 0 10px }

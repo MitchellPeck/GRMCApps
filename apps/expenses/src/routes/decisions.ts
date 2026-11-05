@@ -1,56 +1,69 @@
 import { FastifyInstance } from "fastify";
 import { pool } from "../db";
 import { getIdentity } from "../identity";
-import { loadPermissions, requirePermission } from "../guard";
+import { loadPermissions, rejectBadIds } from "../guard";
 import { addEvent } from "../events";
-import { getSetting } from "../settings";
+import { getTolerances, selfApprovalAllowed } from "../settings";
 import {
+  approveRequest,
   completeActuals,
-  getRequest,
   markReimbursed,
+  returnForReapproval,
   setStatus,
 } from "../requests";
 import {
   DecisionAction,
+  checkActuals,
   checkDecision,
+  checkReimburse,
   needsReapproval,
   statusAfterDecision,
 } from "../lifecycle";
+import { isIsoDate, parseMoney, todayIso } from "../validate";
+import { Refusal, checkVersion, mutate } from "./requests";
 
 const ACTIONS: DecisionAction[] = ["approve", "reject", "request_changes"];
 
-async function selfApprovalAllowed(): Promise<boolean> {
-  return (await getSetting(pool, "allow_self_approval")) === "true";
+// A date someone typed for something that already happened.
+function pastDate(raw: unknown, what: string): string {
+  const s = String(raw ?? "").trim();
+  if (!isIsoDate(s)) throw new Refusal(400, `Enter the date ${what}.`);
+  if (s > todayIso()) throw new Refusal(400, `The date ${what} can't be in the future.`);
+  return s;
 }
 
 export async function decisionRoutes(app: FastifyInstance): Promise<void> {
+  rejectBadIds(app);
+
   app.post("/api/requests/:id/decision", async (req, reply) => {
     const { id } = req.params as { id: string };
-    const b = (req.body ?? {}) as { action?: string; comment?: string };
+    const b = (req.body ?? {}) as { action?: string; comment?: string; version?: unknown };
     const action = String(b.action ?? "") as DecisionAction;
     if (!ACTIONS.includes(action)) {
       return reply.code(400).send({ ok: false, error: "Unknown decision." });
     }
-
-    const found = await getRequest(pool, Number(id));
-    if (!found) return reply.code(404).send({ ok: false, error: "Request not found." });
-
     const identity = getIdentity(req);
     const perms = await loadPermissions(req);
-    const comment = String(b.comment ?? "");
-    const guard = checkDecision(
-      found.request, identity.email, perms, action, comment, await selfApprovalAllowed()
-    );
-    if (!guard.ok) return reply.code(guard.status).send({ ok: false, error: guard.error });
+    const comment = String(b.comment ?? "").trim();
+    const allowSelf = await selfApprovalAllowed(pool);
 
-    const status = statusAfterDecision(action);
-    await setStatus(pool, Number(id), status, {
-      approvalMethod: action === "approve" ? "digital" : null,
-      approvedByEmail: action === "approve" ? identity.email : null,
-      approvedAt: action === "approve" ? new Date().toISOString() : null,
+    return mutate(reply, Number(id), async (db, found) => {
+      const guard = checkDecision(found.request, identity.email, perms, action, comment, allowSelf);
+      if (!guard.ok) throw new Refusal(guard.status, guard.error);
+      // After the rules, so "already decided" reads as that and not as stale.
+      checkVersion(found, b.version, true);
+
+      const status = statusAfterDecision(action);
+      if (action === "approve") {
+        await approveRequest(db, Number(id), {
+          method: "digital", byEmail: identity.email, at: new Date().toISOString(),
+        });
+      } else {
+        await setStatus(db, Number(id), status);
+      }
+      await addEvent(db, Number(id), status, identity, comment);
+      return { ok: true, status };
     });
-    await addEvent(pool, Number(id), status, identity, comment);
-    return { ok: true, status };
   });
 
   // The paper path, kept so the office can transition gradually. It runs the
@@ -58,114 +71,94 @@ export async function decisionRoutes(app: FastifyInstance): Promise<void> {
   // recorded, so both eras sit in one log correctly labelled.
   app.post("/api/requests/:id/paper-approval", async (req, reply) => {
     const { id } = req.params as { id: string };
-    const b = (req.body ?? {}) as { approvedOn?: string; note?: string };
-
-    const found = await getRequest(pool, Number(id));
-    if (!found) return reply.code(404).send({ ok: false, error: "Request not found." });
-
+    const b = (req.body ?? {}) as { approvedOn?: string; note?: string; version?: unknown };
     const identity = getIdentity(req);
     const perms = await loadPermissions(req);
-    const guard = checkDecision(
-      found.request, identity.email, perms, "approve", "", await selfApprovalAllowed()
-    );
-    if (!guard.ok) return reply.code(guard.status).send({ ok: false, error: guard.error });
+    const allowSelf = await selfApprovalAllowed(pool);
 
-    const approvedOn = String(b.approvedOn ?? "").trim();
-    await setStatus(pool, Number(id), "approved", {
-      approvalMethod: "paper",
-      approvedByEmail: identity.email,
-      approvedAt: approvedOn ? new Date(`${approvedOn}T12:00:00Z`).toISOString() : new Date().toISOString(),
+    return mutate(reply, Number(id), async (db, found) => {
+      const guard = checkDecision(found.request, identity.email, perms, "approve", "", allowSelf);
+      if (!guard.ok) throw new Refusal(guard.status, guard.error);
+      checkVersion(found, b.version, true);
+      const approvedOn = pastDate(b.approvedOn, "it was approved on paper");
+
+      await approveRequest(db, Number(id), {
+        method: "paper", byEmail: identity.email, at: `${approvedOn}T12:00:00Z`,
+      });
+      await addEvent(db, Number(id), "approved_on_paper", identity, String(b.note ?? "").trim(), {
+        approvedOn,
+      });
+      return { ok: true };
     });
-    await addEvent(pool, Number(id), "approved_on_paper", identity, String(b.note ?? ""), {
-      approvedOn: approvedOn || null,
-    });
-    return { ok: true };
   });
 
   // Completing an approved pre-purchase with what was actually spent.
   app.post("/api/requests/:id/actuals", async (req, reply) => {
     const { id } = req.params as { id: string };
-    const b = (req.body ?? {}) as { amount?: unknown; items?: unknown };
-
-    const found = await getRequest(pool, Number(id));
-    if (!found) return reply.code(404).send({ ok: false, error: "Request not found." });
-
-    const r = found.request;
+    const b = (req.body ?? {}) as { amount?: unknown; items?: unknown; version?: unknown };
     const identity = getIdentity(req);
     const perms = await loadPermissions(req);
-    const own = r.submitted_by_email.toLowerCase() === identity.email.toLowerCase();
-    if (!perms.manage && !own) {
-      return reply.code(403).send({ ok: false, error: "Only the submitter can complete this request." });
-    }
-    if (r.kind !== "pre_purchase") {
-      return reply.code(409).send({ ok: false, error: "Only a pre-purchase request is completed with actuals." });
-    }
-    if (r.status !== "approved") {
-      return reply.code(409).send({ ok: false, error: "This request has not been approved yet." });
-    }
+    const tol = await getTolerances(pool);
 
-    const amount = Number(b.amount) || 0;
-    const items = Array.isArray(b.items)
-      ? (b.items as Array<Record<string, unknown>>).map((i) => ({
-          title: String(i?.title ?? ""),
-          price: Number(i?.price) || 0,
-          autoType: (i?.autoType ?? null) as null,
-        }))
-      : found.items;
+    return mutate(reply, Number(id), async (db, found) => {
+      checkVersion(found, b.version);
+      const r = found.request;
+      const guard = checkActuals(r, identity.email, perms);
+      if (!guard.ok) throw new Refusal(guard.status, guard.error);
 
-    await completeActuals(pool, Number(id), amount, items);
+      const amount = parseMoney(b.amount);
+      if (amount === null || amount <= 0) throw new Refusal(400, "Enter what it actually cost.");
+      // No new items means the estimate's lines no longer describe the
+      // purchase, so they are replaced by one line for the actual amount.
+      const items = Array.isArray(b.items)
+        ? (b.items as Array<Record<string, unknown>>).map((i) => ({
+            title: String(i?.title ?? ""),
+            price: Number(i?.price) || 0,
+            autoType: null,
+          }))
+        : [{ title: r.reason || "Actual cost", price: amount, autoType: null }];
 
-    const pct = Number(await getSetting(pool, "overage_tolerance_pct")) || 0.1;
-    const abs = Number(await getSetting(pool, "overage_tolerance_abs")) || 25;
-    if (needsReapproval(r.estimated_amount, amount, pct, abs)) {
-      // Back to the approver, with both figures on the record so they can see
-      // exactly what changed.
-      await setStatus(pool, Number(id), "pending");
-      await addEvent(pool, Number(id), "reapproval_required", identity, "", {
-        estimate: r.estimated_amount,
+      await completeActuals(db, Number(id), amount, items);
+
+      const approved = r.approved_amount ?? r.estimated_amount;
+      if (needsReapproval(approved, amount, tol.pct, tol.abs)) {
+        // Back to the approver, with both figures on the record so they can see
+        // exactly what changed.
+        await returnForReapproval(db, Number(id));
+        await addEvent(db, Number(id), "reapproval_required", identity, "", {
+          estimate: approved,
+          actual: amount,
+        });
+        return { ok: true, reapprovalRequired: true };
+      }
+
+      await addEvent(db, Number(id), "actuals_completed", identity, "", {
+        estimate: approved,
         actual: amount,
       });
-      return { ok: true, reapprovalRequired: true };
-    }
-
-    await addEvent(pool, Number(id), "actuals_completed", identity, "", {
-      estimate: r.estimated_amount,
-      actual: amount,
+      return { ok: true, reapprovalRequired: false };
     });
-    return { ok: true, reapprovalRequired: false };
   });
 
-  app.post(
-    "/api/requests/:id/reimburse",
-    { preHandler: requirePermission("manage") },
-    async (req, reply) => {
-      const { id } = req.params as { id: string };
-      const b = (req.body ?? {}) as { paidOn?: string; reference?: string };
+  app.post("/api/requests/:id/reimburse", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const b = (req.body ?? {}) as { paidOn?: string; reference?: string; version?: unknown };
+    const identity = getIdentity(req);
+    const perms = await loadPermissions(req);
 
-      const found = await getRequest(pool, Number(id));
-      if (!found) return reply.code(404).send({ ok: false, error: "Request not found." });
+    return mutate(reply, Number(id), async (db, found) => {
+      checkVersion(found, b.version);
+      const guard = checkReimburse(found.request, identity.email, perms);
+      if (!guard.ok) throw new Refusal(guard.status, guard.error);
+      const paidOn = pastDate(b.paidOn, "it was paid");
+      const reference = String(b.reference ?? "").trim();
 
-      const r = found.request;
-      // Church-card money was never the person's to get back.
-      if (r.payment_method !== "reimbursement") {
-        return reply.code(409).send({ ok: false, error: "This request is not a reimbursement." });
-      }
-      if (r.status !== "approved") {
-        return reply.code(409).send({ ok: false, error: "This request has not been approved yet." });
-      }
-      if (r.kind === "pre_purchase" && !r.actuals_completed_at) {
-        return reply.code(409).send({
-          ok: false,
-          error: "Add the actual amount and receipts before reimbursing.",
-        });
-      }
-
-      const identity = getIdentity(req);
-      await markReimbursed(pool, Number(id), identity.email, String(b.paidOn ?? ""), String(b.reference ?? ""));
-      await addEvent(pool, Number(id), "reimbursed", identity, String(b.reference ?? ""), {
-        paidOn: String(b.paidOn ?? "") || null,
+      await markReimbursed(db, Number(id), identity.email, paidOn, reference);
+      await addEvent(db, Number(id), "reimbursed", identity, reference, {
+        paidOn,
+        amount: found.request.amount,
       });
       return { ok: true };
-    }
-  );
+    });
+  });
 }

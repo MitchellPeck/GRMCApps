@@ -9,6 +9,12 @@ import {
 } from "../app-users";
 import { checkPermissionChange } from "../permissions";
 
+// Only real booleans change a flag. The string "false" is truthy, and treating
+// it as a value is how the last-admin guard could be walked around.
+function flag(v: unknown): boolean | undefined {
+  return typeof v === "boolean" ? v : undefined;
+}
+
 export async function permissionRoutes(app: FastifyInstance): Promise<void> {
   // The approver picker is needed by anyone who can submit, so it is not gated
   // behind admin like the rest of this file.
@@ -41,11 +47,11 @@ export async function permissionRoutes(app: FastifyInstance): Promise<void> {
 
       await upsertPermissionRow(pool, email, {
         name: body.name === undefined ? undefined : String(body.name),
-        can_submit: body.can_submit as boolean | undefined,
-        can_submit_for_others: body.can_submit_for_others as boolean | undefined,
-        can_approve: body.can_approve as boolean | undefined,
-        can_manage: body.can_manage as boolean | undefined,
-        is_admin: body.is_admin as boolean | undefined,
+        can_submit: flag(body.can_submit),
+        can_submit_for_others: flag(body.can_submit_for_others),
+        can_approve: flag(body.can_approve),
+        can_manage: flag(body.can_manage),
+        is_admin: flag(body.is_admin),
         default_approver_email:
           body.default_approver_email === undefined
             ? undefined
