@@ -164,9 +164,24 @@
     if (panel) panel.classList.add("active");
   }
 
+  // #/r/<id> is a link to one request — what notification emails point at.
+  // Leaving the request clears it, so a reload lands where the user now is.
+  function clearLink() {
+    if (location.hash) history.replaceState(null, "", location.pathname + location.search);
+  }
+  function linkedId() {
+    var m = /^#\/r\/(\d+)$/.exec(location.hash);
+    return m ? Number(m[1]) : null;
+  }
+  window.addEventListener("hashchange", function () {
+    var id = linkedId();
+    if (id) openDetail(id);
+  });
+
   document.querySelectorAll(".tab").forEach(function (t) {
     t.addEventListener("click", function () {
       var name = t.getAttribute("data-tab");
+      clearLink();
       showTab(name);
       if (name === "history") loadHistory();
       if (name === "queue") loadQueue();
@@ -174,7 +189,7 @@
     });
   });
 
-  $("btn-back").addEventListener("click", function () { showTab("history"); loadHistory(); });
+  $("btn-back").addEventListener("click", function () { clearLink(); showTab("history"); loadHistory(); });
 
   // ── kind / payment drive the form ────────────────────────────────────────
   function required() {
@@ -711,10 +726,11 @@
       list.innerHTML = "";
       if (!data.requests.length) {
         list.innerHTML = '<div class="empty">Nothing is waiting on you.</div>';
-        return;
+        return 0;
       }
       data.requests.forEach(function (r) { list.appendChild(requestRow(r, openDetail)); });
-    } catch (err) { msg("queue-msg", err.message, "err"); }
+      return data.count;
+    } catch (err) { msg("queue-msg", err.message, "err"); return 0; }
   }
 
   async function loadHistory() {
@@ -749,6 +765,7 @@
     // A different request starts at the top; a redraw of this one stays put.
     if (detailId !== id) window.scrollTo(0, 0);
     detailId = id;
+    if (linkedId() !== id) history.replaceState(null, "", "#/r/" + id);
     showTab("detail");
     var body = $("detail-body");
     body.innerHTML = '<div class="empty">Loading…</div>';
@@ -1519,17 +1536,19 @@
       body.innerHTML = "";
       if (!data.totals.length) { body.innerHTML = '<div class="empty">No approved spend in that range.</div>'; return; }
       var t = el("table", "items");
-      t.innerHTML = "<thead><tr><th>Charge code</th><th>Requests</th><th>Total</th></tr></thead>";
+      t.innerHTML = "<thead><tr><th>Charge code</th><th>GL account</th><th>Requests</th><th>Total</th></tr></thead>";
       var tb = el("tbody");
       data.totals.forEach(function (row) {
         var tr = el("tr");
         tr.appendChild(el("td", "", displayCode(row.chargeCode)));
+        tr.appendChild(el("td", "", row.glAccount || "—"));
         tr.appendChild(el("td", "", String(row.count)));
         tr.appendChild(el("td", "num", fmtAmount(row.total)));
         tb.appendChild(tr);
       });
       var tr2 = el("tr");
       tr2.appendChild(el("td", "", "Total"));
+      tr2.appendChild(el("td", "", ""));
       tr2.appendChild(el("td", "", ""));
       tr2.appendChild(el("td", "num", fmtAmount(data.grandTotal)));
       tb.appendChild(tr2);
@@ -1541,11 +1560,30 @@
   $("btn-csv").addEventListener("click", function () {
     window.location.href = "/api/export.csv?" + reportQuery();
   });
+  $("btn-gl-csv").addEventListener("click", function () {
+    window.location.href = "/api/export-gl.csv?" + reportQuery();
+  });
 
   // ── settings ─────────────────────────────────────────────────────────────
   async function loadSettingsTab() {
     if (can("admin")) { loadPermissionsMatrix(); loadCardsAdmin(); }
     if (can("manage")) loadCodes();
+  }
+
+  // Mirrors ROLE_PRESETS in permissions.ts; the server applies the preset, this
+  // only shows which one a row matches.
+  var ROLES = [
+    ["submitter", "Submitter", { can_submit: 1 }],
+    ["approver", "Approver", { can_submit: 1, can_approve: 1 }],
+    ["assistant", "Office assistant", { can_submit: 1, can_submit_for_others: 1, can_manage: 1, can_pay: 1 }],
+    ["accountant", "Accountant (read-only)", { can_audit: 1 }]
+  ];
+  var ROLE_FLAGS = ["can_submit", "can_submit_for_others", "can_approve", "can_manage", "can_pay", "can_audit"];
+  function roleOf(p) {
+    var hit = ROLES.find(function (r) {
+      return ROLE_FLAGS.every(function (f) { return !!p[f] === !!r[2][f]; });
+    });
+    return hit ? hit[0] : null;
   }
 
   async function loadPermissionsMatrix() {
@@ -1566,11 +1604,11 @@
       // No "Edit own": revising your own undecided request comes with
       // submitting it, so there is nothing left to grant.
       var flags = [["can_submit", "Submit"], ["can_submit_for_others", "For others"],
-                   ["can_approve", "Approve"],
-                   ["can_manage", "Manage"], ["is_admin", "Admin"]];
+                   ["can_approve", "Approve"], ["can_manage", "Office"], ["can_pay", "Pay"],
+                   ["can_audit", "Read all"], ["is_admin", "Admin"]];
       list.innerHTML = "";
       var t = el("table", "umatrix");
-      t.innerHTML = "<thead><tr><th>User</th>" +
+      t.innerHTML = "<thead><tr><th>User</th><th>Role</th>" +
         flags.map(function (f) { return '<th class="c">' + f[1] + "</th>"; }).join("") +
         "<th>Default approver</th></tr></thead>";
       var tb = el("tbody");
@@ -1580,13 +1618,38 @@
         td.appendChild(el("strong", "", p.name || "—"));
         td.appendChild(el("div", "muted", p.email));
         tr.appendChild(td);
+        var rt = el("td");
+        var rsel = el("select");
+        rsel.setAttribute("aria-label", "Role for " + (p.name || p.email));
+        // "Custom" is offered only while the ticks match no role.
+        var fillRole = function () {
+          var r = roleOf(p);
+          setOptions(rsel, ROLES.map(function (x) { return [x[0], x[1]]; }), r ? undefined : "Custom");
+          selectValue(rsel, r || "");
+        };
+        fillRole();
+        rsel.addEventListener("change", async function () {
+          if (!rsel.value) return;
+          try {
+            await api("PUT", "/api/permissions/" + encodeURIComponent(p.email), { name: p.name || "", role: rsel.value });
+            msg("perm-msg", "Saved.", "ok");
+            loadPermissionsMatrix();
+          } catch (err) { msg("perm-msg", err.message, "err"); }
+        });
+        rt.appendChild(rsel);
+        tr.appendChild(rt);
         flags.forEach(function (f) {
           var c = el("td", "c");
           var box = el("input"); box.type = "checkbox"; box.checked = !!p[f[0]];
           box.addEventListener("change", async function () {
             var patch = { name: p.name || "" };
             patch[f[0]] = box.checked;
-            try { await api("PUT", "/api/permissions/" + encodeURIComponent(p.email), patch); msg("perm-msg", "Saved.", "ok"); }
+            try {
+              await api("PUT", "/api/permissions/" + encodeURIComponent(p.email), patch);
+              p[f[0]] = box.checked;
+              fillRole();
+              msg("perm-msg", "Saved.", "ok");
+            }
             catch (err) { box.checked = !box.checked; msg("perm-msg", err.message, "err"); }
           });
           c.appendChild(box);
@@ -1685,7 +1748,21 @@
     var line = el("div", "code-line" + (isSub ? " code-sub" : ""));
     line.appendChild(el("span", "code-num", node.code));
     line.appendChild(el("span", "code-label", node.label));
+    var gl = el("input", "code-gl");
+    gl.type = "text";
+    gl.value = node.gl_account || "";
+    gl.placeholder = "GL " + node.code;
+    gl.setAttribute("aria-label", "GL account for " + node.code);
+    gl.addEventListener("change", async function () {
+      try {
+        await api("PATCH", "/api/charge-codes/" + node.id, { glAccount: gl.value });
+        node.gl_account = gl.value.trim();
+        msg("codes-msg", "GL account saved.", "ok");
+      } catch (err) { msg("codes-msg", err.message, "err"); }
+    });
+    line.appendChild(gl);
     var x = el("button", "code-x", "×");
+    x.setAttribute("aria-label", "Delete " + node.code);
     x.addEventListener("click", async function () {
       if (!confirm("Delete " + node.code + " " + node.label + (isSub ? "?" : "? Its sub-codes go too."))) return;
       try { await api("DELETE", "/api/charge-codes/" + node.id); await loadCodes(); msg("codes-msg", "Deleted.", "ok"); }
@@ -1699,10 +1776,10 @@
     busy("btn-add-code", true, "Adding…");
     try {
       await api("POST", "/api/charge-codes", {
-        code: $("cc-code").value, label: $("cc-label").value,
+        code: $("cc-code").value, label: $("cc-label").value, glAccount: $("cc-gl").value,
         parentId: $("cc-parent").value ? Number($("cc-parent").value) : null
       });
-      $("cc-code").value = ""; $("cc-label").value = "";
+      $("cc-code").value = ""; $("cc-label").value = ""; $("cc-gl").value = "";
       await loadCodes();
       msg("codes-msg", "Code added.", "ok");
     } catch (err) { msg("codes-msg", err.message, "err"); }
@@ -1744,7 +1821,35 @@
     finally { busy("btn-save-defaults", false); }
   });
 
+  $("btn-save-mail").addEventListener("click", async function () {
+    busy("btn-save-mail", true, "Saving…");
+    try {
+      var body = { mailFrom: $("s_mailFrom").value };
+      if ($("s_resendKey").value.trim()) body.resendApiKey = $("s_resendKey").value.trim();
+      var data = await api("PUT", "/api/settings", body);
+      settings = data.settings;
+      $("s_resendKey").value = "";
+      renderSettings();
+      msg("mail-msg", "Saved.", "ok");
+    } catch (err) { msg("mail-msg", err.message, "err"); }
+    finally { busy("btn-save-mail", false); }
+  });
+
+  $("btn-test-mail").addEventListener("click", async function () {
+    busy("btn-test-mail", true, "Sending…");
+    try {
+      var data = await api("POST", "/api/settings/test-email", {});
+      msg("mail-msg", "Sent to " + data.to + ". Check that inbox (and its spam folder).", "ok", true);
+    } catch (err) { msg("mail-msg", err.message, "err"); }
+    finally { busy("btn-test-mail", false); }
+  });
+
   function renderSettings() {
+    $("s_mailFrom").value = settings.mailFrom || "";
+    $("resend-hint").textContent = (settings.hasResendKey
+      ? "A key is stored (" + settings.resendKeyHint + "). Leave blank to keep it."
+      : "No key stored yet — no emails will be sent.") +
+      (settings.appUrl ? " Links in emails open " + settings.appUrl + "." : "");
     $("s_org").value = settings.orgName || "";
     $("s_purchasedBy").value = settings.defaultPurchasedBy || "";
     $("s_card").value = settings.defaultCard || "";
@@ -1763,8 +1868,12 @@
       node.hidden = !can(node.getAttribute("data-needs"));
     });
     var maySubmit = can("submit");
+    var member = maySubmit || can("approve") || can("manage") || can("pay") || can("audit") || can("admin");
     $("submit-area").hidden = !maySubmit;
-    $("no-perms").hidden = maySubmit || can("approve") || can("manage") || can("admin");
+    $("no-perms").hidden = member;
+    // Someone who never submits has no use for the form as a front page.
+    $("tab-new").hidden = member && !maySubmit;
+    $("history-title").textContent = can("viewAll") ? "All requests" : "Your requests";
   }
 
   // ── boot ─────────────────────────────────────────────────────────────────
@@ -1791,6 +1900,17 @@
     applyKindPayment();
     applyDefaults();   // also loads the purchaser's cards
     renderItems();
-    loadQueue();
+    var waiting = await loadQueue();
+
+    // Land where this person's work is: the request a link points at, then
+    // decisions waiting on them, then — for anyone who does not submit — the
+    // screen they came for.
+    var linked = linkedId();
+    if (linked) openDetail(linked);
+    else if (can("approve") && waiting > 0) showTab("queue");
+    else if (!can("submit") && can("reports")) showTab("reports");
+    else if (!can("submit") && can("approve")) showTab("queue");
+    else if (!can("submit") && can("viewAll")) { showTab("history"); loadHistory(); }
+    else if (!can("submit") && can("admin")) { showTab("settings"); loadSettingsTab(); }
   })();
 })();

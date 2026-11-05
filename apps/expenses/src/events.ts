@@ -1,5 +1,6 @@
 import { Pool } from "pg";
 import { Identity } from "./identity";
+import { queueNotifications } from "./mailer";
 
 export type EventType =
   | "submitted"
@@ -41,6 +42,8 @@ export async function addEvent(
      VALUES ($1, $2, $3, $4, $5, $6)`,
     [requestId, type, actor.email, actor.name, comment, meta ? JSON.stringify(meta) : null]
   );
+  // Same connection, so inside the caller's transaction when there is one.
+  await queueNotifications(pool, requestId, type, actor, comment, meta);
 }
 
 export async function listEvents(pool: Pool, requestId: number): Promise<RequestEvent[]> {

@@ -5,17 +5,14 @@ import { loadPermissions, rejectBadIds, requireMember } from "../guard";
 import { addEvent } from "../events";
 import { getRequest } from "../requests";
 import { addReceipt, deleteReceipt, getReceipt, listReceipts, sha256 } from "../receipts";
-import { checkAddReceipts, isOwner } from "../lifecycle";
+import { canSee, checkAddReceipts, isOwner } from "../lifecycle";
 import { MAX_FILES, MAX_FILE_BYTES } from "./extract";
+import { EXTRACTABLE_TYPES } from "../extract";
 import { Refusal, mutate } from "./requests";
 
-const ACCEPTED = new Set([
-  "application/pdf",
-  "image/png",
-  "image/jpeg",
-  "image/webp",
-  "image/heic",
-]);
+// Everything receipt reading understands (EXTRACTABLE_TYPES), plus HEIC: an
+// iPhone original is kept as the record even where it cannot be read.
+const ACCEPTED = new Set([...EXTRACTABLE_TYPES, "image/heic"]);
 
 // Header values must be Latin-1, and a macOS screenshot name carries a narrow
 // no-break space — so the plain filename gets an ASCII stand-in and the real
@@ -28,30 +25,24 @@ export function contentDisposition(fileName: string): string {
 export async function receiptRoutes(app: FastifyInstance): Promise<void> {
   rejectBadIds(app);
 
-  // Metadata is open to anyone with app access, matching the request itself.
+  // Metadata goes to whoever can see the request itself.
   app.get("/api/requests/:id/receipts", { preHandler: requireMember }, async (req, reply) => {
     const { id } = req.params as { id: string };
     const found = await getRequest(pool, Number(id));
-    if (!found) return reply.code(404).send({ ok: false, error: "Request not found." });
+    if (!found || !canSee(found.request, getIdentity(req).email, await loadPermissions(req))) {
+      return reply.code(404).send({ ok: false, error: "Request not found." });
+    }
     return { ok: true, receipts: await listReceipts(pool, Number(id)) };
   });
 
-  // The bytes are not. A receipt scan routinely carries a home address, a
-  // partial card number and a signature, which the request's metadata does not
-  // — so viewing one is limited to the people who need it.
+  // The bytes go to the same people. A receipt scan routinely carries a home
+  // address and a partial card number, which is why visibility is per request
+  // and not app-wide.
   app.get("/api/requests/:id/receipts/:rid", async (req, reply) => {
     const { id, rid } = req.params as { id: string; rid: string };
     const found = await getRequest(pool, Number(id));
-    if (!found) return reply.code(404).send({ ok: false, error: "Request not found." });
-
-    const identity = getIdentity(req);
-    const perms = await loadPermissions(req);
-    const allowed =
-      perms.manage ||
-      isOwner(found.request, identity.email) ||
-      found.request.approver_email.toLowerCase() === identity.email.toLowerCase();
-    if (!allowed) {
-      return reply.code(403).send({ ok: false, error: "You cannot view this receipt." });
+    if (!found || !canSee(found.request, getIdentity(req).email, await loadPermissions(req))) {
+      return reply.code(404).send({ ok: false, error: "Request not found." });
     }
 
     const receipt = await getReceipt(pool, Number(id), Number(rid));

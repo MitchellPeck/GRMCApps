@@ -18,10 +18,10 @@
 
 <div class="layout">
   <div class="tabs">
-    <button class="tab active" data-tab="new">New request</button>
+    <button class="tab active" data-tab="new" id="tab-new">New request</button>
     <button class="tab" data-tab="queue">Awaiting you <span id="queue-count" class="tcount"></span></button>
     <button class="tab" data-tab="history">History</button>
-    <button class="tab" data-tab="reports" data-needs="manage" hidden>Reports</button>
+    <button class="tab" data-tab="reports" data-needs="reports" hidden>Reports</button>
     <button class="tab" data-tab="settings">Settings</button>
   </div>
 
@@ -154,7 +154,7 @@
   <!-- ── HISTORY ───────────────────────────────────────────────── -->
   <div class="panel" id="p-history">
     <div class="card">
-      <div class="ct">All requests</div>
+      <div class="ct" id="history-title">Your requests</div>
       <div id="history-msg"></div>
       <div class="grid3" style="margin-bottom:14px">
         <select id="h-stage">
@@ -196,7 +196,10 @@
         <button class="btn btn-primary" id="btn-report">Run</button>
       </div>
       <div id="report-body"><div class="empty">Choose a date range and run.</div></div>
-      <div class="btn-row"><button class="btn btn-gold" id="btn-csv">Download CSV</button></div>
+      <div class="btn-row">
+        <button class="btn btn-gold" id="btn-csv">Download all requests (CSV)</button>
+        <button class="btn" id="btn-gl-csv">Download totals by GL account (CSV)</button>
+      </div>
     </div>
   </div>
 
@@ -207,8 +210,13 @@
       <div id="perm-msg"></div>
       <div id="perm-list"><div class="empty">Loading&hellip;</div></div>
       <p class="hint" style="margin-top:12px">
-        Manage implies approve. Admin grants this screen only — it does not grant any expense
-        permission. You cannot remove the last administrator.
+        Pick a role, or tick boxes for anything in between.
+        <strong>Submitter</strong>: sends in their own requests and sees only those.
+        <strong>Approver</strong>: also approves what is sent to them.
+        <strong>Office assistant</strong>: enters requests for others, corrects them, pays reimbursements
+        and sees everything — but does not approve.
+        <strong>Accountant</strong>: sees every request and report, changes nothing.
+        Admin grants this Settings screen only. You cannot remove the last administrator.
       </p>
     </div>
 
@@ -229,12 +237,36 @@
       <div class="ct">Charge codes</div>
       <div id="codes-msg"></div>
       <div id="codes-list"><div class="empty">Loading&hellip;</div></div>
-      <div class="grid3" style="margin-top:16px">
-        <input type="text" id="cc-code" placeholder="Code, e.g. 7080">
-        <input type="text" id="cc-label" placeholder="Label, e.g. Livestream">
-        <select id="cc-parent"></select>
+      <div class="grid2" style="margin-top:16px">
+        <input type="text" id="cc-code" placeholder="Code, e.g. 7080" aria-label="Code">
+        <input type="text" id="cc-label" placeholder="Label, e.g. Livestream" aria-label="Label">
+      </div>
+      <div class="grid2">
+        <input type="text" id="cc-gl" placeholder="GL account (blank = same as code)" aria-label="GL account">
+        <select id="cc-parent" aria-label="Where it goes"></select>
       </div>
       <div class="btn-row"><button class="btn btn-gold" id="btn-add-code" data-default="Add code">Add code</button></div>
+      <p class="hint">The GL account is the chart-of-accounts number this code books to in the ledger.
+        Leave it blank when the code already is that number. A sub-code without one books to its
+        parent's account.</p>
+    </div>
+
+    <div class="card" data-needs="admin" hidden>
+      <div class="ct">Email notifications</div>
+      <div id="mail-msg"></div>
+      <p class="hint" style="margin-top:0">Emails tell people when something needs them: the approver when a
+        request arrives, the submitter when it is decided, the office when a reimbursement is ready to pay.
+        Nothing is sent until both fields below are saved.</p>
+      <div class="field"><label for="s_mailFrom">Send from</label>
+        <input type="text" id="s_mailFrom" placeholder="GRMC Expenses &lt;expenses@yourdomain.org&gt;">
+        <div class="hint">Must be an address on a domain you have verified in Resend.</div></div>
+      <div class="field"><label for="s_resendKey">Resend API key</label>
+        <input type="password" id="s_resendKey" placeholder="re_&hellip;" autocomplete="off">
+        <div class="hint" id="resend-hint"></div></div>
+      <div class="btn-row">
+        <button class="btn btn-primary" id="btn-save-mail" data-default="Save">Save</button>
+        <button class="btn" id="btn-test-mail" data-default="Send me a test email">Send me a test email</button>
+      </div>
     </div>
 
     <div class="card" data-needs="admin" hidden>

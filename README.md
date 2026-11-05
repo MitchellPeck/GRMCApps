@@ -246,7 +246,7 @@ between apps. Both are served to each app at `/assets/` (see *Shared UI* below).
   amount and receipts. If the actual exceeds the estimate by more than the
   greater of the two tolerances in Settings (10% or $25 by default), it goes
   back to the approver with both figures shown. Reimbursements are marked paid,
-  with a date and reference, by anyone with manage rights.
+  with a date and reference, by anyone with pay rights (never by the payee).
 
   **Who owns a request.** The submitter *and* the purchaser: when the office
   keys a purchase for someone, that person can add receipts, record the actual
@@ -262,12 +262,30 @@ between apps. Both are served to each app at `/assets/` (see *Shared UI* below).
   once it has been paid). Corrections to an approved total are measured against
   the approved amount, so small edits cannot walk it past the tolerance.
 
-  **Permissions** are per-app, on top of who the hub lets in: submit, submit on
-  another's behalf, edit own, approve, manage (implies approve; acts on
-  anyone's requests and edits charge codes) and admin (permissions, cards and
-  settings only — it grants no expense rights of its own). Each person can have
-  a default approver. The last administrator cannot be removed, and
+  **Permissions** are per-app, on top of who the hub lets in, and are set by
+  picking a role: **Submitter** (own requests only), **Approver** (also decides
+  what is sent to them), **Office assistant** (submits for others, corrects,
+  voids, pays, edits charge codes, sees everything — but does not approve) and
+  **Accountant** (reads every request and report, changes nothing). The flags
+  underneath stay editable: submit, for others, approve, office, pay, read all,
+  and admin (permissions, cards and settings only). Approve plus office decides
+  anyone's request. The office can record a signed paper approval in the
+  assigned approver's name. People see only requests they own, keyed in or were
+  asked to approve, unless they have office, pay or read-all. Each person can
+  have a default approver. The last administrator cannot be removed, and
   `mitchell.peck@graceresurrection.org` is restored if there is ever none.
+
+  **Email** goes through Resend once an admin saves a from address (on a
+  verified domain) and an API key under Settings → Email notifications; **Send
+  me a test email** checks both. Approvers hear about new and returned requests,
+  owners about decisions, payers about reimbursements ready to pay, payees when
+  paid. Emails are queued in the same transaction as the event, sent every 20
+  seconds, retried with back-off and dropped after five failures. Links open
+  `https://expenses.$BASE_DOMAIN/#/r/<id>` (override with `APP_URL`).
+
+  **Chart of accounts.** Each charge code can carry a GL account (blank = the
+  code itself; a sub-code without one uses its parent's). The CSV export has a
+  `gl_account` column, and Reports downloads totals per GL account.
 
   **Cards** hold a nickname, the last four digits (never a full number), a
   primary holder and additional users. *Charged to which card* is a dropdown of

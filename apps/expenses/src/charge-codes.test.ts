@@ -40,3 +40,19 @@ test("ordering follows sort then code", () => {
   ];
   assert.deepEqual(chargeCodeTree(unsorted).map((c) => c.code), ["5540", "7000"]);
 });
+
+test("glAccountFor: the sub-code's account, else the code's, else the code number itself", async () => {
+  const { glAccountFor } = await import("./charge-codes");
+  const mapped: ChargeCodeRow[] = [
+    { id: 1, code: "5540", label: "AV", parent_id: null, sort: 0, active: true, gl_account: "6100" },
+    { id: 2, code: "5404", label: "AV gear", parent_id: 1, sort: 0, active: true, gl_account: "1550" },
+    { id: 3, code: "5405", label: "Cables", parent_id: 1, sort: 1, active: true },
+    { id: 4, code: "7000", label: "Marketing", parent_id: null, sort: 1, active: false },
+  ];
+  assert.equal(glAccountFor(mapped, "5540", "5404"), "1550");
+  assert.equal(glAccountFor(mapped, "5540", "5405"), "6100");
+  assert.equal(glAccountFor(mapped, "5540", ""), "6100");
+  assert.equal(glAccountFor(mapped, "7000", ""), "7000"); // inactive, unmapped: still books
+  assert.equal(glAccountFor(mapped, "9999", ""), "9999"); // a code since deleted
+  assert.equal(glAccountFor(mapped, "", ""), "");
+});

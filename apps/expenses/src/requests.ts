@@ -77,15 +77,22 @@ const SELECT_COLUMNS = `
   r.created_by_email, r.created_by_name, r.created_at,
   CASE WHEN c.id IS NULL THEN NULL ELSE c.nickname || ' ••' || c.last4 END AS card_label`;
 
-export async function listRequests(pool: Pool): Promise<ExpenseRequestRow[]> {
-  // Unfiltered by design: everyone with app access sees every request.
-  // Permissions govern what can be done, not what can be seen.
+// Without a scope, every request (reports, the office). With one, only what
+// that person may see — the same rule as lifecycle.canSee, in SQL.
+export async function listRequests(
+  pool: Pool,
+  scope?: { email: string; all: boolean }
+): Promise<ExpenseRequestRow[]> {
+  const limited = scope && !scope.all;
   const r = await pool.query<ExpenseRequestRow>(
     `SELECT ${SELECT_COLUMNS},
             (SELECT count(*)::int FROM request_items i WHERE i.request_id = r.id) AS item_count
        FROM requests r
        LEFT JOIN cards c ON c.id = r.card_id
-      ORDER BY r.created_at DESC, r.id DESC`
+      ${limited ? `WHERE $1 <> '' AND $1 IN (lower(r.submitted_by_email), lower(r.purchased_by_email),
+                                            lower(r.created_by_email), lower(r.approver_email))` : ""}
+      ORDER BY r.created_at DESC, r.id DESC`,
+    limited ? [scope.email.trim().toLowerCase()] : []
   );
   return r.rows;
 }

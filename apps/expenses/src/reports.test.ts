@@ -83,3 +83,22 @@ test("inPeriod drops undated rows once a range is set", () => {
   assert.equal(inPeriod("2026-02-01", { from: "2026-01-01", to: "2026-01-31" }), false);
   assert.equal(inPeriod("2026-01-15", { from: "2026-01-01", to: "2026-01-31" }), true);
 });
+
+test("spendByGl totals spend per GL account and the GL CSV lists them", async () => {
+  const { spendByGl, glCsv } = await import("./reports");
+  const base = { request_date: "2026-11-01", charge_code: "", sub_charge_code: "", vendor: "", reason: "",
+                 stage: "", kind: "post_purchase", payment_method: "church_card", submitted_by_email: "" };
+  const rows = [
+    { ...base, id: 1, amount: 10, status: "approved", gl_account: "6100" },
+    { ...base, id: 2, amount: 5.5, status: "approved", gl_account: "6100" },
+    { ...base, id: 3, amount: 99, status: "pending", gl_account: "6100" },
+    { ...base, id: 4, amount: 7, status: "approved", gl_account: "" },
+  ];
+  const totals = spendByGl(rows);
+  assert.deepEqual(totals, [
+    { glAccount: "(unmapped)", total: 7, count: 1 },
+    { glAccount: "6100", total: 15.5, count: 2 },
+  ]);
+  assert.equal(glCsv(totals), "gl_account,count,total\n(unmapped),1,7\n6100,2,15.5\n");
+  assert.match(toCsv([]).trim(), /,gl_account$/);
+});

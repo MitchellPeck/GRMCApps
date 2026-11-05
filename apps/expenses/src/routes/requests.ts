@@ -6,6 +6,7 @@ import { addEvent, listEvents } from "../events";
 import { listReceipts } from "../receipts";
 import { getTolerances, selfApprovalAllowed } from "../settings";
 import { listApprovers } from "../app-users";
+import { approvesAny, seesAll } from "../permissions";
 import { listCards } from "../cards";
 import { visibleCardsFor } from "../cards-logic";
 import {
@@ -25,6 +26,7 @@ import {
   PaymentMethod,
   RequestKind,
   allowedActions,
+  canSee,
   checkDelete,
   checkEdit,
   checkResubmit,
@@ -88,16 +90,24 @@ export async function mutate(
 export async function requestRoutes(app: FastifyInstance): Promise<void> {
   rejectBadIds(app);
 
-  app.get("/api/requests", { preHandler: requireMember }, async () => {
-    const rows = await listRequests(pool);
+  app.get("/api/requests", { preHandler: requireMember }, async (req) => {
+    const perms = await loadPermissions(req);
+    const rows = await listRequests(pool, {
+      email: getIdentity(req).email,
+      all: seesAll(perms) || approvesAny(perms),
+    });
     return { ok: true, requests: rows.map((r) => ({ ...r, stage: stageOf(r) })) };
   });
 
+  // A request you may not see is "not found", not "forbidden": its existence
+  // is nobody else's business either.
   app.get("/api/requests/:id", { preHandler: requireMember }, async (req, reply) => {
     const { id } = req.params as { id: string };
     const found = await getRequest(pool, Number(id));
-    if (!found) return reply.code(404).send({ ok: false, error: "Request not found." });
     const perms = await loadPermissions(req);
+    if (!found || !canSee(found.request, getIdentity(req).email, perms)) {
+      return reply.code(404).send({ ok: false, error: "Request not found." });
+    }
     return {
       ok: true,
       request: { ...found.request, stage: stageOf(found.request) },
@@ -364,7 +374,9 @@ export async function requestRoutes(app: FastifyInstance): Promise<void> {
     if (!comment) return reply.code(400).send({ ok: false, error: "Write a comment first." });
 
     const found = await getRequest(pool, Number(id));
-    if (!found) return reply.code(404).send({ ok: false, error: "Request not found." });
+    if (!found || !canSee(found.request, getIdentity(req).email, await loadPermissions(req))) {
+      return reply.code(404).send({ ok: false, error: "Request not found." });
+    }
 
     await addEvent(pool, Number(id), "comment", getIdentity(req), comment);
     return { ok: true };
@@ -381,7 +393,7 @@ export async function requestRoutes(app: FastifyInstance): Promise<void> {
     const allowSelf = await selfApprovalAllowed(pool);
     const rows = (await listRequests(pool)).filter((r) => {
       if (r.status !== "pending") return false;
-      if (!perms.manage && r.approver_email.toLowerCase() !== me) return false;
+      if (!approvesAny(perms) && r.approver_email.toLowerCase() !== me) return false;
       if (!allowSelf && (r.submitted_by_email.toLowerCase() === me || r.purchased_by_email.toLowerCase() === me)) {
         return false;
       }

@@ -24,6 +24,7 @@ async function setup() {
   await app.register((await import("./routes/requests")).requestRoutes);
   await app.register((await import("./routes/decisions")).decisionRoutes);
   await app.register((await import("./routes/receipts")).receiptRoutes);
+  await app.register((await import("./routes/reports")).reportRoutes);
 }
 after(async () => { if (app) await app.close(); if (pool) await pool.end(); });
 
@@ -36,17 +37,20 @@ let annCard = 0;
 beforeEach(async () => {
   if (skip) return;
   await setup();
-  await pool.query("TRUNCATE requests, cards, card_users, app_users RESTART IDENTITY CASCADE");
+  await pool.query("TRUNCATE requests, cards, card_users, app_users, notifications RESTART IDENTITY CASCADE");
   await pool.query(
-    `INSERT INTO app_users (email, name, can_submit, can_submit_for_others, can_approve, can_manage, is_admin) VALUES
-     ('office@x.org', 'Olive Office', true, true, true, true, true),
-     ('pastor@x.org', 'Pat Pastor',   true, false, true, false, false),
-     ('ann@x.org',    'Ann Member',   true, false, false, false, false)`
+    `INSERT INTO app_users (email, name, can_submit, can_submit_for_others, can_approve, can_manage, can_pay, can_audit, is_admin) VALUES
+     ('office@x.org', 'Olive Office', true,  true,  true,  true,  true,  false, true),
+     ('pastor@x.org', 'Pat Pastor',   true,  false, true,  false, false, false, false),
+     ('ann@x.org',    'Ann Member',   true,  false, false, false, false, false, false),
+     ('bob@x.org',    'Bob Member',   true,  false, false, false, false, false, false),
+     ('cpa@x.org',    'Cora CPA',     false, false, false, false, false, true,  false)`
   );
   annCard = (await pool.query(
     "INSERT INTO cards (last4, nickname, primary_email) VALUES ('1234', 'Ministry', 'ann@x.org') RETURNING id::int AS id"
   )).rows[0].id;
   await pool.query("UPDATE settings SET value = 'false' WHERE key = 'allow_self_approval'");
+  await pool.query("DELETE FROM settings WHERE key IN ('resend_api_key', 'mail_from')");
 });
 
 const today = new Date().toISOString().slice(0, 10);
@@ -195,7 +199,7 @@ test("a reimbursement is paid once, by someone else, on a real date", { skip }, 
     method: "POST", url: `/api/requests/${id}/reimburse`, headers: OFFICE, payload: { paidOn: today },
   });
   assert.equal(self.statusCode, 403);
-  await pool.query("UPDATE app_users SET can_manage = true WHERE email = 'pastor@x.org'");
+  await pool.query("UPDATE app_users SET can_pay = true WHERE email = 'pastor@x.org'");
   const badDate = await app.inject({
     method: "POST", url: `/api/requests/${id}/reimburse`, headers: PASTOR, payload: { paidOn: "11/5" },
   });
@@ -267,4 +271,109 @@ test("people with no Expenses access cannot read requests, and bad ids are a 400
   const stranger = as("stranger@x.org", "S");
   assert.equal((await app.inject({ url: "/api/requests", headers: stranger })).statusCode, 403);
   assert.equal((await app.inject({ url: "/api/requests/abc", headers: ANN })).statusCode, 400);
+});
+
+const BOB = as("bob@x.org", "Bob Member");
+const CPA = as("cpa@x.org", "Cora CPA");
+
+test("a member sees only their own requests; someone else's is not found", { skip }, async () => {
+  const annId = await submit();
+  const bobId = await submit(BOB, { paymentMethod: "reimbursement", cardId: null });
+
+  const list = async (h: Record<string, string>) =>
+    JSON.parse((await app.inject({ url: "/api/requests", headers: h })).body).requests.map((r: any) => r.id);
+  assert.deepEqual(await list(ANN), [annId]);
+  assert.deepEqual(await list(BOB), [bobId]);
+  assert.deepEqual((await list(PASTOR)).sort(), [annId, bobId]); // assigned to both
+  assert.deepEqual((await list(CPA)).sort(), [annId, bobId]);
+
+  assert.equal((await app.inject({ url: `/api/requests/${annId}`, headers: BOB })).statusCode, 404);
+  assert.equal((await app.inject({ url: `/api/requests/${annId}/receipts`, headers: BOB })).statusCode, 404);
+  const c = await app.inject({ method: "POST", url: `/api/requests/${annId}/comments`, headers: BOB, payload: { comment: "hi" } });
+  assert.equal(c.statusCode, 404);
+});
+
+test("the accountant reads everything and reports, but cannot change a thing", { skip }, async () => {
+  const id = await submit();
+  const d = await detail(id, CPA);
+  assert.equal(d.request.id, id);
+  assert.equal((await app.inject({ url: "/api/reports/by-code", headers: CPA })).statusCode, 200);
+  assert.equal((await app.inject({ url: "/api/export.csv", headers: CPA })).statusCode, 200);
+  assert.equal((await app.inject({ url: "/api/reports/by-code", headers: ANN })).statusCode, 403);
+
+  const v = d.request.version;
+  const tries = [
+    { method: "PATCH", url: `/api/requests/${id}`, payload: { reason: "x", version: v } },
+    { method: "POST", url: `/api/requests/${id}/decision`, payload: { action: "approve", version: v } },
+    { method: "POST", url: `/api/requests/${id}/paper-approval`, payload: { approvedOn: today, version: v } },
+    { method: "POST", url: `/api/requests/${id}/void`, payload: { reason: "x", version: v } },
+    { method: "DELETE", url: `/api/requests/${id}`, payload: { version: v } },
+    { method: "POST", url: "/api/requests", payload: body() },
+  ] as const;
+  for (const t of tries) {
+    const res = await app.inject({ ...t, headers: CPA });
+    assert.equal(res.statusCode, 403, `${t.method} ${t.url}: ${res.body}`);
+  }
+});
+
+test("the office records a paper approval in the approver's name, and cannot approve digitally", { skip }, async () => {
+  await pool.query("UPDATE app_users SET can_approve = false WHERE email = 'office@x.org'");
+  const id = await submit();
+  const d = await detail(id, OFFICE);
+  assert.equal(d.allowed.decide, false);
+  assert.equal(d.allowed.paperApprove, true);
+  assert.equal((await decide(id, "approve", OFFICE)).statusCode, 403);
+
+  const res = await app.inject({
+    method: "POST", url: `/api/requests/${id}/paper-approval`, headers: OFFICE,
+    payload: { approvedOn: today, version: d.request.version },
+  });
+  assert.equal(res.statusCode, 200, res.body);
+  const after = await detail(id);
+  assert.equal(after.request.approved_by_email, "pastor@x.org");
+  const ev = after.events.find((e: any) => e.type === "approved_on_paper");
+  assert.equal(ev.actor_email, "office@x.org");
+});
+
+async function mailOn() {
+  await pool.query(
+    `INSERT INTO settings (key, value) VALUES ('resend_api_key', 're_test'), ('mail_from', 'Expenses <x@x.org>')
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`
+  );
+}
+const outbox = async () =>
+  (await pool.query("SELECT to_email, kind, status, attempts FROM notifications ORDER BY id")).rows;
+
+test("with mail off nothing is queued; with it on, the approver is told in the same transaction", { skip }, async () => {
+  await submit();
+  assert.deepEqual(await outbox(), []);
+  await mailOn();
+  const id = await submit();
+  assert.deepEqual((await outbox()).map((n: any) => [n.to_email, n.kind]), [["pastor@x.org", "submitted"]]);
+  // A refused action queues nothing.
+  await app.inject({ method: "POST", url: `/api/requests/${id}/decision`, headers: PASTOR,
+                     payload: { action: "approve", version: 999 } });
+  assert.equal((await outbox()).length, 1);
+});
+
+test("the sender marks mail sent, retries a failure, and gives up after five tries", { skip }, async () => {
+  const { deliverPending } = await import("./mailer");
+  await mailOn();
+  await submit();
+  await submit();
+
+  const calls: any[] = [];
+  const ok: any = async (_url: string, init: any) => { calls.push(JSON.parse(init.body)); return new Response("{}", { status: 200 }); };
+  assert.equal(await deliverPending(pool, ok, 1), 1);
+  assert.equal(calls[0].to[0], "pastor@x.org");
+  assert.deepEqual((await outbox()).map((n: any) => n.status), ["sent", "pending"]);
+
+  const down: any = async () => new Response("boom", { status: 500 });
+  for (let i = 0; i < 5; i++) {
+    await pool.query("UPDATE notifications SET next_attempt_at = now() WHERE status = 'pending'");
+    assert.equal(await deliverPending(pool, down), 0);
+  }
+  const last = (await outbox())[1];
+  assert.equal(last.status, "failed");
+  assert.equal(last.attempts, 5);
 });

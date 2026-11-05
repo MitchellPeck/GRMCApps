@@ -6,6 +6,8 @@ export interface PermissionRow {
   can_edit_own: boolean;
   can_approve: boolean;
   can_manage: boolean;
+  can_pay: boolean;
+  can_audit: boolean;
   is_admin: boolean;
   default_approver_email: string | null;
 }
@@ -17,7 +19,13 @@ export interface Permissions {
   submit: boolean;
   submitForOthers: boolean;
   approve: boolean;
+  // The office: prepares requests for others, corrects approved ones, voids,
+  // keeps the charge codes. Does NOT approve — that is a separate grant, so the
+  // person who keys and pays the money is not also the one who signs it off.
   manage: boolean;
+  pay: boolean;
+  // Read-only: sees every request and report, changes nothing. For the CPA.
+  audit: boolean;
   admin: boolean;
   defaultApprover: string | null;
 }
@@ -27,9 +35,42 @@ export const NO_PERMISSIONS: Permissions = {
   submitForOthers: false,
   approve: false,
   manage: false,
+  pay: false,
+  audit: false,
   admin: false,
   defaultApprover: null,
 };
+
+// Derived, so no caller has to remember the combinations.
+// An approver who is also the office may decide any request, not just those
+// assigned to them — that is how the old "manage" behaved.
+export const approvesAny = (p: Permissions) => p.approve && p.manage;
+export const seesAll = (p: Permissions) => p.manage || p.pay || p.audit;
+export const seesReports = (p: Permissions) => p.manage || p.pay || p.audit;
+export const isMember = (p: Permissions) =>
+  p.submit || p.approve || p.manage || p.pay || p.audit || p.admin;
+
+export type RoleName = "submitter" | "approver" | "assistant" | "accountant";
+export type RoleFlags = Pick<
+  PermissionRow,
+  "can_submit" | "can_submit_for_others" | "can_approve" | "can_manage" | "can_pay" | "can_audit"
+>;
+
+// The four people the app is for. Admin is left out on purpose: it is a
+// separate grant for whoever keeps the settings.
+export const ROLE_PRESETS: Record<RoleName, RoleFlags> = {
+  submitter: { can_submit: true, can_submit_for_others: false, can_approve: false, can_manage: false, can_pay: false, can_audit: false },
+  approver: { can_submit: true, can_submit_for_others: false, can_approve: true, can_manage: false, can_pay: false, can_audit: false },
+  assistant: { can_submit: true, can_submit_for_others: true, can_approve: false, can_manage: true, can_pay: true, can_audit: false },
+  accountant: { can_submit: false, can_submit_for_others: false, can_approve: false, can_manage: false, can_pay: false, can_audit: true },
+};
+
+export function roleOf(row: RoleFlags): RoleName | null {
+  for (const [name, flags] of Object.entries(ROLE_PRESETS) as [RoleName, RoleFlags][]) {
+    if ((Object.keys(flags) as (keyof RoleFlags)[]).every((k) => !!row[k] === flags[k])) return name;
+  }
+  return null;
+}
 
 export const LAST_ADMIN_ERROR =
   "This is the last administrator for Expenses. Grant admin to someone else first.";
@@ -42,9 +83,10 @@ export function effectivePermissions(row: PermissionRow | null): Permissions {
     // can_edit_own is deliberately not mapped: revising your own undecided
     // request is a right that comes with submitting it, not a grant. The column
     // stays on app_users so no data is destroyed, but nothing reads it.
-    // manage implies approve — resolved here so no route has to check both.
-    approve: row.can_approve || row.can_manage,
+    approve: row.can_approve,
     manage: row.can_manage,
+    pay: row.can_pay,
+    audit: row.can_audit,
     // admin implies nothing, matching the hub's admin flag.
     admin: row.is_admin,
     defaultApprover: row.default_approver_email,

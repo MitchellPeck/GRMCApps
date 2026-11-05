@@ -3,7 +3,7 @@ import { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 type FastifyInstanceAddHook = FastifyInstance["addHook"];
 import { pool } from "./db";
 import { getIdentity } from "./identity";
-import { Permissions, effectivePermissions } from "./permissions";
+import { Permissions, effectivePermissions, isMember } from "./permissions";
 import { getPermissionRow } from "./app-users";
 
 declare module "fastify" {
@@ -22,10 +22,10 @@ export async function loadPermissions(req: FastifyRequest): Promise<Permissions>
 
 // Server-side enforcement. The UI also hides what a user cannot do, but that is
 // cosmetic — this is the check that matters.
-export function requirePermission(name: keyof Permissions) {
+export function requirePermission(name: keyof Permissions | ((p: Permissions) => boolean)) {
   return async function (req: FastifyRequest, reply: FastifyReply) {
     const perms = await loadPermissions(req);
-    if (!perms[name]) {
+    if (!(typeof name === "function" ? name(perms) : perms[name])) {
       return reply.code(403).send({
         ok: false,
         error: "You do not have permission to do that in Expenses.",
@@ -39,7 +39,7 @@ export function requirePermission(name: keyof Permissions) {
 // on extraction.
 export async function requireMember(req: FastifyRequest, reply: FastifyReply) {
   const p = await loadPermissions(req);
-  if (!(p.submit || p.approve || p.manage || p.admin)) {
+  if (!isMember(p)) {
     return reply.code(403).send({
       ok: false,
       error: "You have not been given access to Expenses yet. Ask an Expenses administrator.",

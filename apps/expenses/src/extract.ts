@@ -252,7 +252,8 @@ export async function extractDocuments(
   const started = Date.now();
   const key = await getSetting(pool, "anthropic_api_key");
   if (!key) throw new Error(MISSING_KEY_ERROR);
-  const client = new Anthropic({ apiKey: key });
+  // A stuck call must not hold the submit form forever: one retry, then give up.
+  const client = new Anthropic({ apiKey: key, timeout: 60_000, maxRetries: 1 });
   log.info(
     { docs: docs.length, totalBytes: docs.reduce((n, d) => n + d.buffer.length, 0) },
     "extraction starting"

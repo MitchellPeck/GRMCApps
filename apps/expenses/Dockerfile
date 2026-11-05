@@ -1,7 +1,7 @@
 FROM node:22-alpine
 WORKDIR /app
-COPY apps/expenses/package.json ./
-RUN npm install
+COPY apps/expenses/package.json apps/expenses/package-lock.json ./
+RUN npm ci
 COPY apps/expenses/tsconfig.json ./
 COPY apps/expenses/src ./src
 COPY shared/ui/grmc.css ./src/public/assets/grmc.css

@@ -1,4 +1,5 @@
 import { Pool } from "pg";
+import { config } from "./config";
 
 export async function getSetting(pool: Pick<Pool, "query">, key: string): Promise<string> {
   const r = await pool.query("SELECT value FROM settings WHERE key = $1", [key]);
@@ -43,12 +44,17 @@ export interface SettingsView {
   defaultApprovedBy: string;
   hasApiKey: boolean;
   apiKeyHint: string;
+  mailFrom: string;
+  hasResendKey: boolean;
+  resendKeyHint: string;
+  appUrl: string;
 }
 
 // Never returns the key itself — only whether one is set, plus a short hint,
 // matching how social-posts exposes its credentials.
 export async function getSettingsView(pool: Pool): Promise<SettingsView> {
   const key = await getSetting(pool, "anthropic_api_key");
+  const resend = await getSetting(pool, "resend_api_key");
   return {
     allowSelfApproval: (await getSetting(pool, "allow_self_approval")) === "true",
     overageTolerancePct: numberSetting(await getSetting(pool, "overage_tolerance_pct"), 0.1),
@@ -60,5 +66,9 @@ export async function getSettingsView(pool: Pool): Promise<SettingsView> {
     defaultApprovedBy: await getSetting(pool, "default_approved_by"),
     hasApiKey: key.length > 0,
     apiKeyHint: key ? key.substring(0, 10) + "..." : "",
+    mailFrom: await getSetting(pool, "mail_from"),
+    hasResendKey: resend.length > 0,
+    resendKeyHint: resend ? resend.substring(0, 6) + "..." : "",
+    appUrl: config.appUrl,
   };
 }

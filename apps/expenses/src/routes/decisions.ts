@@ -15,6 +15,7 @@ import {
   DecisionAction,
   checkActuals,
   checkDecision,
+  checkPaperApproval,
   checkReimburse,
   needsReapproval,
   statusAfterDecision,
@@ -77,16 +78,21 @@ export async function decisionRoutes(app: FastifyInstance): Promise<void> {
     const allowSelf = await selfApprovalAllowed(pool);
 
     return mutate(reply, Number(id), async (db, found) => {
-      const guard = checkDecision(found.request, identity.email, perms, "approve", "", allowSelf);
+      const guard = checkPaperApproval(found.request, identity.email, perms, allowSelf);
       if (!guard.ok) throw new Refusal(guard.status, guard.error);
       checkVersion(found, b.version, true);
       const approvedOn = pastDate(b.approvedOn, "it was approved on paper");
 
+      // The signature is the approver's even when the office types it in; the
+      // event's actor records who did the typing.
+      const signer = checkDecision(found.request, identity.email, perms, "approve", "x", allowSelf).ok
+        ? identity.email
+        : found.request.approver_email;
       await approveRequest(db, Number(id), {
-        method: "paper", byEmail: identity.email, at: `${approvedOn}T12:00:00Z`,
+        method: "paper", byEmail: signer, at: `${approvedOn}T12:00:00Z`,
       });
       await addEvent(db, Number(id), "approved_on_paper", identity, String(b.note ?? "").trim(), {
-        approvedOn,
+        approvedOn, signedBy: signer,
       });
       return { ok: true };
     });

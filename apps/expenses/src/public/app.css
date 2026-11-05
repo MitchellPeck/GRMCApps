@@ -100,3 +100,7 @@ input[readonly] { background:var(--paper); color:var(--ink-soft) }
 .subform { border:1px solid var(--rule); border-radius:var(--r); background:var(--paper);
            padding:12px 14px; margin-top:12px }
 .subform .hint { margin:0 0 10px }
+input[type=text].code-gl { width: 8em; flex: 0 0 8em; padding: 4px 8px }
+/* Seven flags plus a role and an approver: scroll inside the card, never past it. */
+#perm-list { overflow-x: auto }
+.umatrix select { min-width: 12.5em }

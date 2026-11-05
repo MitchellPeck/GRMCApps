@@ -14,6 +14,8 @@ import { cardRoutes } from "./routes/cards";
 import { decisionRoutes } from "./routes/decisions";
 import { receiptRoutes } from "./routes/receipts";
 import { reportRoutes } from "./routes/reports";
+import { pool } from "./db";
+import { startMailer } from "./mailer";
 
 const app = Fastify({ logger: true, bodyLimit: 2 * 1024 * 1024 });
 
@@ -37,7 +39,10 @@ app.get("/healthz", async () => ({ ok: true }));
 
 ensureSchema()
   .then(() => app.listen({ host: "0.0.0.0", port: config.port }))
-  .then(() => app.log.info(`expenses listening on ${config.port}`))
+  .then(() => {
+    app.log.info(`expenses listening on ${config.port}`);
+    startMailer(pool, app.log);
+  })
   .catch((err) => {
     app.log.error(err);
     process.exit(1);

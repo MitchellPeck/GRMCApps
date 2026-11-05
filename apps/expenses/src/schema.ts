@@ -158,4 +158,41 @@ END $$ LANGUAGE plpgsql;
 DROP TRIGGER IF EXISTS request_events_no_update ON request_events;
 CREATE TRIGGER request_events_no_update BEFORE UPDATE ON request_events
   FOR EACH ROW EXECUTE FUNCTION request_events_no_update();
+
+-- Roles (Phase 1). manage used to imply approve and pay; now each is its own
+-- grant, so the office can prepare and pay without approving. The backfill
+-- keeps everyone able to do what they did before, and runs exactly once —
+-- guarded by the column not existing yet — so an admin who later takes
+-- approve away from the office is not overruled on the next boot.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                  WHERE table_schema = current_schema()
+                    AND table_name = 'app_users' AND column_name = 'can_pay') THEN
+    ALTER TABLE app_users ADD COLUMN can_pay   boolean NOT NULL DEFAULT false;
+    ALTER TABLE app_users ADD COLUMN can_audit boolean NOT NULL DEFAULT false;
+    UPDATE app_users SET can_pay = can_manage, can_approve = (can_approve OR can_manage);
+  END IF;
+END $$;
+
+-- Email notifications, written in the same transaction as the event that
+-- caused them and delivered afterwards, so a mail outage never blocks work.
+CREATE TABLE IF NOT EXISTS notifications (
+  id              bigserial PRIMARY KEY,
+  request_id      bigint REFERENCES requests(id) ON DELETE CASCADE,
+  to_email        text NOT NULL,
+  kind            text NOT NULL,
+  subject         text NOT NULL,
+  body            text NOT NULL,
+  status          text NOT NULL DEFAULT 'pending',
+  attempts        integer NOT NULL DEFAULT 0,
+  last_error      text,
+  next_attempt_at timestamptz NOT NULL DEFAULT now(),
+  created_at      timestamptz NOT NULL DEFAULT now(),
+  sent_at         timestamptz
+);
+CREATE INDEX IF NOT EXISTS notifications_due_idx ON notifications (next_attempt_at) WHERE status = 'pending';
+
+-- Chart of accounts. Blank means the charge code is itself the GL account.
+ALTER TABLE charge_codes ADD COLUMN IF NOT EXISTS gl_account text NOT NULL DEFAULT '';
 `;

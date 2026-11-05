@@ -3,11 +3,13 @@ import { test } from "node:test";
 import {
   ExpenseRequest,
   allowedActions,
+  canSee,
   checkActuals,
   checkAddReceipts,
   checkDecision,
   checkDelete,
   checkEdit,
+  checkPaperApproval,
   checkReimburse,
   checkResubmit,
   checkVoid,
@@ -109,7 +111,9 @@ test("required fields follow the two dimensions independently", () => {
 // ── checkDecision / checkEdit ─────────────────────────────────────────────
 
 const approver: Permissions = { ...NO_PERMISSIONS, approve: true };
-const manager: Permissions = { ...NO_PERMISSIONS, approve: true, manage: true };
+const manager: Permissions = { ...NO_PERMISSIONS, approve: true, manage: true, pay: true };
+const assistant: Permissions = { ...NO_PERMISSIONS, submit: true, submitForOthers: true, manage: true, pay: true };
+const accountant: Permissions = { ...NO_PERMISSIONS, audit: true };
 const submitter: Permissions = NO_PERMISSIONS;
 
 test("the assigned approver may decide", () => {
@@ -431,4 +435,54 @@ test("line items are compared by content, not identity", () => {
   assert.deepEqual(describeEdit(before, { items: [{ title: "Chairs", price: 40 }] }), {});
   const changed = describeEdit(before, { items: [{ title: "Chairs", price: 58 }] });
   assert.deepEqual(Object.keys(changed), ["items"]);
+});
+
+// ── roles (Phase 1) ───────────────────────────────────────────────────────
+
+test("the office assistant cannot approve, even a request assigned to them", () => {
+  const r = req({ approver_email: "office@grmc.app" });
+  assert.equal(checkDecision(r, "office@grmc.app", assistant, "approve", "", false).ok, false);
+  assert.equal(allowedActions(r, "office@grmc.app", assistant, false).decide, false);
+});
+
+test("paying a reimbursement needs the pay grant, not manage", () => {
+  const r = req({ status: "approved", payment_method: "reimbursement" });
+  assert.equal(checkReimburse(r, "office@grmc.app", { ...NO_PERMISSIONS, manage: true }).ok, false);
+  assert.equal(checkReimburse(r, "office@grmc.app", { ...NO_PERMISSIONS, pay: true }).ok, true);
+});
+
+test("the office records a signed paper form for the assigned approver", () => {
+  assert.equal(checkPaperApproval(req(), "office@grmc.app", assistant, false).ok, true);
+  // ...but not for its own request, nor when the signer owns it.
+  assert.equal(checkPaperApproval(req({ submitted_by_email: "office@grmc.app" }), "office@grmc.app", assistant, false).ok, false);
+  assert.equal(checkPaperApproval(req({ purchased_by_email: "b@grmc.app" }), "office@grmc.app", assistant, false).ok, false);
+  assert.equal(checkPaperApproval(req({ approver_email: "" }), "office@grmc.app", assistant, false).ok, false);
+  // A plain submitter gets nothing from the paper path.
+  assert.equal(checkPaperApproval(req(), "c@grmc.app", submitter, false).ok, false);
+});
+
+test("canSee: owners, keyer and assigned approver see a request; strangers do not", () => {
+  const r = req({ purchased_by_email: "p@grmc.app", created_by_email: "k@grmc.app" });
+  for (const who of ["a@grmc.app", "p@grmc.app", "k@grmc.app", "B@grmc.app"]) {
+    assert.equal(canSee(r, who, submitter), true, who);
+  }
+  assert.equal(canSee(r, "c@grmc.app", approver), false);
+  assert.equal(canSee(r, "", submitter), false);
+});
+
+test("canSee: the office, the payer and the accountant see everything", () => {
+  assert.equal(canSee(req(), "c@grmc.app", assistant), true);
+  assert.equal(canSee(req(), "c@grmc.app", { ...NO_PERMISSIONS, pay: true }), true);
+  assert.equal(canSee(req(), "c@grmc.app", accountant), true);
+});
+
+test("the accountant can do nothing to a request but comment", () => {
+  const states = [req(), req({ status: "approved", payment_method: "reimbursement" }),
+                  req({ status: "approved", kind: "pre_purchase" })];
+  for (const r of states) {
+    const a = allowedActions(r, "cpa@grmc.app", accountant, false);
+    const { comment, ...rest } = a;
+    assert.equal(comment, true);
+    assert.ok(Object.values(rest).every((v) => v === false), JSON.stringify(a));
+  }
 });

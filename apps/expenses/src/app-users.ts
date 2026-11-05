@@ -4,7 +4,7 @@ import { PermissionRow } from "./permissions";
 export const BOOTSTRAP_ADMIN_EMAIL = "mitchell.peck@graceresurrection.org";
 
 const COLUMNS = `email, name, can_submit, can_submit_for_others, can_edit_own,
-                 can_approve, can_manage, is_admin, default_approver_email`;
+                 can_approve, can_manage, can_pay, can_audit, is_admin, default_approver_email`;
 
 const norm = (email: string) => email.trim().toLowerCase();
 
@@ -33,6 +33,8 @@ export interface PermissionFields {
   can_edit_own?: boolean;
   can_approve?: boolean;
   can_manage?: boolean;
+  can_pay?: boolean;
+  can_audit?: boolean;
   is_admin?: boolean;
   default_approver_email?: string | null;
 }
@@ -46,9 +48,11 @@ export async function upsertPermissionRow(
 ): Promise<void> {
   await pool.query(
     `INSERT INTO app_users (email, name, can_submit, can_submit_for_others, can_edit_own,
-                            can_approve, can_manage, is_admin, default_approver_email)
+                            can_approve, can_manage, is_admin, default_approver_email,
+                            can_pay, can_audit)
      VALUES ($1, COALESCE($2, ''), COALESCE($3, false), COALESCE($4, false), COALESCE($5, false),
-             COALESCE($6, false), COALESCE($7, false), COALESCE($8, false), $9)
+             COALESCE($6, false), COALESCE($7, false), COALESCE($8, false), $9,
+             COALESCE($11, false), COALESCE($12, false))
      ON CONFLICT (email) DO UPDATE SET
        name                   = COALESCE($2, app_users.name),
        can_submit             = COALESCE($3, app_users.can_submit),
@@ -57,6 +61,8 @@ export async function upsertPermissionRow(
        can_approve            = COALESCE($6, app_users.can_approve),
        can_manage             = COALESCE($7, app_users.can_manage),
        is_admin               = COALESCE($8, app_users.is_admin),
+       can_pay                = COALESCE($11, app_users.can_pay),
+       can_audit              = COALESCE($12, app_users.can_audit),
        default_approver_email = CASE WHEN $10 THEN $9 ELSE app_users.default_approver_email END,
        updated_at             = now()`,
     [
@@ -72,6 +78,8 @@ export async function upsertPermissionRow(
       // Whether the default approver is being set at all — null is a real
       // value ("no default"), so it cannot double as "leave it alone".
       f.default_approver_email !== undefined,
+      f.can_pay ?? null,
+      f.can_audit ?? null,
     ]
   );
 }
@@ -83,12 +91,11 @@ export async function removePermissionRow(pool: Pool, email: string): Promise<bo
   return r.rowCount !== null && r.rowCount > 0;
 }
 
-// Users who may be chosen as an approver.
+// Users who may be chosen as an approver. The office is not one unless it was
+// also given approve.
 export async function listApprovers(pool: Pool): Promise<PermissionRow[]> {
   const r = await pool.query<PermissionRow>(
-    `SELECT ${COLUMNS} FROM app_users
-      WHERE can_approve = true OR can_manage = true
-      ORDER BY email`
+    `SELECT ${COLUMNS} FROM app_users WHERE can_approve = true ORDER BY email`
   );
   return r.rows;
 }
@@ -108,8 +115,8 @@ export async function ensureExpensesAdmin(
 
   await pool.query(
     `INSERT INTO app_users (email, is_admin, can_submit, can_submit_for_others,
-                            can_edit_own, can_approve, can_manage)
-     VALUES ($1, true, true, true, true, true, true)
+                            can_edit_own, can_approve, can_manage, can_pay)
+     VALUES ($1, true, true, true, true, true, true, true)
      ON CONFLICT (email) DO UPDATE SET is_admin = true`,
     [BOOTSTRAP_ADMIN_EMAIL]
   );

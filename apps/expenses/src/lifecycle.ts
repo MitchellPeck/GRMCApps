@@ -1,4 +1,4 @@
-import { Permissions } from "./permissions";
+import { Permissions, approvesAny, seesAll } from "./permissions";
 
 export type RequestKind = "pre_purchase" | "post_purchase";
 export type PaymentMethod = "church_card" | "reimbursement";
@@ -20,6 +20,8 @@ export interface ExpenseRequest {
   // the purchaser has no account; either way the submitter is then the owner.
   purchased_by_email: string;
   approver_email: string;
+  // Who keyed it in. Optional so pure-logic callers need not invent one.
+  created_by_email?: string;
   amount: number;
   estimated_amount: number | null;
   approved_at: string | null;
@@ -94,6 +96,16 @@ export function isOwner(req: ExpenseRequest, email: string): boolean {
     (!!req.purchased_by_email && same(req.purchased_by_email, email));
 }
 
+// Who may see a request at all. The office, the payer and the CPA see every
+// one; everyone else sees what they own, keyed in, or were asked to approve.
+export function canSee(req: ExpenseRequest, email: string, perms: Permissions): boolean {
+  if (seesAll(perms) || approvesAny(perms)) return true;
+  if (!email.trim()) return false;
+  return isOwner(req, email) ||
+    (!!req.created_by_email && same(req.created_by_email, email)) ||
+    (!!req.approver_email && same(req.approver_email, email));
+}
+
 const ok: CheckResult = { ok: true };
 const deny = (status: number, error: string): CheckResult => ({ ok: false, status, error });
 const DEAD: RequestStatus[] = ["rejected", "withdrawn", "voided"];
@@ -122,8 +134,9 @@ export function checkDecision(
   if (!perms.approve) {
     return { ok: false, status: 403, error: "You do not have permission to approve expenses." };
   }
-  // A plain approver acts only on what is assigned to them; manage acts on any.
-  if (!perms.manage && !same(req.approver_email, actorEmail)) {
+  // A plain approver acts only on what is assigned to them. Approve together
+  // with the office grant acts on any.
+  if (!approvesAny(perms) && !same(req.approver_email, actorEmail)) {
     return { ok: false, status: 403, error: "Only the assigned approver can decide this request." };
   }
   // The control that makes the workflow worth having. manage does not bypass
@@ -263,7 +276,7 @@ export function checkReimburse(
   actorEmail: string,
   perms: Permissions
 ): CheckResult {
-  if (!perms.manage) return deny(403, "Only the office records reimbursements.");
+  if (!perms.pay) return deny(403, "Only the person who pays reimbursements can record one.");
   // Church-card money was never the person's to get back.
   if (req.payment_method !== "reimbursement") return deny(409, "This request is not a reimbursement.");
   if (req.status !== "approved") return deny(409, "This request has not been approved yet.");
@@ -272,6 +285,29 @@ export function checkReimburse(
   }
   if (req.reimbursed_at) return deny(409, "This request has already been marked paid.");
   if (isOwner(req, actorEmail)) return deny(403, "Someone else must record paying you.");
+  return ok;
+}
+
+// A paper form signed by the assigned approver. The approver may record it
+// themselves; so may the office, which is the whole point of the paper path —
+// but the office is only the clerk here, so it may not record approval of a
+// request it owns, and the signer must not be an owner either.
+export function checkPaperApproval(
+  req: ExpenseRequest,
+  actorEmail: string,
+  perms: Permissions,
+  allowSelfApproval: boolean
+): CheckResult {
+  const asApprover = checkDecision(req, actorEmail, perms, "approve", "x", allowSelfApproval);
+  if (asApprover.ok || !perms.manage) return asApprover;
+  if (req.status !== "pending") {
+    return deny(409, `This request is ${req.status} and is no longer awaiting a decision.`);
+  }
+  if (!req.approver_email.trim()) return deny(409, "Choose the approver who signed the form first.");
+  if (isOwner(req, actorEmail)) return deny(403, "You cannot record approval of your own request.");
+  if (!allowSelfApproval && isOwner(req, req.approver_email)) {
+    return deny(403, "The approver on this request is also its owner. Choose someone else.");
+  }
   return ok;
 }
 
@@ -316,14 +352,14 @@ export function allowedActions(
     edit: checkEdit(req, actorEmail, perms).ok,
     resubmit: checkResubmit(req, actorEmail, perms).ok,
     decide,
-    paperApprove: decide,
+    paperApprove: checkPaperApproval(req, actorEmail, perms, allowSelfApproval).ok,
     completeActuals: checkActuals(req, actorEmail, perms).ok,
     reimburse: checkReimburse(req, actorEmail, perms).ok,
     withdraw: del.ok && del.mode === "withdraw",
     delete: del.ok && del.mode === "hard",
     void: checkVoid(req, perms, "x").ok && !(del.ok && del.mode === "hard"),
     addReceipts: checkAddReceipts(req, actorEmail, perms).ok,
-    comment: true,
+    comment: canSee(req, actorEmail, perms),
   };
 }
 

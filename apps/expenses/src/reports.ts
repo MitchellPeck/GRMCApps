@@ -21,6 +21,7 @@ export interface ReportRow {
   paid_on?: string;
   paid_reference?: string;
   voided_reason?: string;
+  gl_account?: string;
 }
 
 // With a range set, an undated request belongs to no period rather than all.
@@ -68,7 +69,7 @@ const HEADERS = [
   "id", "date", "amount", "kind", "payment", "status", "stage",
   "charge_code", "sub_charge_code", "vendor", "reason", "submitted_by",
   "purchased_by", "card", "approver", "approval_method", "approved_at",
-  "paid_on", "paid_reference", "voided_reason",
+  "paid_on", "paid_reference", "voided_reason", "gl_account",
 ];
 
 // A leading =, +, - or @ makes a spreadsheet treat the cell as a formula, so a
@@ -96,10 +97,39 @@ export function toCsv(rows: ReportRow[]): string {
         r.vendor, r.reason, r.submitted_by_email,
         r.purchased_by ?? "", r.card ?? "", r.approver ?? "", r.approval_method ?? "",
         r.approved_at ?? "", r.paid_on ?? "", r.paid_reference ?? "", r.voided_reason ?? "",
+        r.gl_account ?? "",
       ]
         .map(escapeCell)
         .join(",")
     );
   }
+  return lines.join("\n") + "\n";
+}
+
+export interface GlTotal {
+  glAccount: string;
+  total: number;
+  count: number;
+}
+
+// Spend per GL account, for the books. Same spend rule as spendByCode.
+export function spendByGl(rows: ReportRow[]): GlTotal[] {
+  const totals = new Map<string, { total: number; count: number }>();
+  for (const r of rows) {
+    if (!isSpend(r)) continue;
+    const gl = r.gl_account || "(unmapped)";
+    const entry = totals.get(gl) ?? { total: 0, count: 0 };
+    entry.total += Number(r.amount) || 0;
+    entry.count += 1;
+    totals.set(gl, entry);
+  }
+  return [...totals.entries()]
+    .map(([glAccount, v]) => ({ glAccount, total: round2(v.total), count: v.count }))
+    .sort((a, b) => a.glAccount.localeCompare(b.glAccount));
+}
+
+export function glCsv(totals: GlTotal[]): string {
+  const lines = ["gl_account,count,total"];
+  for (const t of totals) lines.push([t.glAccount, t.count, t.total].map(escapeCell).join(","));
   return lines.join("\n") + "\n";
 }

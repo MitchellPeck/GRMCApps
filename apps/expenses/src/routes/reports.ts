@@ -1,8 +1,10 @@
 import { FastifyInstance } from "fastify";
 import { pool } from "../db";
 import { requirePermission } from "../guard";
+import { seesReports } from "../permissions";
 import { listRequests } from "../requests";
-import { ReportRow, inPeriod, spendByCode, toCsv } from "../reports";
+import { ReportRow, glCsv, inPeriod, spendByCode, spendByGl, toCsv } from "../reports";
+import { glAccountFor, listChargeCodes } from "../charge-codes";
 import { stageOf } from "../lifecycle";
 
 interface Filters {
@@ -14,6 +16,7 @@ interface Filters {
 
 async function filteredRows(f: Filters): Promise<ReportRow[]> {
   const rows = await listRequests(pool);
+  const codes = await listChargeCodes(pool);
   return rows
     .filter((r) => {
       if (!inPeriod(r.request_date, f)) return false;
@@ -43,13 +46,18 @@ async function filteredRows(f: Filters): Promise<ReportRow[]> {
       paid_on: r.reimbursed_at ? new Date(r.reimbursed_at).toISOString().slice(0, 10) : "",
       paid_reference: r.reimbursement_reference ?? "",
       voided_reason: r.void_reason ?? "",
+      gl_account: glAccountFor(codes, r.charge_code, r.sub_charge_code),
     }));
 }
 
 export async function reportRoutes(app: FastifyInstance): Promise<void> {
-  app.get("/api/reports/by-code", { preHandler: requirePermission("manage") }, async (req) => {
+  app.get("/api/reports/by-code", { preHandler: requirePermission(seesReports) }, async (req) => {
     const rows = await filteredRows(req.query as Filters);
-    const totals = spendByCode(rows);
+    const codes = await listChargeCodes(pool);
+    const totals = spendByCode(rows).map((t) => ({
+      ...t,
+      glAccount: t.chargeCode === "(none)" ? "" : glAccountFor(codes, t.chargeCode, ""),
+    }));
     return {
       ok: true,
       totals,
@@ -57,7 +65,16 @@ export async function reportRoutes(app: FastifyInstance): Promise<void> {
     };
   });
 
-  app.get("/api/export.csv", { preHandler: requirePermission("manage") }, async (req, reply) => {
+  app.get("/api/export-gl.csv", { preHandler: requirePermission(seesReports) }, async (req, reply) => {
+    const rows = await filteredRows(req.query as Filters);
+    const stamp = new Date().toISOString().slice(0, 10);
+    return reply
+      .header("content-type", "text/csv; charset=utf-8")
+      .header("content-disposition", `attachment; filename="grmc-expenses-gl-${stamp}.csv"`)
+      .send(glCsv(spendByGl(rows)));
+  });
+
+  app.get("/api/export.csv", { preHandler: requirePermission(seesReports) }, async (req, reply) => {
     const rows = await filteredRows(req.query as Filters);
     const stamp = new Date().toISOString().slice(0, 10);
     return reply

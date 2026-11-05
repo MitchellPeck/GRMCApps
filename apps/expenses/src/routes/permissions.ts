@@ -7,7 +7,7 @@ import {
   removePermissionRow,
   upsertPermissionRow,
 } from "../app-users";
-import { checkPermissionChange } from "../permissions";
+import { ROLE_PRESETS, RoleName, checkPermissionChange } from "../permissions";
 
 // Only real booleans change a flag. The string "false" is truthy, and treating
 // it as a value is how the last-admin guard could be walked around.
@@ -45,12 +45,22 @@ export async function permissionRoutes(app: FastifyInstance): Promise<void> {
         if (!guard.ok) return reply.code(409).send({ ok: false, error: guard.error });
       }
 
+      // A role sets all six expense flags at once; admin is left alone.
+      let preset: Partial<Record<string, boolean>> = {};
+      if (body.role !== undefined) {
+        const role = String(body.role) as RoleName;
+        if (!(role in ROLE_PRESETS)) return reply.code(400).send({ ok: false, error: "Unknown role." });
+        preset = ROLE_PRESETS[role];
+      }
+
       await upsertPermissionRow(pool, email, {
         name: body.name === undefined ? undefined : String(body.name),
-        can_submit: flag(body.can_submit),
-        can_submit_for_others: flag(body.can_submit_for_others),
-        can_approve: flag(body.can_approve),
-        can_manage: flag(body.can_manage),
+        can_submit: preset.can_submit ?? flag(body.can_submit),
+        can_submit_for_others: preset.can_submit_for_others ?? flag(body.can_submit_for_others),
+        can_approve: preset.can_approve ?? flag(body.can_approve),
+        can_manage: preset.can_manage ?? flag(body.can_manage),
+        can_pay: preset.can_pay ?? flag(body.can_pay),
+        can_audit: preset.can_audit ?? flag(body.can_audit),
         is_admin: flag(body.is_admin),
         default_approver_email:
           body.default_approver_email === undefined
