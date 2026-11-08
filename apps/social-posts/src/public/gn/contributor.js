@@ -50,6 +50,8 @@
     var d = parseDay(iso);
     return d ? DAYS[d.getDay()] + " " + MONTHS[d.getMonth()] + " " + d.getDate() : "";
   }
+  // Same order as effectiveImage() on the server: a linked event's picture wins.
+  function shownImage(p) { return p.eventId && p.eventImageUrl ? p.eventImageUrl : p.imageUrl || ""; }
 
   var toastTimer = null;
   function toast(msg, isErr) {
@@ -92,7 +94,10 @@
     fn().then(function (r) {
       if (r && r.ok) {
         toast(okMsg || "Saved. Thank you!");
-        return load(btn.closest(".gn-card"));
+        // A good reload redraws the card; if the reload fails the button must not stay on "Saving...".
+        return load(btn.closest(".gn-card")).then(function () {
+          if (btn.isConnected) { btn.disabled = false; btn.textContent = label; }
+        });
       }
       btn.disabled = false;
       btn.textContent = label;
@@ -117,6 +122,7 @@
     var d = p.details || {};
     var facts = [];
     var when = p.eventStartDate ? dayLabel(p.eventStartDate) : "";
+    if (when && p.eventEndDate && p.eventEndDate > p.eventStartDate) when += " – " + dayLabel(p.eventEndDate);
     if (when) facts.push(["Date", when]);
     if (d.when) facts.push(["When", d.when]);
     if (d.place) facts.push(["Where", d.place]);
@@ -139,7 +145,7 @@
       body.innerHTML = p.bodyHtml; // sanitized on the server before it was saved
       box.appendChild(body);
     }
-    var shownImg = p.imageUrl || p.eventImageUrl || "";
+    var shownImg = shownImage(p);
     if (/^https?:\/\//i.test(shownImg)) box.appendChild(h("img", { src: shownImg, alt: "" }));
     return box;
   }
@@ -224,7 +230,7 @@
     var date = textInput(p && p.eventStartDate ? p.eventStartDate.slice(0, 10) : "", "date");
     var editor = makeEditor(p ? p.bodyHtml : "");
     var det = {};
-    var imageUrl = p ? p.imageUrl || p.eventImageUrl || "" : "";
+    var imageUrl = p ? shownImage(p) : "";
     var uploading = false, picChanged = false;
     var preview = h("div", { class: "gn-pic" });
     var picInput = h("input", { type: "file", accept: PHOTO_TYPES.join(","), id: "pic" + Math.random().toString(36).slice(2) });
@@ -254,8 +260,8 @@
     });
     drawPic();
 
-    var parts = [field(isEvents ? "Name of the event or item" : "Heading (optional)", title)];
-    if (isEvents) parts.push(field("Date", date));
+    // R20: text sections have no heading; the email block has its own.
+    var parts = isEvents ? [field("Name of the event or item", title), field("Date", date)] : [];
     parts.push(h("div", { class: "field" }, h("label", null, "Your words"), editor.node));
     if (isEvents) {
       var more = h("details", { class: "gn-more" }, h("summary", null, "More details (optional)"));
@@ -271,8 +277,9 @@
     var cancel = h("button", { type: "button", class: "btn btn-secondary" }, "Cancel");
     save.addEventListener("click", function () {
       if (uploading) return;
-      var payload = { title: title.value.trim(), bodyHtml: editor.html() };
+      var payload = { bodyHtml: editor.html() };
       if (isEvents) {
+        payload.title = title.value.trim();
         if (!p && !payload.title) { toast("Please give it a name first.", true); title.focus(); return; }
         if (date.value) payload.startDate = date.value;
         Object.keys(det).forEach(function (k) {
@@ -399,14 +406,14 @@
     var issue = view.issue;
     if (issue) {
       app.appendChild(h("h1", null, "Please check your piece"));
-      app.appendChild(h("p", { class: "gn-issue" }, "Next issue · " + dayLabel(issue.issueDate), h("span", null, " · please check by Tue noon")));
+      app.appendChild(h("p", { class: "gn-issue" }, "Next issue · " + dayLabel(issue.issueDate), h("span", null, " · please check by " + (view.deadline || "Tue noon"))));
       if (!view.pieces.length) app.appendChild(h("div", { class: "gn-note" }, "You don't have anything in this issue yet. You can add something below."));
       view.pieces.forEach(function (p) { app.appendChild(pieceCard(p)); });
       var targets = view.sections.filter(function (s) { return s.kind === "events"; });
       if (targets.length) app.appendChild(addCard(targets));
     } else {
       app.appendChild(h("h1", null, "Grace Notes"));
-      app.appendChild(h("div", { class: "gn-note" }, "There's no issue open right now. Come back to this page when you get the next reminder."));
+      app.appendChild(h("div", { class: "gn-note" }, "Nothing to check right now. Next week's Grace Notes opens on Sunday evening."));
     }
     if (view.history && view.history.length) {
       app.appendChild(h("h2", null, "Earlier issues"));

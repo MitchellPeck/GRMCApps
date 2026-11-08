@@ -64,6 +64,9 @@ function copyBlock(html, text) {
     : Promise.reject(new Error('no rich clipboard'));
   rich.then(done, function () { copyText(text).then(done, fail); });
 }
+// Same order as effectiveImage() on the server: a linked event's picture wins.
+function shownImage(p) { return p.eventId && p.eventImageUrl ? p.eventImageUrl : p.imageUrl || ''; }
+function rangeOf(s, e) { return s ? (e && e > s ? dayLabel(s) + ' – ' + dayLabel(e) : dayLabel(s)) : ''; }
 function cardTitle(t) { return '<h3 class="ct">' + t + '</h3>'; }
 
 // ── rich text editor (copied approach from gn/contributor.js) ────────────────
@@ -173,8 +176,9 @@ function renderIssuePage(main, issueId) {
     }).join('') + '</section>' : '';
     if (!target) return renderStart(main, settings, histHtml);
     return Promise.all([call('GET', '/api/gracenotes/issues/' + encodeURIComponent(target.id)), call('GET', '/api/gracenotes/issues/' + encodeURIComponent(target.id) + '/sheet'),
-      call('GET', '/api/gracenotes/contributors'), call('GET', '/api/gracenotes/sections')]).then(function (d) {
-      drawIssue(main, d[0], d[1].blocks, d[2].contributors, d[3].sections, settings, histHtml);
+      call('GET', '/api/gracenotes/contributors'), call('GET', '/api/gracenotes/sections'),
+      api('GET', '/api/pipeline/events?archived=false')]).then(function (d) {
+      drawIssue(main, d[0], d[1].blocks, d[2].contributors, d[3].sections, settings, histHtml, d[4].ok ? d[4].events : []);
     });
   });
 }
@@ -195,19 +199,32 @@ function renderStart(main, settings, histHtml) {
   return Promise.resolve();
 }
 
-function drawIssue(main, data, blocks, people, sections, settings, histHtml) {
+function drawIssue(main, data, blocks, people, sections, settings, histHtml, events) {
   var issue = data.issue, sent = issue.status === 'sent';
   var mailOn = !!(settings.hasResend && settings.mailFrom && settings.publicBaseUrl);
   var link = {};
   people.forEach(function (p) { link[p.id] = p.link; });
   var pieces = data.pieces.filter(function (p) { return p.status !== 'dropped'; });
+  // Upcoming social events not already in this issue, for "Add an existing event" and "Link to event".
+  var taken = {};
+  pieces.forEach(function (p) { if (p.eventId) taken[p.eventId] = true; });
+  var today = isoOf(new Date());
+  var upcoming = (events || []).filter(function (e) { return !e.archived && e.startDate && e.startDate >= today && !taken[e.id]; })
+    .sort(function (a, b) { return a.startDate < b.startDate ? -1 : a.startDate > b.startDate ? 1 : 0; });
+  var eventOptions = upcoming.map(function (e) {
+    return '<option value="' + esc(e.id) + '">' + esc(rangeOf(e.startDate, e.endDate) + ' · ' + e.name) + '</option>';
+  }).join('');
+  var pickerHtml = function (act, id, label) {
+    return '<div class="gnx-pick"><select aria-label="Event">' + eventOptions + '</select>'
+      + '<button class="btn-sm" type="button" data-act="' + act + '" data-id="' + esc(id) + '">' + label + '</button></div>';
+  };
   var html = nav('') + '<div class="gnx-head"><h2>Grace Notes for ' + esc(dayLabel(issue.issueDate)) + '</h2>'
     + '<span class="pill ' + (sent ? 'pill-ok' : 'pill-pending') + '">' + (sent ? 'Sent' : 'Collecting') + '</span></div>';
   if (!mailOn && !sent) html += '<div class="alert alert-info">Email reminders are off. Set them up in <a href="#settings">Settings</a>.</div>';
 
   html += '<section class="card">' + cardTitle('Who has checked in') + (data.contributors.length ? data.contributors.map(function (c) {
     var st = STATE[c.state] || STATE.none;
-    var act = c.state === 'none' || sent ? '' : mailOn
+    var act = c.state === 'none' || sent ? '' : mailOn && c.hasEmail
       ? '<button class="btn-sm" type="button" data-act="nudge" data-id="' + esc(c.contributorId) + '">Nudge</button>'
       : '<button class="btn-sm" type="button" data-act="copy-link" data-url="' + esc(link[c.contributorId] || '') + '">Copy link</button>';
     return '<div class="gnx-row"><strong>' + esc(c.name) + '</strong><span class="pill ' + st[1] + '">' + st[0] + '</span>'
@@ -220,8 +237,9 @@ function drawIssue(main, data, blocks, people, sections, settings, histHtml) {
   html += '<section class="card">' + cardTitle('Pieces') + live.map(function (s) {
     var mine = pieces.filter(function (p) { return p.sectionId === s.id; });
     var body = s.kind === 'glance' ? '<p class="hint">Built automatically from the events calendar.</p>'
-      : mine.map(function (p) { return pieceHtml(p, s, data.reviews[p.id], sent); }).join('')
-        + (s.kind === 'events' && !sent ? '<button class="btn-sm" type="button" data-act="add-item" data-sid="' + esc(s.id) + '">Add an item</button>' : '')
+      : mine.map(function (p) { return pieceHtml(p, s, data.reviews[p.id], sent, !!eventOptions); }).join('')
+        + (s.kind === 'events' && !sent ? '<button class="btn-sm" type="button" data-act="add-item" data-sid="' + esc(s.id) + '">Add an item</button>'
+          + (eventOptions ? '<div class="field gnx-existing"><label>Add an existing event</label>' + pickerHtml('add-existing', s.id, 'Add') + '</div>' : '') : '')
         + (!mine.length && s.kind !== 'events' ? '<p class="hint">Nothing yet.</p>' : '');
     return '<div class="gnx-section" data-sid="' + esc(s.id) + '"><h4>' + esc(s.title) + '</h4>' + body + '</div>';
   }).join('') + '</section>';
@@ -258,8 +276,27 @@ function drawIssue(main, data, blocks, people, sections, settings, histHtml) {
     edit: function (b) { openEditor(b.closest('.gnx-piece'), byId[b.getAttribute('data-id')], sectionById); },
     'add-item': function (b) { openEditor(b.parentNode.insertBefore(document.createElement('div'), b), null, sectionById, issue.id, b.getAttribute('data-sid')); b.hidden = true; },
     review: function (b) {
+      var label = b.textContent;
       b.textContent = 'Reviewing…';
-      run(b, function () { return call('POST', '/api/gracenotes/pieces/' + encodeURIComponent(b.getAttribute('data-id')) + '/review', {}); }, null).then(null, function () {});
+      // On success the page redraws; on failure run() re-enables the button and the label comes back here.
+      run(b, function () { return call('POST', '/api/gracenotes/pieces/' + encodeURIComponent(b.getAttribute('data-id')) + '/review', {}); }, null)
+        .then(function () { if (b.isConnected) b.textContent = label; }, function () {});
+    },
+    'add-existing': function (b) {
+      var ev = b.parentNode.querySelector('select').value;
+      if (!ev) return;
+      run(b, function () {
+        return call('POST', '/api/gracenotes/issues/' + encodeURIComponent(issue.id) + '/sections/' + encodeURIComponent(b.getAttribute('data-id')) + '/items/from-event', { eventId: ev });
+      }, 'Added.');
+    },
+    'show-link': function (b) {
+      b.hidden = true;
+      b.insertAdjacentHTML('afterend', pickerHtml('link-event', b.getAttribute('data-id'), 'Link'));
+    },
+    'link-event': function (b) {
+      var ev = b.parentNode.querySelector('select').value;
+      if (!ev) return;
+      run(b, function () { return call('POST', '/api/gracenotes/pieces/' + encodeURIComponent(b.getAttribute('data-id')) + '/link', { eventId: ev }); }, 'Linked.');
     },
     decide: function (b) {
       b.disabled = true;
@@ -270,21 +307,22 @@ function drawIssue(main, data, blocks, people, sections, settings, histHtml) {
   wire(main, h);
 }
 
-function pieceHtml(p, section, review, sent) {
+function pieceHtml(p, section, review, sent, canLink) {
   var chip = { carried: ['Not checked', 'pill-pending'], confirmed: ['Confirmed', 'pill-ok'], changed: ['Changed', 'pill-info'], 'new': ['Added', 'pill-info'] }[p.status] || ['', ''];
   var title = p.title || p.eventName || '';
   var d = p.details || {};
-  var facts = [p.eventStartDate ? dayLabel(p.eventStartDate) : '', d.when, d.place, d.cost, d.contact].filter(Boolean).map(esc).join(' · ');
+  var facts = [rangeOf(p.eventStartDate, p.eventEndDate), d.when, d.place, d.cost, d.contact].filter(Boolean).map(esc).join(' · ');
   var isLetter = section.kind === 'text' && LETTER.test(section.title);
   var h = '<div class="gnx-piece" data-pid="' + esc(p.id) + '"><div class="gnx-piecehead">' + (title ? '<strong>' + esc(title) + '</strong>' : '')
     + '<span class="pill ' + chip[1] + '">' + chip[0] + '</span></div>'
     + (facts ? '<div class="hint">' + facts + '</div>' : '')
     + '<div class="gnx-body">' + (p.bodyHtml || '<span class="hint">No text.</span>') + '</div>' // sanitized on the server
-    + (/^https?:/i.test(p.imageUrl || '') ? '<img class="gnx-thumb" src="' + esc(p.imageUrl) + '" alt="">' : '');
+    + (/^https?:/i.test(shownImage(p)) ? '<img class="gnx-thumb" src="' + esc(shownImage(p)) + '" alt="">' : '');
   if (!sent) {
     h += '<div class="gnx-acts">' + (p.status === 'carried' ? '<button class="btn-sm" type="button" data-act="confirm" data-id="' + esc(p.id) + '">Confirm</button>' : '')
       + '<button class="btn-sm" type="button" data-act="edit" data-id="' + esc(p.id) + '">Edit</button>'
       + (section.kind === 'events' ? '<button class="btn-sm" type="button" data-act="drop" data-id="' + esc(p.id) + '">Drop</button>' : '')
+      + (section.kind === 'events' && !p.eventId && canLink ? '<button class="btn-sm" type="button" data-act="show-link" data-id="' + esc(p.id) + '">Link to event</button>' : '')
       + (isLetter ? '<button class="btn-sm" type="button" data-act="review" data-id="' + esc(p.id) + '">Review letter</button>' : '') + '</div>';
   }
   if (isLetter && review && review.length) h += reviewHtml(p.id, review, sent);
@@ -313,7 +351,8 @@ function openEditor(box, p, sectionById, issueId, sid) {
   var d = Object.assign({}, p ? p.details : {});
   var ed = makeEditor(p ? p.bodyHtml : '');
   box.className = 'gnx-piece editing';
-  box.innerHTML = '<div class="field"><label>' + (isEvents ? 'Name' : 'Heading (optional)') + '</label><input type="text" class="gnx-title"></div>'
+  // R20: text sections have no heading field; the Mailchimp block has its own.
+  box.innerHTML = (isEvents ? '<div class="field"><label>Name</label><input type="text" class="gnx-title"></div>' : '')
     + (isEvents ? '<div class="field"><label>Date</label><input type="date" class="gnx-date"></div>' : '') + '<div class="field gnx-edwrap"><label>Text</label></div>'
     + (isEvents ? '<div class="row2">' + [['when', 'Time'], ['place', 'Place'], ['cost', 'Cost'], ['contact', 'Contact'], ['link', 'Web link'], ['linkLabel', 'Link words']].map(function (x) {
       return '<div class="field"><label>' + x[1] + '</label><input type="text" data-d="' + x[0] + '"></div>';
@@ -321,15 +360,20 @@ function openEditor(box, p, sectionById, issueId, sid) {
     + '<div class="field"><label>Picture address (optional)</label><input type="text" class="gnx-img" placeholder="https://…"></div>'
     + '<div class="gnx-acts"><button class="btn btn-primary" type="button" data-x="save">Save</button><button class="btn btn-secondary" type="button" data-x="cancel">Cancel</button></div>';
   box.querySelector('.gnx-edwrap').appendChild(ed.node);
-  box.querySelector('.gnx-title').value = p ? p.title || p.eventName || '' : '';
+  if (isEvents) box.querySelector('.gnx-title').value = p ? p.title || p.eventName || '' : '';
   if (isEvents) box.querySelector('.gnx-date').value = p && p.eventStartDate ? p.eventStartDate.slice(0, 10) : '';
   box.querySelectorAll('[data-d]').forEach(function (i) { i.value = d[i.getAttribute('data-d')] || ''; });
-  box.querySelector('.gnx-img').value = p ? p.imageUrl || '' : '';
+  var startImg = p ? shownImage(p) : '';
+  box.querySelector('.gnx-img').value = startImg;
   box.querySelector('[data-x=cancel]').onclick = function (e) { e.stopPropagation(); reload(); };
   box.querySelector('[data-x=save]').onclick = function (e) {
     e.stopPropagation();
-    var payload = { title: box.querySelector('.gnx-title').value.trim(), bodyHtml: ed.html(), imageUrl: box.querySelector('.gnx-img').value.trim() };
+    var payload = { bodyHtml: ed.html() };
+    // Only a changed picture is sent, so saving never wipes the event's picture (as in contributor.js).
+    var img = box.querySelector('.gnx-img').value.trim();
+    if (img !== startImg) payload.imageUrl = img;
     if (isEvents) {
+      payload.title = box.querySelector('.gnx-title').value.trim();
       var date = box.querySelector('.gnx-date').value;
       if (date) payload.startDate = date;
       box.querySelectorAll('[data-d]').forEach(function (i) { var v = i.value.trim(); if (v) d[i.getAttribute('data-d')] = v; else delete d[i.getAttribute('data-d')]; });

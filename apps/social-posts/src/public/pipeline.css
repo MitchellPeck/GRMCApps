@@ -420,6 +420,9 @@ header a.btn-hdr{text-decoration:none}
 .gnx-body{margin:6px 0}
 .gnx-thumb{max-width:140px;border-radius:4px;display:block;margin:6px 0}
 .gnx-acts{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.gnx-pick{display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap;max-width:100%}
+.gnx-pick select{max-width:100%;min-width:0}
+.gnx-existing{margin-top:8px}
 .gnx-toolbar{display:flex;gap:4px;margin-bottom:4px}
 .gnx-toolbar button{border:1px solid var(--rule);background:var(--paper);border-radius:var(--r);padding:3px 10px;cursor:pointer}
 .gnx-editor{min-height:110px;border:1px solid var(--rule);border-radius:var(--r);padding:8px;background:#fff}

@@ -214,7 +214,10 @@ function eventBadges(e) {
   if (!e) return '';
   var out = '';
   if (e.reviewNote) out += '<span class="pl-gn">'+esc(e.reviewNote)+'</span>';
-  if (!e.imageUrl && !e.archived && e.startDate && e.startDate > S.meta.today) out += '<span class="pl-gn pl-gn-graphic">needs graphic</span>';
+  // R19: only events Grace Notes actually touches (flagged by a contributor, or in the issue being collected).
+  // The event page's row comes from getEvent, so the flag is read from the events list too.
+  var inGn = e.inGraceNotes || (eventById2(e.id) || {}).inGraceNotes;
+  if (!e.imageUrl && !e.archived && e.startDate && e.startDate > S.meta.today && (e.reviewNote || inGn)) out += '<span class="pl-gn pl-gn-graphic">needs graphic</span>';
   return out;
 }
 function eventById2(id) { return (S.events || []).filter(function(e){ return e.id === id; })[0]; }
