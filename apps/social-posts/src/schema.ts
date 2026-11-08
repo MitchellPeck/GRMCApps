@@ -245,4 +245,47 @@ ALTER TABLE metricool_links ADD COLUMN IF NOT EXISTS created_at timestamptz NOT 
 ALTER TABLE content_items ADD COLUMN IF NOT EXISTS split_from text;
 ALTER TABLE content_items ADD COLUMN IF NOT EXISTS split_at timestamptz;
 ALTER TABLE content_items ADD COLUMN IF NOT EXISTS from_metricool boolean NOT NULL DEFAULT false;
+CREATE TABLE IF NOT EXISTS gn_contributors (
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  name text NOT NULL, email text NOT NULL DEFAULT '',
+  token text NOT NULL UNIQUE, retired_at timestamptz, created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS gn_sections (
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  title text NOT NULL, kind text NOT NULL CHECK (kind IN ('text','events','glance')),
+  position integer NOT NULL, retired boolean NOT NULL DEFAULT false);
+CREATE TABLE IF NOT EXISTS gn_section_owners (
+  section_id text NOT NULL REFERENCES gn_sections(id) ON DELETE CASCADE,
+  contributor_id text NOT NULL REFERENCES gn_contributors(id) ON DELETE CASCADE,
+  PRIMARY KEY (section_id, contributor_id));
+CREATE TABLE IF NOT EXISTS gn_issues (
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  issue_date date NOT NULL UNIQUE,
+  status text NOT NULL DEFAULT 'collecting' CHECK (status IN ('collecting','sent')),
+  created_at timestamptz NOT NULL DEFAULT now(), sent_at timestamptz);
+CREATE TABLE IF NOT EXISTS gn_pieces (
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  issue_id text NOT NULL REFERENCES gn_issues(id) ON DELETE CASCADE,
+  section_id text NOT NULL REFERENCES gn_sections(id),
+  contributor_id text REFERENCES gn_contributors(id) ON DELETE SET NULL, -- item owner; NULL on text pieces
+  event_id text REFERENCES events(id) ON DELETE SET NULL,
+  title text NOT NULL DEFAULT '', body_html text NOT NULL DEFAULT '',
+  details jsonb NOT NULL DEFAULT '{}', -- {when, place, cost, link, linkLabel, contact}
+  image_url text NOT NULL DEFAULT '',
+  status text NOT NULL CHECK (status IN ('carried','confirmed','changed','dropped','new')),
+  position integer NOT NULL DEFAULT 0,
+  carried_from text, content_hash text NOT NULL DEFAULT '',
+  updated_by text NOT NULL DEFAULT '', updated_at timestamptz NOT NULL DEFAULT now());
+CREATE INDEX IF NOT EXISTS gn_pieces_issue_idx ON gn_pieces (issue_id);
+CREATE TABLE IF NOT EXISTS gn_reminders (
+  id bigserial PRIMARY KEY, issue_id text NOT NULL REFERENCES gn_issues(id) ON DELETE CASCADE,
+  contributor_id text NOT NULL REFERENCES gn_contributors(id) ON DELETE CASCADE,
+  kind text NOT NULL CHECK (kind IN ('monday','deadline','manual')),
+  status text NOT NULL CHECK (status IN ('sent','failed','skipped')), error text NOT NULL DEFAULT '',
+  created_at timestamptz NOT NULL DEFAULT now());
+CREATE UNIQUE INDEX IF NOT EXISTS gn_reminders_auto_once ON gn_reminders (issue_id, contributor_id, kind) WHERE kind <> 'manual';
+CREATE TABLE IF NOT EXISTS gn_letter_reviews (
+  piece_id text PRIMARY KEY REFERENCES gn_pieces(id) ON DELETE CASCADE,
+  suggestions jsonb NOT NULL, created_at timestamptz NOT NULL DEFAULT now());
+ALTER TABLE events ADD COLUMN IF NOT EXISTS image_url text NOT NULL DEFAULT '';
+ALTER TABLE events ADD COLUMN IF NOT EXISTS review_note text NOT NULL DEFAULT '';
 `;
