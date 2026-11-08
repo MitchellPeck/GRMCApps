@@ -18,6 +18,7 @@ export interface PieceInput {
 }
 
 const NOT_YOURS = "That piece isn't yours.";
+const GONE_OUT = "This issue has already gone out.";
 const BAD_DATE = "Use a real date like 2026-11-19.";
 
 const PIECE_SQL = `
@@ -67,6 +68,10 @@ async function guarded(db: Db, pieceId: string, actor: Actor): Promise<Result<Pi
   if (!piece) return fail("Piece not found.");
   const sections = await listSections(db, { includeRetired: true });
   if (!canTouch(piece, actor, sections)) return fail(NOT_YOURS);
+  if (actor.kind === "contributor") {
+    const issue = await getIssue(db, piece.issueId);
+    if (!issue || issue.status !== "collecting") return fail(GONE_OUT);
+  }
   return { ok: true, value: piece };
 }
 
@@ -128,11 +133,13 @@ export async function editPiece(db: Db, pieceId: string, input: PieceInput, acto
   const imageUrl = input.imageUrl ?? cur.imageUrl;
   const endDate = input.endDate === undefined ? undefined : input.endDate || null;
 
+  let datesChanged = false;
   if (cur.eventId) {
     const ev = (await db.query("SELECT to_char(start_date,'YYYY-MM-DD') s, to_char(end_date,'YYYY-MM-DD') e FROM events WHERE id = $1", [cur.eventId])).rows[0];
     const s = input.startDate ?? ev?.s ?? null;
     const e = endDate === undefined ? ev?.e ?? null : endDate;
     if (s && e && e < s) return fail("The end date is before the start date.");
+    datesChanged = s !== (ev?.s ?? null) || e !== (ev?.e ?? null);
   } else if (input.startDate && endDate && endDate < input.startDate) {
     return fail("The end date is before the start date.");
   }
@@ -158,7 +165,7 @@ export async function editPiece(db: Db, pieceId: string, input: PieceInput, acto
     let status = cur.status;
     if (cur.status !== "new") {
       const src = cur.carriedFrom ? await getPiece(c, cur.carriedFrom) : null;
-      status = src && pieceHash(src) === hash ? "confirmed" : "changed";
+      status = src && pieceHash(src) === hash && !datesChanged ? "confirmed" : "changed";
     }
     await c.query(
       `UPDATE gn_pieces SET title=$2, body_html=$3, details=$4, image_url=$5, event_id=$6, status=$7,
@@ -185,6 +192,7 @@ export async function dropPiece(db: Db, pieceId: string, actor: Actor): Promise<
 export async function addItem(db: Db, issueId: string, sectionId: string, input: PieceInput, actor: Actor): Promise<Result<Piece>> {
   const issue = await getIssue(db, issueId);
   if (!issue) return fail("Issue not found.");
+  if (actor.kind === "contributor" && issue.status !== "collecting") return fail(GONE_OUT);
   const section = (await listSections(db)).find((s) => s.id === sectionId);
   if (!section || section.kind !== "events") return fail("Items can only be added to an events section.");
   const title = (input.title ?? "").trim();

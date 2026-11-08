@@ -230,3 +230,33 @@ test("view is private", async () => {
   assert.ok(json.includes("Alpha item"));
   assert.ok(!json.includes("token"));
 });
+
+test("contributor cannot act on a sent issue; admin can", async () => {
+  const items = await sec("Events", "events");
+  const a = await person("A", "a@x.org");
+  const e = await ev("sent", "Orig", "2026-11-20");
+  const i = await issue("2026-11-04");
+  const p = await piece(i.id, items, { contributorId: a.id, eventId: e, title: "Orig", status: "carried" });
+  await pool.query("UPDATE gn_issues SET status='sent' WHERE id=$1", [i.id]);
+  const act: Actor = { kind: "contributor", contributor: a };
+  const gone = { ok: false, error: "This issue has already gone out." };
+  assert.deepEqual(await editPiece(pool, p, { title: "Hacked" }, act), gone);
+  assert.deepEqual(await confirmPiece(pool, p, act), gone);
+  assert.deepEqual(await dropPiece(pool, p, act), gone);
+  assert.deepEqual(await addItem(pool, i.id, items, { title: "N" }, act), gone);
+  assert.equal((await pool.query("SELECT name FROM events WHERE id=$1", [e])).rows[0].name, "Orig");
+  ok(await editPiece(pool, p, { title: "Admin fix" }, admin));
+});
+
+test("date-only contributor edit counts as changed", async () => {
+  const items = await sec("Events", "events");
+  const a = await person("Women of Grace", "w@x.org");
+  const e = await ev("d", "Brunch", "2026-11-20");
+  const i0 = await issue("2026-11-04");
+  await piece(i0.id, items, { contributorId: a.id, eventId: e, title: "Brunch", status: "confirmed" });
+  const i1 = await issue("2026-11-11");
+  const cur = (await pool.query("SELECT id FROM gn_pieces WHERE issue_id=$1", [i1.id])).rows[0].id;
+  const r = ok<{ status: string }>(await editPiece(pool, cur, { startDate: "2026-11-27" }, { kind: "contributor", contributor: a }));
+  assert.equal(r.status, "changed");
+  assert.equal(await note(e), "Changed by Women of Grace");
+});
