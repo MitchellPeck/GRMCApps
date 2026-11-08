@@ -214,6 +214,27 @@ export async function clearEventReview(db: Db, id: string): Promise<Result<true>
   return r.rowCount ? { ok: true, value: true } : fail("Event not found.");
 }
 
+/** Edit an event and set its picture as one unit: if either fails, neither is saved. */
+export async function updateEventAndImage(pool: Pool, id: string, input: EventInput, image?: string): Promise<Result<EventRow>> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    if (image !== undefined) {
+      const set = await setEventImage(client, id, image);
+      if (!set.ok) { await client.query("ROLLBACK"); return set; }
+    }
+    const r = await updateEvent(client, id, input);
+    if (!r.ok) { await client.query("ROLLBACK"); return r; }
+    await client.query("COMMIT");
+    return r;
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
 export async function setEventImage(db: Db, id: string, url: string): Promise<Result<true>> {
   const r = await db.query("UPDATE events SET image_url = $2 WHERE id = $1", [id, url]);
   return r.rowCount ? { ok: true, value: true } : fail("Event not found.");

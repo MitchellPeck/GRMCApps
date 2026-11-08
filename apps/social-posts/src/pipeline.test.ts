@@ -4,7 +4,7 @@ import { Pool } from "pg";
 import { SCHEMA_SQL } from "./schema";
 import {
   createContent, createEvent, createMedia, dashboardGaps, deleteContent, deleteEvent, getContent,
-  deleteMedia, getContentRow, getEvent, listContent, listMedia, updateContent, updateEvent, updateMedia,
+  deleteMedia, getContentRow, getEvent, listEvents, updateEventAndImage, listContent, listMedia, updateContent, updateEvent, updateMedia,
 } from "./pipeline/repo";
 import { BACKFILL_SETTING, backfillOnce, markSentToMetricool } from "./pipeline/sync";
 import { RUN_EVENTS } from "./pipeline/config";
@@ -2028,4 +2028,24 @@ test("a one-post sync ignores an id-less send more than a day old", async () => 
     assert.deepEqual(await syncWith("fail", { itemId: id }), NO_CHANGE);
     assert.equal((await linkRows(id)).length, 0);
   } finally { await clearSyncSettings(); }
+});
+
+test("an event edit and its image are saved together or not at all", async () => {
+  const e = await createEvent(pool, { name: "Atomic", kind: "event", startDate: "2026-12-01", endDate: "2026-12-02" });
+  const bad = await updateEventAndImage(pool, e.id, { endDate: "2026-11-01" }, "https://x.test/new.jpg");
+  assert.equal(bad.ok, false);
+  const after = await getEvent(pool, e.id);
+  assert.ok(after.ok);
+  if (after.ok) { assert.equal(after.value.event.imageUrl, ""); assert.equal(after.value.event.endDate, "2026-12-02"); }
+  const good = await updateEventAndImage(pool, e.id, { notes: "n" }, "https://x.test/new.jpg");
+  assert.ok(good.ok);
+  if (good.ok) assert.deepEqual([good.value.imageUrl, good.value.notes], ["https://x.test/new.jpg", "n"]);
+  assert.equal((await updateEventAndImage(pool, "00000000-0000-0000-0000-000000000000", {}, "https://x.test/a.jpg")).ok, false);
+});
+
+test("the events list carries imageUrl and reviewNote", async () => {
+  const e = await createEvent(pool, { name: "Listed", kind: "event" });
+  await pool.query("UPDATE events SET review_note = 'New from Pat', image_url = 'https://x.test/i.jpg' WHERE id = $1", [e.id]);
+  const row = (await listEvents(pool)).find((x) => x.id === e.id);
+  assert.deepEqual([row?.reviewNote, row?.imageUrl], ["New from Pat", "https://x.test/i.jpg"]);
 });

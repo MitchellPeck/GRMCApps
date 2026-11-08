@@ -183,6 +183,7 @@ function render() {
   $('pl-filters').hidden = r.view !== 'calendar';
   document.querySelector('.pl-toolbar').hidden = r.view === 'settings' || r.view === 'gracenotes';
   var main = $('pl-main');
+  if (r.view !== 'gracenotes') main.onclick = main.onsubmit = null; // GraceNotes sets these on the shared container
   var views = { dashboard: renderDashboard, calendar: renderCalendar, board: renderBoard, events: renderEvents, event: renderEvent,
     gap: renderGapList, recurring: renderRecurring, mine: renderMine, settings: renderSettings,
     gracenotes: function(m, a){ return window.GraceNotes.render(m, a); } };
@@ -208,11 +209,22 @@ function loadBoardItems(includeCancelled) {
   ]).then(function(res){ return { from: from, items: res[0].items.concat(res[1].items) }; });
 }
 
+// Grace Notes markers: what a contributor changed, and whether the event still lacks its graphic.
+function eventBadges(e) {
+  if (!e) return '';
+  var out = '';
+  if (e.reviewNote) out += '<span class="pl-gn">'+esc(e.reviewNote)+'</span>';
+  if (!e.imageUrl && !e.archived && e.startDate && e.startDate > S.meta.today) out += '<span class="pl-gn pl-gn-graphic">needs graphic</span>';
+  return out;
+}
+function eventById2(id) { return (S.events || []).filter(function(e){ return e.id === id; })[0]; }
+
 function renderDashboard(main) {
   return Promise.all([
     api('GET', '/api/pipeline/dashboard/summary'),
     api('GET', '/api/pipeline/dashboard/gaps'),
     loadBoardItems(false),
+    refreshEvents(),
   ]).then(function(res){
     var sum = res[0], gaps = res[1].gaps, board = res[2];
     var total = gaps.reduce(function(n, g){ return n + g.count; }, 0);
@@ -251,6 +263,13 @@ function renderDashboard(main) {
         }).join('')+'</ul>'
         : '<p class="empty">No dated events ahead. <a href="#events">Add an event</a> so its posts and captures have a home.</p>')
       + '</section>';
+    var fromGn = S.events.filter(function(e){ return e.reviewNote; });
+    if (fromGn.length) {
+      html += '<section class="card"><h3 class="ct">From Grace Notes</h3><ul class="pl-events-mini">'+fromGn.map(function(e){
+        return '<li><a href="#event/'+encodeURIComponent(e.id)+'"><span class="pl-swatch" style="background:'+esc(e.color)+'"></span>'
+          + '<span class="pl-ev-name">'+esc(e.name)+'</span><span class="muted">'+esc(rangeLabel(e.startDate, e.endDate))+'</span>'+eventBadges(e)+'</a></li>';
+      }).join('')+'</ul></section>';
+    }
     main.innerHTML = html;
   });
 }
@@ -556,7 +575,8 @@ function moveDateTime(id, date, time) {
 function renderBoard(main) {
   var showCancelled = !!storeGet('pipeline.boardCancelled');
   // Published work older than a month is history, not pipeline.
-  return loadBoardItems(showCancelled).then(function(res){
+  return Promise.all([loadBoardItems(showCancelled), refreshEvents()]).then(function(r2){
+    var res = r2[0];
     var items = res.items, from = res.from;
     var cols = S.meta.contentStatuses.filter(function(s){ return s !== 'cancelled' || showCancelled; });
     var html = '<div class="pl-boardhead"><p class="hint">Posts publishing from '+esc(shortDate(from))+' on, plus undated ones. Drag a card to another column to change its status.</p>'
@@ -576,7 +596,8 @@ function boardCard(i) {
   return '<article class="pl-bcard" draggable="true" data-kind="content" data-id="'+esc(i.id)+'" style="--ev:'+esc(i.eventColor || 'var(--rule)')+'">'
     + '<button class="pl-bcard-open" type="button" data-act="open" data-id="'+esc(i.id)+'">'
     + '<span class="pl-title">'+recMark(i)+esc(i.title)+'</span>'
-    + '<span class="pl-sub">'+esc(shortDate(i.publishDate))+(i.eventName ? ' · '+esc(i.eventName) : '')+'</span></button>'
+    + '<span class="pl-sub">'+esc(shortDate(i.publishDate))+(i.eventName ? ' · '+esc(i.eventName) : '')+'</span>'
+    + eventBadges(eventById2(i.eventId))+'</button>'
     + '<div class="pl-bcard-foot">'+platformChips(i.platforms)+mediaProgress(i)+'</div>'+linkMarks(i, true)
     + (i.publishCheck ? '<p class="pl-bcard-warn">'+esc(i.publishCheck)+'</p>' : '')
     + '</article>';
@@ -623,7 +644,7 @@ function renderEvents(main) {
         + (rows.length ? '<ul class="pl-events">'+rows.map(function(e){
             return '<li><a href="#event/'+encodeURIComponent(e.id)+'"><span class="pl-swatch" style="background:'+esc(e.color)+'"></span>'
               + '<span class="pl-ev-name">'+esc(e.name)+(e.archived ? ' <span class="muted">(archived)</span>' : '')+'</span>'
-              + '<span class="muted">'+esc(rangeLabel(e.startDate, e.endDate))+'</span>'
+              + '<span class="muted">'+esc(rangeLabel(e.startDate, e.endDate))+'</span>'+eventBadges(e)
               + '<span class="pl-count">'+(e.itemCount || 0)+' post'+(e.itemCount === 1 ? '' : 's')+'</span></a></li>';
           }).join('')+'</ul>' : '<p class="empty">None yet.</p>')
         + '</section>';
@@ -664,7 +685,13 @@ function renderEvent(main, id) {
       + '<section class="pl-evhead" style="--ev:'+esc(e.color)+'"><div><h2 class="pl-h2">'+esc(e.name)+(e.archived ? ' <span class="muted">(archived)</span>' : '')+'</h2>'
       + '<p class="muted">'+esc(label(e.kind))+(e.startDate || e.endDate ? ' · '+esc(rangeLabel(e.startDate, e.endDate)) : '')
       + (e.ownerEmail ? ' · Owner: '+esc(personName(e.ownerEmail)) : '')+'</p>'
-      + (e.notes ? '<p class="pl-notes">'+esc(e.notes)+'</p>' : '')+'</div>'
+      + (eventBadges(e) ? '<p class="pl-gnrow">'+eventBadges(e)
+          + (e.reviewNote ? ' <button class="btn-sm" type="button" data-act="mark-reviewed" data-id="'+esc(e.id)+'">Mark reviewed</button>' : '')+'</p>' : '')
+      + (e.notes ? '<p class="pl-notes">'+esc(e.notes)+'</p>' : '')
+      + '<div class="pl-evimg">'
+      + (/^https?:/i.test(e.imageUrl || '') ? '<img class="pl-evthumb" src="'+esc(e.imageUrl)+'" alt="Event image">' : '')
+      + '<button class="btn-sm" type="button" data-act="event-image">'+(e.imageUrl ? 'Replace event image' : 'Event image')+'</button>'
+      + '<input type="file" data-event-image="'+esc(e.id)+'" hidden accept="image/jpeg,image/png,image/gif,image/webp"></div></div>'
       + '<div class="pl-evactions"><button class="btn-sm" type="button" data-act="edit-event" data-id="'+esc(e.id)+'">Edit</button>'
       + '<button class="btn-sm" type="button" data-act="duplicate-event" data-id="'+esc(e.id)+'">Duplicate</button>'
       + (e.drafting && e.drafting.source && e.drafting.source.kind === 'buzzsprout'
@@ -1237,6 +1264,15 @@ function uploadFile(input, btn) {
       return { fileLink: d.url, fileName: d.name, fileType: d.type };
     })
     .catch(function(e){ btn.disabled = false; btn.textContent = was; toast(e.message, 'err'); throw e; });
+}
+
+function uploadEventImage(input) {
+  var id = input.getAttribute('data-event-image'), f = input.files[0];
+  if (f && !/^image\//.test(f.type)) { input.value = ''; toast('Choose a photo (JPG, PNG, GIF or WebP).', 'err'); return; }
+  uploadFile(input, input.parentNode.querySelector('[data-act=event-image]')).then(function(up){
+    return api('PATCH', '/api/pipeline/events/' + encodeURIComponent(id), { imageUrl: up.fileLink });
+  }).then(function(){ toast('Event image saved.', 'ok'); render(); })
+    .catch(function(err){ if (err && err.message) toast(err.message, 'err'); });
 }
 
 function uploadMediaFile(row, input) {
@@ -2290,6 +2326,11 @@ document.addEventListener('click', function(e){
     case 'clear-approval':
       mediaChange(el.closest('[data-media]').getAttribute('data-media'), { approvalId: null, approvalTitle: '' });
       break;
+    case 'mark-reviewed':
+      api('POST', '/api/pipeline/events/' + encodeURIComponent(el.getAttribute('data-id')) + '/reviewed', {})
+        .then(function(){ toast('Marked reviewed.', 'ok'); render(); }).catch(function(err){ toast(err.message, 'err'); });
+      break;
+    case 'event-image': el.parentNode.querySelector('[data-event-image]').click(); break;
     case 'new-event':
       $('pl-event-form').innerHTML = eventForm(); $('ef-name').focus(); break;
     case 'edit-event':
@@ -2320,6 +2361,7 @@ document.addEventListener('change', function(e){
   if (act === 'src-toggle' || ((el.name === 'publishDate' || el.name === 'eventId') && el.closest('form[data-form=content]'))) loadSourcePanel();
   if (el.hasAttribute('data-mfield')) return saveMediaField(el.closest('[data-media]'), el);
   if (el.hasAttribute('data-mcollect')) return toggleCollected(el.closest('[data-media]'), el.checked);
+  if (el.hasAttribute('data-event-image')) return uploadEventImage(el);
   if (el.hasAttribute('data-upload')) return uploadMediaFile(el.closest('[data-media]'), el);
   if (el.hasAttribute('data-sermon-file')) return uploadSermon(el);
   if (el.hasAttribute('data-upload-attach')) {

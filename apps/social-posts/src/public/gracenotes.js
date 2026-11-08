@@ -55,9 +55,12 @@ function plain(html) { var d = document.createElement('div'); d.innerHTML = html
 function copyBlock(html, text) {
   var done = function () { toast('Copied.', 'ok'); };
   var fail = function () { toast('Couldn’t copy. Select the text and copy it by hand.', 'err'); };
+  // Built inside the promise chain so a throw from ClipboardItem falls back to plain text.
   var rich = window.ClipboardItem && navigator.clipboard && navigator.clipboard.write
-    ? navigator.clipboard.write([new ClipboardItem({
-      'text/html': new Blob([html], { type: 'text/html' }), 'text/plain': new Blob([text], { type: 'text/plain' }) })])
+    ? Promise.resolve().then(function () {
+      return navigator.clipboard.write([new ClipboardItem({
+        'text/html': new Blob([html], { type: 'text/html' }), 'text/plain': new Blob([text], { type: 'text/plain' }) })]);
+    })
     : Promise.reject(new Error('no rich clipboard'));
   rich.then(done, function () { copyText(text).then(done, fail); });
 }
@@ -230,7 +233,8 @@ function drawIssue(main, data, blocks, people, sections, settings, histHtml) {
         + '<button class="btn-sm" type="button" data-act="copy-block" data-i="' + i + '">Copy</button></div>'
         + '<div class="gnx-preview">' + (b.html || '<span class="hint">Empty</span>') + '</div>' // sanitized on the server
         + (b.images.length ? '<div class="gnx-imgs">' + b.images.map(function (im) {
-          return '<figure><img src="' + esc(im.url) + '" alt="' + esc(im.alt) + '"><a class="btn-sm" href="' + esc(im.url) + '" download target="_blank" rel="noopener">Download</a></figure>';
+          var ok = /^https?:/i.test(im.url || '');
+          return '<figure>' + (ok ? '<img src="' + esc(im.url) + '" alt="' + esc(im.alt) + '"><a class="btn-sm" href="' + esc(im.url) + '" download target="_blank" rel="noopener">Download</a>' : '') + '</figure>';
         }).join('') + '</div>' : '') + '</div>';
     }).join('')
     + (sent ? '' : '<div class="btn-row"><button class="btn btn-primary" type="button" data-act="mark-sent">Mark sent</button></div>') + '</section>' + histHtml;
@@ -276,7 +280,7 @@ function pieceHtml(p, section, review, sent) {
     + '<span class="pill ' + chip[1] + '">' + chip[0] + '</span></div>'
     + (facts ? '<div class="hint">' + facts + '</div>' : '')
     + '<div class="gnx-body">' + (p.bodyHtml || '<span class="hint">No text.</span>') + '</div>' // sanitized on the server
-    + (/^https?:\/\//i.test(p.imageUrl || '') ? '<img class="gnx-thumb" src="' + esc(p.imageUrl) + '" alt="">' : '');
+    + (/^https?:/i.test(p.imageUrl || '') ? '<img class="gnx-thumb" src="' + esc(p.imageUrl) + '" alt="">' : '');
   if (!sent) {
     h += '<div class="gnx-acts">' + (p.status === 'carried' ? '<button class="btn-sm" type="button" data-act="confirm" data-id="' + esc(p.id) + '">Confirm</button>' : '')
       + '<button class="btn-sm" type="button" data-act="edit" data-id="' + esc(p.id) + '">Edit</button>'

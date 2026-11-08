@@ -37,7 +37,7 @@ import {
 import {
   clearEventReview, createContent, createEvent, createMedia, dashboardGaps, dashboardSummary, deleteContent, deleteEvent,
   deleteMedia, duplicateEvent, getContent, getEvent, listContent, listEvents, listMedia, updateContent, updateEvent,
-  setEventImage, updateMedia,
+  updateEventAndImage, updateMedia,
 } from "../pipeline/repo";
 
 const ICAL_SETTING = "pipeline_ical_token";
@@ -130,12 +130,8 @@ export async function pipelineRoutes(app: FastifyInstance): Promise<void> {
     const id = (req.params as { id: string }).id;
     // The picture Grace Notes shows for this event (set by hand, from an upload).
     const image = (req.body as Record<string, unknown> | null)?.imageUrl;
-    if (image !== undefined) {
-      if (typeof image !== "string") return { ok: false as const, error: "imageUrl must be text." };
-      const set = await setEventImage(pool, id, image.trim());
-      if (!set.ok) return set;
-    }
-    const r = await updateEvent(pool, id, input.value);
+    if (image !== undefined && typeof image !== "string") return { ok: false as const, error: "imageUrl must be text." };
+    const r = await updateEventAndImage(pool, id, input.value, image === undefined ? undefined : (image as string).trim());
     return r.ok ? { ok: true, event: r.value } : r;
   }));
 
