@@ -2,7 +2,7 @@
 import { Pool } from "pg";
 import { DEFAULT_TZ, localDateIn, localTimeIn, weekdayOf } from "../dates";
 import { getSetting } from "../settings";
-import { contributorStatus, createIssue, listIssues, liveIssue, nextIssueDate } from "./issues";
+import { contributorStatus, createIssue, fillOpenIssues, listIssues, liveIssue, nextIssueDate } from "./issues";
 import { FetchFn, remind } from "./mail";
 
 export interface Schedule {
@@ -66,6 +66,7 @@ export async function tick(db: Pool, now: Date = new Date(), fetchFn: FetchFn = 
     // Remind about the issue actually being collected, which may be later than this week's date; never a sent one.
     const issue = await liveIssue(db, today);
     if (!issue) continue;
+    await fillOpenIssues(db);
     // The deadline nudge belongs to that issue's own deadline: sent a week early it would say "by Tuesday"
     // about the wrong Tuesday and use up the one real nudge.
     if (a.kind === "deadline" && issue.issueDate !== a.issueDate) continue;

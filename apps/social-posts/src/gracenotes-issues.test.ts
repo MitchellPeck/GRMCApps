@@ -2,8 +2,8 @@ import { strict as assert } from "node:assert";
 import { test, before, after, beforeEach } from "node:test";
 import { Pool } from "pg";
 import { SCHEMA_SQL } from "./schema";
-import { createContributor, createSection, setSectionOwners } from "./gracenotes/repo";
-import { contributorStatus, createIssue, currentIssue, glanceHtml, listIssues, nextIssueDate, pieceHash, pieceOwnerIds } from "./gracenotes/issues";
+import { createContributor, createSection, setSectionOwners, updateSection } from "./gracenotes/repo";
+import { contributorStatus, createIssue, fillOpenIssues, currentIssue, glanceHtml, listIssues, nextIssueDate, pieceHash, pieceOwnerIds } from "./gracenotes/issues";
 
 const pool = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
 const GN = "gn_letter_reviews, gn_reminders, gn_pieces, gn_issues, gn_section_owners, gn_sections, gn_contributors";
@@ -155,4 +155,28 @@ test("carry does not throw on an impossible details.endDate", async () => {
   const n = await issue("2026-11-11");
   const { rows } = await pool.query("SELECT title FROM gn_pieces WHERE issue_id = $1", [n.id]);
   assert.deepEqual(rows.map((r) => r.title), []);
+});
+
+test("a text section added after an issue opens is filled into open issues only", async () => {
+  const sentR = await createIssue(pool, "2026-11-04");
+  assert.ok(sentR.ok);
+  await pool.query("UPDATE gn_issues SET status='sent' WHERE id=$1", [sentR.value.id]);
+  const openR = await createIssue(pool, "2026-11-11");
+  assert.ok(openR.ok);
+  const letter = await sec("Pastor Message", "text");
+  await sec("Missions", "events");
+  await sec("Grace at a Glance", "glance");
+  const added = await fillOpenIssues(pool);
+  assert.equal(added, 1);
+  const open = await pool.query("SELECT section_id, status FROM gn_pieces WHERE issue_id=$1", [openR.value.id]);
+  assert.deepEqual(open.rows, [{ section_id: letter, status: "carried" }]);
+  const sent = await pool.query("SELECT 1 FROM gn_pieces WHERE issue_id=$1", [sentR.value.id]);
+  assert.equal(sent.rows.length, 0);
+  assert.equal(await fillOpenIssues(pool), 0, "running again adds nothing");
+  const retired = await updateSection(pool, letter, { retired: true });
+  assert.ok(retired.ok);
+  const other = await sec("Prayer List", "text");
+  assert.equal(await fillOpenIssues(pool), 1);
+  const after = await pool.query("SELECT section_id FROM gn_pieces WHERE issue_id=$1 ORDER BY section_id", [openR.value.id]);
+  assert.deepEqual(after.rows.map((r) => r.section_id).sort(), [letter, other].sort());
 });

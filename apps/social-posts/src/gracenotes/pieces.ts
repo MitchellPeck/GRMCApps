@@ -3,7 +3,7 @@
 import { Pool, PoolClient } from "pg";
 import { Result, isIsoDate } from "../pipeline/rules";
 import { createEvent, updateEvent } from "../pipeline/repo";
-import { getIssue, currentIssue, pieceHash, pieceOwnerIds } from "./issues";
+import { getIssue, currentIssue, pieceHash, pieceOwnerIds, fillOpenIssues } from "./issues";
 import { sanitizeHtml } from "./html";
 import { listSections, withTx } from "./repo";
 import { Contributor, Details, Piece, Section } from "./types";
@@ -290,6 +290,7 @@ export async function contributorView(db: Db, contributor: Contributor): Promise
   // R18: only a collecting issue is offered; after "Mark sent" the page waits for next week's.
   const cur = await currentIssue(db);
   const issue = cur && cur.status === "collecting" ? cur : null;
+  if (issue) await fillOpenIssues(db);
   const mine = (p: { contributorId: string | null; sectionId: string }) => pieceOwnerIds(p, sections).includes(contributor.id);
   const pieces = issue
     ? (await listPieces(db, issue.id)).filter((p) => p.status !== "dropped" && mine(p)).map((p) => ({ ...p, updatedBy: "" }))

@@ -8,7 +8,7 @@ import {
   createContributor, createSection, listContributors, listSections, reorderSections, retireContributor,
   setSectionOwners, updateContributor, updateSection,
 } from "../gracenotes/repo";
-import { contributorStatus, createIssue, getIssue, listIssues } from "../gracenotes/issues";
+import { contributorStatus, createIssue, getIssue, listIssues, fillOpenIssues } from "../gracenotes/issues";
 import { Actor, PieceInput, addExistingEvent, addItem, confirmPiece, dropPiece, editPiece, linkEvent, listPieces } from "../gracenotes/pieces";
 import { decideSuggestion, reviewLetter } from "../gracenotes/letter";
 import { buildSheet, markIssueSent } from "../gracenotes/sheet";
@@ -78,6 +78,7 @@ export async function gracenotesRoutes(app: FastifyInstance, opts: GnRouteOpts =
   app.post("/api/gracenotes/sections", async (req) => guard(async () => {
     const b = body(req);
     const r = await createSection(db, { title: String(b.title ?? ""), kind: b.kind as never });
+    if (r.ok) await fillOpenIssues(db);
     return r.ok ? { ok: true, section: r.value } : r;
   }));
   app.post("/api/gracenotes/sections/order", async (req) => guard(async () => {
@@ -90,6 +91,7 @@ export async function gracenotesRoutes(app: FastifyInstance, opts: GnRouteOpts =
     const b = body(req);
     const r = await updateSection(db, params(req).id, {
       title: typeof b.title === "string" ? b.title : undefined, retired: typeof b.retired === "boolean" ? b.retired : undefined });
+    if (r.ok && b.retired === false) await fillOpenIssues(db);
     return r.ok ? { ok: true, section: r.value } : r;
   }));
   app.put("/api/gracenotes/sections/:id/owners", async (req) => guard(async () => {
@@ -109,6 +111,7 @@ export async function gracenotesRoutes(app: FastifyInstance, opts: GnRouteOpts =
     const id = params(req).id;
     const issue = await getIssue(db, id);
     if (!issue) return { ok: false as const, error: "Issue not found." };
+    if (issue.status === "collecting") await fillOpenIssues(db);
     const pieces = await listPieces(db, id);
     const { rows } = await db.query(
       "SELECT piece_id, suggestions FROM gn_letter_reviews WHERE piece_id = ANY($1)", [pieces.map((p) => p.id)]);

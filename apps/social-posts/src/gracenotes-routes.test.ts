@@ -233,3 +233,25 @@ test("admin adds an existing event to an issue", async () => {
   assert.deepEqual((await app.inject({ method: "POST", url, payload: { eventId: "gntest-r1" } })).json(),
     { ok: false, error: "That event is already in this issue." });
 });
+
+test("an issue started before its sections exist gets them, for Mitchell and for the owner", async () => {
+  const james = await person("james");
+  const issue = val<{ id: string }>(await createIssue(pool, "2026-11-11"));
+  const add = await app.inject({ method: "POST", url: "/api/gracenotes/sections", payload: { title: "Pastor Message", kind: "text" } });
+  const sec = add.json().section as { id: string };
+  await setSectionOwners(pool, sec.id, [james.id]);
+  const detail = (await app.inject({ url: `/api/gracenotes/issues/${issue.id}` })).json();
+  assert.equal(detail.pieces.filter((p: { sectionId: string }) => p.sectionId === sec.id).length, 1);
+  assert.equal(detail.contributors.find((c: { contributorId: string }) => c.contributorId === james.id).state, "outstanding");
+  const view = (await app.inject({ url: `/gn/${james.token}/api/view` })).json();
+  assert.equal(view.pieces.length, 1);
+});
+
+test("an issue whose pieces were never made is repaired when opened", async () => {
+  const issue = val<{ id: string }>(await createIssue(pool, "2026-11-11"));
+  // A section created straight in the database, the way the existing issue in production is missing them.
+  const sec = val<{ id: string }>(await createSection(pool, { title: "Sunday Sermon", kind: "text" }));
+  assert.equal((await listPieces(pool, issue.id)).length, 0);
+  const detail = (await app.inject({ url: `/api/gracenotes/issues/${issue.id}` })).json();
+  assert.equal(detail.pieces.filter((p: { sectionId: string }) => p.sectionId === sec.id).length, 1);
+});

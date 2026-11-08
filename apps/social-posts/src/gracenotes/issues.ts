@@ -72,19 +72,36 @@ export async function createIssue(db: Db, issueDate: string): Promise<Result<Iss
               AND NOT COALESCE(p.event_id IS NULL AND p.details->>'endDate' ~ '^\\d{4}-\\d{2}-\\d{2}$' AND p.details->>'endDate' < $3::text, false)`,
           [issue.id, prev.rows[0].id, issueDate]);
       }
-      const empty = pieceHash({ title: "", bodyHtml: "", details: {}, imageUrl: "", eventId: null });
-      await c.query(
-        `INSERT INTO gn_pieces (issue_id, section_id, status, content_hash)
-         SELECT $1, s.id, 'carried', $2 FROM gn_sections s
-          WHERE s.kind = 'text' AND NOT s.retired
-            AND NOT EXISTS (SELECT 1 FROM gn_pieces p WHERE p.issue_id = $1 AND p.section_id = s.id)`,
-        [issue.id, empty]);
+      await fillTextSections(c, issue.id);
       return { ok: true, value: issue };
     });
   } catch (e) {
     if ((e as { code?: string }).code === "23505") return { ok: false, error: `There's already an issue for ${issueDate}.` };
     throw e;
   }
+}
+
+/** Gives the issue an empty piece for every live text section it lacks. Returns how many were added. */
+async function fillTextSections(db: Db, issueId: string): Promise<number> {
+  const empty = pieceHash({ title: "", bodyHtml: "", details: {}, imageUrl: "", eventId: null });
+  const r = await db.query(
+    `INSERT INTO gn_pieces (issue_id, section_id, status, content_hash)
+     SELECT $1, s.id, 'carried', $2 FROM gn_sections s
+      WHERE s.kind = 'text' AND NOT s.retired
+        AND NOT EXISTS (SELECT 1 FROM gn_pieces p WHERE p.issue_id = $1 AND p.section_id = s.id)`,
+    [issueId, empty]);
+  return r.rowCount ?? 0;
+}
+
+/**
+ * A section added (or brought back) while an issue is open belongs in that issue too, not only from next week.
+ * Sent issues are left as they went out. Safe to run any number of times.
+ */
+export async function fillOpenIssues(db: Db): Promise<number> {
+  const { rows } = await db.query("SELECT id FROM gn_issues WHERE status = 'collecting'");
+  let added = 0;
+  for (const r of rows) added += await fillTextSections(db, r.id);
+  return added;
 }
 
 const DAY = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
