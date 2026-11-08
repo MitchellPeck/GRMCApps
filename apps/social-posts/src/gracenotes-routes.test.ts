@@ -9,6 +9,7 @@ import { getPiece, listPieces } from "./gracenotes/pieces";
 import { Contributor } from "./gracenotes/types";
 import { gracenotesRoutes } from "./routes/gracenotes";
 import { contributorRoutes } from "./routes/contributor";
+import { setSetting } from "./settings";
 
 const pool = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
 const GN = "gn_letter_reviews, gn_reminders, gn_pieces, gn_issues, gn_section_owners, gn_sections, gn_contributors";
@@ -96,6 +97,66 @@ test("gn static allowlist", async () => {
   assert.equal((await app.inject({ url: "/gn/_/contributor.js" })).statusCode, 200);
   assert.equal((await app.inject({ url: "/gn/_/package.json" })).statusCode, 404);
   assert.equal((await app.inject({ url: "/gn/_/..%2f..%2fpackage.json" })).statusCode, 404);
+});
+
+test("gn fonts are served from an allowlisted filename pattern", async () => {
+  const ok = await app.inject({ url: "/gn/_/fonts/inter-400.woff2" });
+  assert.equal(ok.statusCode, 200);
+  assert.match(String(ok.headers["content-type"]), /font\/woff2/);
+  for (const bad of ["..%2fgrmc.css", "..%2f..%2f..%2fpackage.json", "inter-400.css", "nope.woff2", ".woff2", "a%00.woff2"]) {
+    assert.equal((await app.inject({ url: `/gn/_/fonts/${bad}` })).statusCode, 404, bad);
+  }
+});
+
+test("gn picture links must be ours", async () => {
+  const { ann, pa } = await world();
+  const sa = val<{ id: string }>(await createSection(pool, { title: "Coming up", kind: "events" }));
+  await setSetting(pool, "r2_public_base_url", "https://cdn.example.org/");
+  const edit = (imageUrl: string) => app.inject({ method: "POST", url: `/gn/${ann.token}/api/pieces/${pa.id}/edit`, payload: { title: "T", imageUrl } });
+  const add = (imageUrl: string) => app.inject({ method: "POST", url: `/gn/${ann.token}/api/sections/${sa.id}/items`, payload: { title: "N", imageUrl } });
+  const WRONG = { ok: false, error: "Upload the picture here instead." };
+  for (const bad of ["https://evil.example.com/x.png", "http://cdn.example.org/x.png", "https://cdn.example.org.evil.com/x.png", "javascript:alert(1)", "https://cdn.example.org/a b.png"]) {
+    assert.deepEqual((await edit(bad)).json(), WRONG, bad);
+    assert.deepEqual((await add(bad)).json(), WRONG, bad);
+  }
+  assert.equal((await edit("https://cdn.example.org/media/x.png")).json().ok, true);
+  assert.equal((await getPiece(pool, pa.id))!.imageUrl, "https://cdn.example.org/media/x.png");
+  assert.equal((await add("https://cdn.example.org/media/y.png")).json().ok, true);
+  assert.equal((await edit("")).json().ok, true);
+  assert.equal((await getPiece(pool, pa.id))!.imageUrl, "");
+  await setSetting(pool, "r2_public_base_url", "");
+  assert.deepEqual((await edit("https://cdn.example.org/media/x.png")).json(), WRONG);
+});
+
+test("gn image: dead token is refused before the body, big and wrong files get plain messages", async () => {
+  const { ann } = await world();
+  const big = Buffer.alloc(10_500_000, 1);
+  const dead = await app.inject({ method: "POST", url: "/gn/nope/api/image", headers: { "content-type": "image/png" }, payload: big });
+  assert.equal(dead.statusCode, 404);
+  const tooBig = await app.inject({ method: "POST", url: `/gn/${ann.token}/api/image`, headers: { "content-type": "image/png" }, payload: big });
+  assert.equal(tooBig.statusCode, 413);
+  assert.deepEqual(tooBig.json(), { ok: false, error: "That picture is over 10 MB." });
+  const WRONG = { ok: false, error: "Upload a photo (JPG, PNG, GIF or WebP)." };
+  for (const type of ["video/mp4", "image/svg+xml", "image/tiff"]) {
+    const r = await app.inject({ method: "POST", url: `/gn/${ann.token}/api/image`, headers: { "content-type": type }, payload: Buffer.from("abc") });
+    assert.deepEqual(r.json(), WRONG, type);
+  }
+  const txt = await app.inject({ method: "POST", url: `/gn/${ann.token}/api/image`, headers: { "content-type": "text/plain" }, payload: "abc" });
+  assert.deepEqual(txt.json(), WRONG);
+});
+
+test("gn unexpected failures on public routes say something plain and leak nothing", async () => {
+  const broken = Fastify({ logger: false });
+  const boom = { query: async () => { throw new Error("relation gn_secret does not exist"); } } as unknown as Pool;
+  await broken.register(contributorRoutes, { db: boom });
+  await broken.ready();
+  for (const [method, url] of [["GET", "/gn/abc/api/view"], ["POST", "/gn/abc/api/pieces/1/confirm"], ["POST", "/gn/abc/api/image"], ["GET", "/gn/abc"]] as const) {
+    const r = await broken.inject({ method, url, headers: method === "POST" ? { "content-type": "image/png" } : {}, payload: method === "POST" ? Buffer.from("abc") : undefined });
+    assert.equal(r.statusCode, 500, url);
+    assert.ok(!r.body.includes("gn_secret"), url);
+    assert.equal(r.json().error, "Something went wrong. Try again in a minute.", url);
+  }
+  await broken.close();
 });
 
 test("admin sheet route", async () => {

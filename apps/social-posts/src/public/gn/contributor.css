@@ -1,1 +1,81 @@
-/* Placeholder: Task 9 replaces this. */
+/* Grace Notes contributor page. Mobile first, one column. Builds on the shared grmc.css tokens. */
+
+/* grmc.css points at /assets/fonts, which sits behind the hub login; these load the same files without it. */
+@font-face{font-family:"Playfair Display";font-weight:500;font-display:swap;src:url("/gn/_/fonts/playfair-500.woff2") format("woff2")}
+@font-face{font-family:"Playfair Display";font-weight:600;font-display:swap;src:url("/gn/_/fonts/playfair-600.woff2") format("woff2")}
+@font-face{font-family:"Playfair Display";font-weight:700;font-display:swap;src:url("/gn/_/fonts/playfair-700.woff2") format("woff2")}
+@font-face{font-family:"Inter";font-weight:400;font-display:swap;src:url("/gn/_/fonts/inter-400.woff2") format("woff2")}
+@font-face{font-family:"Inter";font-weight:500;font-display:swap;src:url("/gn/_/fonts/inter-500.woff2") format("woff2")}
+@font-face{font-family:"Inter";font-weight:600;font-display:swap;src:url("/gn/_/fonts/inter-600.woff2") format("woff2")}
+@font-face{font-family:"Inter";font-weight:700;font-display:swap;src:url("/gn/_/fonts/inter-700.woff2") format("woff2")}
+
+body{font-size:17px;line-height:1.55}
+.gn-top{background:var(--navy);padding:12px 16px}
+.gn-top-in{max-width:560px;margin:0 auto;display:flex;align-items:center;gap:10px}
+.gn-mark{width:32px;height:32px;border-radius:50%;background:var(--gold);color:var(--navy);display:flex;align-items:center;justify-content:center;font:700 16px var(--font-display)}
+.gn-top-name{font:600 18px var(--font-display);color:#fff}
+
+.gn{max-width:560px;margin:0 auto;padding:18px 16px 80px}
+.gn-loading{color:var(--muted);text-align:center;padding:40px 0}
+.gn h1{font-size:26px;margin-bottom:4px}
+.gn h2{font-size:21px;margin:30px 0 10px}
+.gn h3{font-size:20px;margin-bottom:6px}
+.gn-hello{color:var(--ink-soft);margin-bottom:2px}
+.gn-issue{font-size:17px;font-weight:600;color:var(--navy);margin-bottom:16px}
+.gn-issue span{color:var(--gold-d)}
+.gn-note{background:var(--info-bg);color:var(--info-fg);border-radius:var(--r-lg);padding:14px 16px;margin-bottom:14px}
+
+/* Cards */
+.gn-card{background:var(--card);border:1px solid var(--rule);border-radius:var(--r-lg);padding:16px;margin-bottom:14px;box-shadow:var(--shadow)}
+.gn-kicker{font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--gold-d);font-weight:700;margin-bottom:6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.gn-chip{font-size:12px;letter-spacing:0;text-transform:none;font-weight:600;padding:2px 9px;border-radius:99px;background:var(--pending-bg);color:var(--pending-fg)}
+.gn-chip.ok{background:var(--ok-bg);color:var(--ok-fg)}
+.gn-chip.info{background:var(--info-bg);color:var(--info-fg)}
+
+/* The piece as it reads in the email */
+.gn-read{overflow-wrap:anywhere}
+.gn-read p{margin:0 0 .8em}
+.gn-read ul,.gn-read ol{margin:0 0 .8em 1.4em}
+.gn-read li{margin-bottom:.25em}
+.gn-read a{color:var(--navy);font-weight:500}
+.gn-read img{display:block;max-width:100%;height:auto;border-radius:var(--r);margin:10px 0}
+.gn-read .gn-empty{color:var(--muted);font-style:italic}
+.gn-facts{margin:0 0 .8em;color:var(--ink-soft)}
+.gn-facts b{color:var(--ink)}
+
+/* Buttons: every one is at least 44px tall */
+.gn-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}
+.gn .btn{min-height:48px;padding:10px 20px;font-size:17px;justify-content:center}
+.gn .btn-grow{flex:1 1 180px}
+.gn .btn-link{background:none;border:none;color:var(--rej-fg);min-height:48px;padding:10px 12px;font:600 16px var(--font-ui);cursor:pointer;text-decoration:underline}
+
+/* Form */
+.gn label{font-size:14px;letter-spacing:0;text-transform:none;color:var(--ink-soft);font-weight:600;margin-bottom:6px}
+.gn input[type=text],.gn input[type=url],.gn input[type=date],.gn select{font-size:17px;min-height:48px;padding:10px 12px;width:100%;border:1px solid var(--rule);border-radius:var(--r);background:var(--field-bg);color:var(--ink);font-family:var(--font-ui)}
+.gn .field{margin-bottom:16px}
+.gn-more{border:1px dashed var(--rule);border-radius:var(--r);padding:12px;margin-bottom:16px}
+.gn-more summary{min-height:44px;display:flex;align-items:center;font-weight:600;color:var(--navy);cursor:pointer}
+.gn-toolbar{display:flex;gap:6px;margin-bottom:6px;flex-wrap:wrap}
+.gn-toolbar button{min-width:56px;min-height:44px;border:1px solid var(--rule);border-radius:var(--r);background:var(--field-bg);color:var(--ink);font:600 16px var(--font-ui);cursor:pointer}
+.gn-toolbar button:active{background:var(--paper)}
+.gn-editor{min-height:140px;border:1px solid var(--rule);border-radius:var(--r);padding:12px;background:var(--field-bg);overflow-wrap:anywhere;outline:none}
+.gn-editor:focus{border-color:var(--gold);box-shadow:0 0 0 3px var(--gold-ring)}
+.gn-editor:empty:before{content:attr(data-placeholder);color:var(--hint)}
+.gn-editor p{margin:0 0 .6em}.gn-editor ul,.gn-editor ol{margin:0 0 .6em 1.4em}
+.gn-pic img{display:block;max-width:100%;max-height:220px;border-radius:var(--r);margin-bottom:10px}
+.gn-pic input[type=file]{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
+
+/* Add something */
+.gn-add{border:2px dashed var(--rule);background:transparent;box-shadow:none}
+.gn-add .gn-addbtn{width:100%;min-height:56px;background:none;border:none;color:var(--navy);font:600 18px var(--font-ui);cursor:pointer}
+
+/* History */
+.gn-hist{border:1px solid var(--rule);border-radius:var(--r-lg);background:var(--card);margin-bottom:10px;overflow:hidden}
+.gn-hist>button{width:100%;min-height:56px;padding:10px 16px;background:none;border:none;text-align:left;font:500 17px var(--font-ui);color:var(--ink);cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px}
+.gn-hist small{display:block;font-size:14px;color:var(--muted)}
+.gn-hist .gn-read{padding:0 16px 8px;border-top:1px solid var(--rule);padding-top:12px}
+.gn-caret{color:var(--gold-d);font-size:20px;flex-shrink:0}
+
+.gn-toast{position:fixed;left:12px;right:12px;bottom:16px;max-width:536px;margin:0 auto;background:var(--navy);color:#fff;padding:14px 16px;border-radius:var(--r-lg);box-shadow:var(--shadow-lg);font-size:17px;font-weight:500;opacity:0;transform:translateY(20px);transition:opacity .2s,transform .2s;pointer-events:none;z-index:50}
+.gn-toast.show{opacity:1;transform:none}
+.gn-toast.err{background:var(--rej-fg)}
