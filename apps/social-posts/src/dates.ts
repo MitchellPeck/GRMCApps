@@ -89,3 +89,19 @@ export function addDays(iso: string, days: number): string {
   if (isNaN(d.getTime())) return "";
   return isoOf(new Date(d.getTime() + days * 86400000));
 }
+
+/** "HH:MM" (24h) on the church's clock. */
+export function localTimeIn(tz: string, instant: Date): string {
+  try {
+    const parts = new Intl.DateTimeFormat("en-GB", { timeZone: tz || DEFAULT_TZ, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(instant);
+    const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "00";
+    return `${get("hour")}:${get("minute")}`;
+  } catch {
+    return `${String(instant.getUTCHours()).padStart(2, "0")}:${String(instant.getUTCMinutes()).padStart(2, "0")}`;
+  }
+}
+
+/** Day of week of a calendar date, 0 = Sunday. */
+export function weekdayOf(iso: string): number {
+  return noonUTC(iso).getUTCDay();
+}

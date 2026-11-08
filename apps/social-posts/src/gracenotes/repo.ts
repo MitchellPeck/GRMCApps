@@ -86,7 +86,7 @@ export async function updateSection(db: Db, id: string, patch: { title?: string;
 }
 
 /** Run `fn` atomically. A Pool gets its own transaction; a PoolClient is the caller's to manage. */
-async function withTx<T>(db: Db, fn: (c: Db) => Promise<T>): Promise<T> {
+export async function withTx<T>(db: Db, fn: (c: Db) => Promise<T>): Promise<T> {
   if (!(db instanceof Pool)) return fn(db);
   const client = await db.connect();
   try {

@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { addDays, formatMonthDayYear, isWeekday, localDateIn, suggestDate, suggestDateTime, todayInTimezone } from "./dates";
+import { addDays, formatMonthDayYear, isWeekday, localDateIn, localTimeIn, weekdayOf, suggestDate, suggestDateTime, todayInTimezone } from "./dates";
 
 test("a weekday resolves to that day inside the reference week", () => {
   // 2026-06-10 is a Wednesday; its week runs Sun Jun 7 - Sat Jun 13.
@@ -56,4 +56,15 @@ test("localDateIn reads an instant as the church's calendar date, not UTC's", ()
   // 01:30 UTC on the 28th is still the evening of the 27th in New York.
   assert.equal(localDateIn("America/New_York", new Date("2026-09-28T01:30:00Z")), "2026-09-27");
   assert.equal(localDateIn("America/New_York", new Date("2026-09-27T15:00:00Z")), "2026-09-27");
+});
+
+test("localTimeIn gives 24h HH:MM in the church's timezone", () => {
+  assert.equal(localTimeIn("America/New_York", new Date("2026-11-08T23:05:00Z")), "18:05");
+  assert.equal(localTimeIn("America/New_York", new Date("2026-07-01T04:00:00Z")), "00:00");
+});
+
+test("weekdayOf is 0 for Sunday and ignores timezones", () => {
+  assert.equal(weekdayOf("2026-11-08"), 0);
+  assert.equal(weekdayOf("2026-11-11"), 3);
+  assert.equal(weekdayOf("2026-11-14"), 6);
 });
