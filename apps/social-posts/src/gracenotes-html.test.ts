@@ -52,7 +52,9 @@ test("htmlToText links and entities", () => {
 });
 
 test("sanitize is linear on hostile input and rejects oversize text", () => {
-  for (const evil of ["<a".repeat(50000), "<!--".repeat(50000), "<script ".repeat(25000)]) {
+  for (const evil of ["<a".repeat(50000), "<!--".repeat(50000), "<script ".repeat(25000),
+    "<" + "a".repeat(MAX_RICH_TEXT - 1), "</" + "a".repeat(MAX_RICH_TEXT - 2),
+    "&nbsp;".repeat(30000), "<p>" + "href ".repeat(30000), "<!" + "a".repeat(MAX_RICH_TEXT - 2)]) {
     const t = Date.now();
     sanitizeHtml(evil);
     htmlToText(evil);

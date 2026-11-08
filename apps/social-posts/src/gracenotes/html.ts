@@ -3,7 +3,7 @@
 
 export const MAX_RICH_TEXT = 200_000;
 // Comments and Word/Outlook directives (<![if ...]>, <!DOCTYPE>, <?xml?>) are skipped; a tag can't span a "<".
-const TOKEN = /<!--(?:[\s\S]*?-->|[\s\S]*$)|<[!?][^<>]*>|<\/?([a-zA-Z0-9:]+)([^<>]*)>|[^<]+|</g;
+const TOKEN = /<!--(?:[\s\S]*?-->|[\s\S]*$)|<[!?][^<>]*>|<\/?([a-zA-Z0-9:]+)(?![a-zA-Z0-9:])([^<>]*)>|[^<]+|</g;
 
 function checkLength(s: string): void {
   if (s.length > MAX_RICH_TEXT) throw new Error("That text is too long.");
@@ -119,7 +119,8 @@ export function htmlToText(html: string): string {
     }
   }
   return out
-    .replace(/ *\n */g, "\n")
+    .replace(/ {2,}/g, " ")
+    .replace(/ ?\n ?/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
