@@ -109,3 +109,35 @@ test("reject marks rejected without touching the piece", async () => {
   assert.ok(r.ok);
   assert.equal((await getPiece(pool, p))!.bodyHtml, "<p>Teh end.</p>");
 });
+
+test("applySuggestion matches decoded text against stored entities", () => {
+  for (const [html, original, replacement, out] of [
+    ["<p>we&rsquo;re here</p>", "we\u2019re", "we are", "<p>we are here</p>"],
+    ["<p>Pastor&nbsp;Tom speaks</p>", "Pastor Tom", "Pastor Thomas", "<p>Pastor Thomas speaks</p>"],
+    ["<p>it&#39;s fine</p>", "it's", "it is", "<p>it is fine</p>"],
+  ]) {
+    const r = applySuggestion(html, sug({ original, replacement }));
+    assert.ok(r.applied, html);
+    assert.equal(r.html, out);
+  }
+  const span = "<p>Commitment <strong>Sunday</strong></p>";
+  const m = applySuggestion(span, sug());
+  assert.equal(m.applied, false);
+  assert.equal(m.html, span);
+});
+
+test("applySuggestion prefers a whole word", () => {
+  const r = applySuggestion("<p>Tehran. Teh end.</p>", sug({ original: "Teh", replacement: "The" }));
+  assert.equal(r.html, "<p>Tehran. The end.</p>");
+});
+
+test("reviewLetter drops suggestions that do not occur in the body", async () => {
+  const letters = await sec("Letter", "text");
+  const i = await issue("2026-11-08");
+  const p = await piece(i, letters, "<p>Teh end.</p>");
+  const list = await reviewLetter(pool, p, async () => JSON.stringify({ suggestions: [
+    { kind: "grammar", original: "Teh", replacement: "The", reason: "", source: "" },
+    { kind: "grammar", original: "ghost", replacement: "spirit", reason: "", source: "" },
+  ] }));
+  assert.equal(list.length, 1);
+});

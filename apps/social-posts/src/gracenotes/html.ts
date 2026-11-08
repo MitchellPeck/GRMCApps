@@ -18,7 +18,7 @@ const NAMED: Record<string, string> = {
 const MAPPED: Record<string, string> = { b: "strong", i: "em", div: "p" };
 const ALLOWED = new Set(["p", "br", "strong", "em", "a", "ul", "ol", "li"]);
 
-function decodeEntities(s: string): string {
+export function decodeEntities(s: string): string {
   return s.replace(ENTITY, (m) => {
     const body = m.slice(1, -1);
     if (body[0] === "#") {
