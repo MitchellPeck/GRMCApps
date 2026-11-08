@@ -85,37 +85,58 @@ export async function updateSection(db: Db, id: string, patch: { title?: string;
   return got ? { ok: true, value: got } : fail("Section not found.");
 }
 
-/** Positions follow the order of `ids`; sections not listed keep their order after them. */
+/** Run `fn` atomically. A Pool gets its own transaction; a PoolClient is the caller's to manage. */
+async function withTx<T>(db: Db, fn: (c: Db) => Promise<T>): Promise<T> {
+  if (!(db instanceof Pool)) return fn(db);
+  const client = await db.connect();
+  try {
+    await client.query("BEGIN");
+    const out = await fn(client);
+    await client.query("COMMIT");
+    return out;
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+/** Listed sections take positions 0..n-1 in the given order; unlisted ones follow in their old order. */
 export async function reorderSections(db: Db, ids: string[]): Promise<Result<true>> {
-  await db.query(
-    `UPDATE gn_sections s SET position = o.pos
-       FROM (SELECT id, (ord - 1)::int AS pos FROM unnest($1::text[]) WITH ORDINALITY AS u(id, ord)) o
-      WHERE s.id = o.id`,
-    [ids],
-  );
-  // Close any gaps/ties so listing stays deterministic.
-  await db.query(
-    `UPDATE gn_sections s SET position = r.rn
-       FROM (SELECT id, (ROW_NUMBER() OVER (ORDER BY position, id) - 1)::int AS rn FROM gn_sections) r
-      WHERE s.id = r.id AND s.position <> r.rn`,
-  );
-  return { ok: true, value: true };
+  const listed = [...new Set(ids)];
+  return withTx(db, async (c) => {
+    const known = await c.query("SELECT id FROM gn_sections WHERE id = ANY($1::text[])", [listed]);
+    if (known.rowCount !== listed.length) return fail("Unknown section.");
+    await c.query(
+      `UPDATE gn_sections s SET position = r.rn
+         FROM (SELECT s2.id, (ROW_NUMBER() OVER (ORDER BY (l.ord IS NULL), l.ord, s2.position, s2.id) - 1)::int AS rn
+                 FROM gn_sections s2
+                 LEFT JOIN unnest($1::text[]) WITH ORDINALITY AS l(lid, ord) ON l.lid = s2.id) r
+        WHERE s.id = r.id`,
+      [listed],
+    );
+    return { ok: true as const, value: true as const };
+  });
 }
 
 export async function setSectionOwners(db: Db, sectionId: string, contributorIds: string[]): Promise<Result<true>> {
-  const sec = await db.query("SELECT 1 FROM gn_sections WHERE id = $1", [sectionId]);
-  if (!sec.rowCount) return fail("Section not found.");
   const ids = [...new Set(contributorIds)];
-  const known = await db.query("SELECT id FROM gn_contributors WHERE id = ANY($1::text[])", [ids]);
-  if (known.rowCount !== ids.length) return fail("Unknown contributor.");
-  await db.query("DELETE FROM gn_section_owners WHERE section_id = $1", [sectionId]);
-  if (ids.length) {
-    await db.query(
-      `INSERT INTO gn_section_owners (section_id, contributor_id) SELECT $1, unnest($2::text[])`,
-      [sectionId, ids],
-    );
-  }
-  return { ok: true, value: true };
+  return withTx(db, async (c) => {
+    const sec = await c.query("SELECT 1 FROM gn_sections WHERE id = $1", [sectionId]);
+    if (!sec.rowCount) return fail("Section not found.");
+    const known = await c.query("SELECT id, retired_at IS NOT NULL AS retired FROM gn_contributors WHERE id = ANY($1::text[])", [ids]);
+    if (known.rowCount !== ids.length) return fail("Unknown contributor.");
+    if (known.rows.some((r) => r.retired)) return fail("That person has been retired.");
+    await c.query("DELETE FROM gn_section_owners WHERE section_id = $1", [sectionId]);
+    if (ids.length) {
+      await c.query(
+        `INSERT INTO gn_section_owners (section_id, contributor_id) SELECT $1, unnest($2::text[])`,
+        [sectionId, ids],
+      );
+    }
+    return { ok: true as const, value: true as const };
+  });
 }
 
 const SECTION_SQL = `
