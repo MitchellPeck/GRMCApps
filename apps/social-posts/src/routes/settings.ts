@@ -23,10 +23,28 @@ interface SaveBody {
   resendKey?: string;
   mailFrom?: string;
   publicBaseUrl?: string;
-  gnSendDow?: number | string;
+  gnSendDow?: number | string | null;
   gnCreateAt?: string;
   gnRemindAt?: string;
   gnDeadlineAt?: string;
+}
+
+function parseSchedule(s: SaveBody): string | { dow?: string; times: Record<string, string | undefined> } {
+  let dow: string | undefined;
+  if (s.gnSendDow !== undefined && s.gnSendDow !== "") {
+    const raw = s.gnSendDow === null ? "" : String(s.gnSendDow).trim();
+    const d = Number(raw);
+    if (raw === "" || !Number.isInteger(d) || d < 0 || d > 6) return "Send day must be 0 (Sunday) to 6 (Saturday).";
+    dow = String(d);
+  }
+  const times: Record<string, string | undefined> = {};
+  for (const [field, key] of [["gnCreateAt", "gn_create_at"], ["gnRemindAt", "gn_remind_at"], ["gnDeadlineAt", "gn_deadline_at"]] as const) {
+    const v = s[field]?.trim();
+    if (!v) continue;
+    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(v)) return "Times must look like 18:00.";
+    times[key] = v;
+  }
+  return { dow, times };
 }
 
 export async function settingsRoutes(app: FastifyInstance): Promise<void> {
@@ -41,6 +59,9 @@ export async function settingsRoutes(app: FastifyInstance): Promise<void> {
   app.post("/api/settings", async (req) => {
     try {
       const s = (req.body ?? {}) as SaveBody;
+      // Validate every schedule field before any write, so a bad request saves nothing.
+      const schedule = parseSchedule(s);
+      if (typeof schedule === "string") return { ok: false, error: schedule };
       if (s.anthropicKey && s.anthropicKey.trim())
         await setSetting(pool, "anthropic_api_key", s.anthropicKey.trim());
       if (s.mailchimpKey && s.mailchimpKey.trim())
@@ -81,17 +102,8 @@ export async function settingsRoutes(app: FastifyInstance): Promise<void> {
         await setSetting(pool, "mail_from", s.mailFrom.trim());
       if (s.publicBaseUrl && s.publicBaseUrl.trim())
         await setSetting(pool, "public_base_url", s.publicBaseUrl.trim().replace(/\/+$/, ""));
-      if (s.gnSendDow !== undefined && s.gnSendDow !== "") {
-        const d = Number(s.gnSendDow);
-        if (!Number.isInteger(d) || d < 0 || d > 6) return { ok: false, error: "Send day must be 0 (Sunday) to 6 (Saturday)." };
-        await setSetting(pool, "gn_send_dow", String(d));
-      }
-      for (const [field, key] of [["gnCreateAt", "gn_create_at"], ["gnRemindAt", "gn_remind_at"], ["gnDeadlineAt", "gn_deadline_at"]] as const) {
-        const v = s[field]?.trim();
-        if (!v) continue;
-        if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(v)) return { ok: false, error: "Times must look like 18:00." };
-        await setSetting(pool, key, v);
-      }
+      for (const [key, v] of Object.entries(schedule.times)) if (v !== undefined) await setSetting(pool, key, v);
+      if (schedule.dow !== undefined) await setSetting(pool, "gn_send_dow", schedule.dow);
       return { ok: true };
     } catch (e) {
       return { ok: false, error: (e as Error).message };

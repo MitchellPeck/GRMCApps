@@ -57,8 +57,9 @@ test("dueActions Sunday evening", () => {
 });
 
 test("dueActions catch-up Tuesday", () => {
-  const kinds = dueActions({ date: "2026-11-10", time: "13:00" }, S, true).map((a) => a.kind);
-  assert.ok(kinds.includes("monday") && kinds.includes("deadline"));
+  assert.deepEqual(dueActions({ date: "2026-11-10", time: "13:00" }, S, true),
+    [{ kind: "create", issueDate: "2026-11-11" }, { kind: "deadline", issueDate: "2026-11-11" }]);
+  assert.deepEqual(dueActions({ date: "2026-11-10", time: "13:00" }, S, false), [{ kind: "deadline", issueDate: "2026-11-11" }]);
   assert.deepEqual(dueActions({ date: "2026-11-10", time: "11:00" }, S, true).map((a) => a.kind), ["create", "monday"]);
   assert.deepEqual(dueActions({ date: "2026-11-11", time: "13:00" }, S, true), []);
 });

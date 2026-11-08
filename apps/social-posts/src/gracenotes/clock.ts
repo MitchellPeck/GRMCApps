@@ -33,7 +33,8 @@ export function dueActions(now: { date: string; time: string }, s: Schedule, has
   const issueDate = nextIssueDate(now.date, s.sendDow);
   const out: Action[] = [];
   if (hasEarlierIssue && reached(s.createDow, s.createAt)) out.push({ kind: "create", issueDate });
-  if (reached(s.remindDow, s.remindAt)) out.push({ kind: "monday", issueDate });
+  // Once the deadline has passed, "check by the deadline" would be stale: only the deadline nudge goes.
+  if (reached(s.remindDow, s.remindAt) && !reached(s.deadlineDow, s.deadlineAt)) out.push({ kind: "monday", issueDate });
   if (reached(s.deadlineDow, s.deadlineAt)) out.push({ kind: "deadline", issueDate });
   return out;
 }
