@@ -1,7 +1,13 @@
 // Rich-text sanitizer for Grace Notes pieces pasted from Word, Google Docs, etc.
 // A small allow-list tokenizer: no dependencies, output is safe to store and re-render.
 
-const TOKEN = /<!--[\s\S]*?-->|<\/?([a-zA-Z0-9:]+)([^>]*)>|[^<]+|</g;
+export const MAX_RICH_TEXT = 200_000;
+// Comments and Word/Outlook directives (<![if ...]>, <!DOCTYPE>, <?xml?>) are skipped; a tag can't span a "<".
+const TOKEN = /<!--(?:[\s\S]*?-->|[\s\S]*$)|<[!?][^<>]*>|<\/?([a-zA-Z0-9:]+)([^<>]*)>|[^<]+|</g;
+
+function checkLength(s: string): void {
+  if (s.length > MAX_RICH_TEXT) throw new Error("That text is too long.");
+}
 const HREF = /\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/i;
 const ENTITY = /&(?:#\d+|#x[0-9a-f]+|[a-z][a-z0-9]*);/gi;
 const NAMED: Record<string, string> = {
@@ -32,9 +38,7 @@ function escapeAttr(s: string): string {
 }
 
 function stripBlocks(input: string): string {
-  return input
-    .replace(/<(script|style)\b[\s\S]*?<\/\1\s*>/gi, "")
-    .replace(/<(script|style)\b[\s\S]*$/i, "");
+  return input.replace(/<(script|style)\b(?:[\s\S]*?<\/\1\s*>|[\s\S]*$)/gi, "");
 }
 
 function readHref(attrs: string): string | null {
@@ -46,11 +50,12 @@ function readHref(attrs: string): string | null {
 }
 
 export function sanitizeHtml(input: string): string {
+  checkLength(input);
   let out = "";
   const stack: { tag: string; emit: boolean }[] = [];
   for (const m of stripBlocks(input).matchAll(TOKEN)) {
     const [tok, rawName, attrs = ""] = m;
-    if (tok.startsWith("<!--")) continue;
+    if (tok.startsWith("<!") || tok.startsWith("<?")) continue;
     if (rawName === undefined) {
       out += tok === "<" ? "&lt;" : escapeText(tok);
       continue;
@@ -86,11 +91,12 @@ export function sanitizeHtml(input: string): string {
 }
 
 export function htmlToText(html: string): string {
+  checkLength(html);
   let out = "";
   let anchor: { href: string; start: number } | null = null;
   for (const m of stripBlocks(html).matchAll(TOKEN)) {
     const [tok, rawName, attrs = ""] = m;
-    if (tok.startsWith("<!--")) continue;
+    if (tok.startsWith("<!") || tok.startsWith("<?")) continue;
     if (rawName === undefined) {
       out += tok === "<" ? "<" : decodeEntities(tok.replace(/\s+/g, " "));
       continue;
