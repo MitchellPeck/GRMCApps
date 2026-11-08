@@ -4,7 +4,7 @@ import { Pool } from "pg";
 import { SCHEMA_SQL } from "./schema";
 import { createSection, reorderSections } from "./gracenotes/repo";
 import { createIssue } from "./gracenotes/issues";
-import { buildSheet } from "./gracenotes/sheet";
+import { buildSheet, markIssueSent } from "./gracenotes/sheet";
 import { Actor, confirmPiece, dropPiece, editPiece, addItem, listPieces } from "./gracenotes/pieces";
 
 const pool = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
@@ -31,9 +31,9 @@ async function issue(date: string) {
 }
 async function piece(issueId: string, sectionId: string, o: Record<string, unknown> = {}) {
   const { rows } = await pool.query(
-    `INSERT INTO gn_pieces (issue_id, section_id, title, body_html, details, status, position)
-     VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
-    [issueId, sectionId, o.title ?? "", o.body ?? "", JSON.stringify(o.details ?? {}), o.status ?? "new", o.position ?? 0]);
+    `INSERT INTO gn_pieces (issue_id, section_id, title, body_html, details, status, position, event_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+    [issueId, sectionId, o.title ?? "", o.body ?? "", JSON.stringify(o.details ?? {}), o.status ?? "new", o.position ?? 0, o.eventId ?? null]);
   return rows[0].id as string;
 }
 
@@ -138,4 +138,69 @@ test("glance compares with previous issue", async () => {
   await pool.query("INSERT INTO events (id, name, start_date) VALUES ('gntest-g2','Concert','2026-12-08')");
   assert.equal((await buildSheet(pool, i2))[0].unchanged, false);
   void i1;
+});
+
+async function linked() {
+  const e = await sec("Events", "events");
+  await pool.query("INSERT INTO events (id, name, start_date, image_url) VALUES ('gntest-l1','Supper','2026-11-20','http://i/1.png')");
+  const i1 = await issue("2026-11-04");
+  await piece(i1, e, { title: "x", eventId: "gntest-l1" });
+  ok(await markIssueSent(pool, i1));
+  const i2 = await issue("2026-11-11");
+  return { e, i1, i2 };
+}
+
+test("untouched issue after markIssueSent is all unchanged", async () => {
+  const { i2 } = await linked();
+  assert.ok((await buildSheet(pool, i2)).every((b) => b.unchanged));
+});
+test("event renamed after send is changed", async () => {
+  const { e, i2 } = await linked();
+  await pool.query("UPDATE events SET name = 'Big Supper' WHERE id = 'gntest-l1'");
+  assert.equal(by(await buildSheet(pool, i2), e).unchanged, false);
+});
+test("event image changed after send is changed", async () => {
+  const { e, i2 } = await linked();
+  await pool.query("UPDATE events SET image_url = 'http://i/2.png' WHERE id = 'gntest-l1'");
+  assert.equal(by(await buildSheet(pool, i2), e).unchanged, false);
+});
+test("reordered items are changed", async () => {
+  const e = await sec("Events", "events");
+  const i1 = await issue("2026-11-04");
+  await piece(i1, e, { title: "A", position: 0 });
+  await piece(i1, e, { title: "B", position: 1 });
+  ok(await markIssueSent(pool, i1));
+  const i2 = await issue("2026-11-11");
+  assert.equal((await buildSheet(pool, i2))[0].unchanged, true);
+  await pool.query("UPDATE gn_pieces SET position = 1 - position WHERE issue_id = $1", [i2]);
+  assert.equal((await buildSheet(pool, i2))[0].unchanged, false);
+});
+test("reordered sections are changed for moved blocks", async () => {
+  const a = await sec("A", "text");
+  const b = await sec("B", "text");
+  const c = await sec("C", "text");
+  const i1 = await issue("2026-11-04");
+  for (const p of await listPieces(pool, i1)) await pool.query("UPDATE gn_pieces SET body_html = $2 WHERE id = $1", [p.id, `<p>${p.sectionId === a ? "a" : p.sectionId === b ? "b" : "c"}</p>`]);
+  ok(await markIssueSent(pool, i1));
+  const i2 = await issue("2026-11-11");
+  await reorderSections(pool, [b, a, c]);
+  const s = await buildSheet(pool, i2);
+  assert.deepEqual(s.map((x) => x.unchanged), [false, false, true]);
+});
+test("glance changes when an event is archived after send", async () => {
+  await sec("Glance", "glance");
+  await pool.query("INSERT INTO events (id, name, start_date) VALUES ('gntest-g1','Picnic','2026-11-20')");
+  const i1 = await issue("2026-11-04");
+  ok(await markIssueSent(pool, i1));
+  const i2 = await issue("2026-11-11");
+  assert.equal((await buildSheet(pool, i2))[0].unchanged, true);
+  await pool.query("UPDATE events SET archived = true WHERE id = 'gntest-g1'");
+  assert.equal((await buildSheet(pool, i2))[0].unchanged, false);
+});
+test("markIssueSent twice errors", async () => {
+  const i = await issue("2026-11-04");
+  ok(await markIssueSent(pool, i));
+  const r = await markIssueSent(pool, i);
+  assert.equal(r.ok, false);
+  assert.equal((r as { error: string }).error, "That issue was already marked sent.");
 });

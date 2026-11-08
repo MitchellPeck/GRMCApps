@@ -1,9 +1,10 @@
 // Grace Notes paste sheet: the issue as email-ready blocks, in section order, with unchanged ones flagged.
 import { Pool, PoolClient } from "pg";
-import { getIssue, glanceHtml, listIssues, pieceHash } from "./issues";
+import { Issue, getIssue, glanceHtml, listIssues } from "./issues";
+import { Result } from "../pipeline/rules";
 import { effectiveImage, listPieces } from "./pieces";
 import { htmlToText } from "./html";
-import { listSections } from "./repo";
+import { listSections, withTx } from "./repo";
 import { Piece, SectionKind } from "./types";
 
 type Db = Pool | PoolClient;
@@ -33,47 +34,54 @@ function itemHtml(p: Piece): string {
   ].join("");
 }
 
-/** True when every live piece is carried/confirmed unchanged from the previous issue and nothing was added or dropped. */
-function piecesUnchanged(live: Piece[], prevAll: Piece[] | null, sectionId: string): boolean {
-  if (!prevAll) return false;
-  const prevById = new Map(prevAll.filter((p) => p.sectionId === sectionId).map((p) => [p.id, p]));
-  const used = new Set<string>();
-  for (const p of live) {
-    if (p.status !== "carried" && p.status !== "confirmed") return false;
-    const src = p.carriedFrom ? prevById.get(p.carriedFrom) : undefined;
-    if (!src || src.status === "dropped") return false;
-    if (pieceHash(p) !== pieceHash(src)) return false;
-    used.add(src.id);
-  }
-  return [...prevById.values()].every((p) => p.status === "dropped" || used.has(p.id));
-}
-
-export async function buildSheet(db: Db, issueId: string): Promise<SheetBlock[]> {
+/** Render an issue from live data, with every block marked changed. */
+async function renderSheet(db: Db, issueId: string): Promise<SheetBlock[]> {
   const issue = await getIssue(db, issueId);
   if (!issue) return [];
-  const prevIssue = (await listIssues(db)).find((i) => i.issueDate < issue.issueDate) ?? null; // newest first
   const pieces = await listPieces(db, issueId);
-  const prevPieces = prevIssue ? await listPieces(db, prevIssue.id) : null;
   const sections = (await listSections(db, { includeRetired: false })).sort((a, b) => a.position - b.position);
-
   const out: SheetBlock[] = [];
   for (const s of sections) {
     const live = pieces
       .filter((p) => p.sectionId === s.id && p.status !== "dropped")
       .sort((a, b) => a.position - b.position);
-    let html: string;
-    let unchanged: boolean;
-    if (s.kind === "glance") {
-      html = await glanceHtml(db, issue.issueDate);
-      unchanged = prevIssue ? html === (await glanceHtml(db, prevIssue.issueDate)) : false;
-    } else {
-      html = s.kind === "events" ? live.map(itemHtml).join("") : live.map((p) => p.bodyHtml).join("");
-      unchanged = piecesUnchanged(live, prevPieces, s.id);
-    }
+    const html = s.kind === "glance" ? await glanceHtml(db, issue.issueDate)
+      : s.kind === "events" ? live.map(itemHtml).join("") : live.map((p) => p.bodyHtml).join("");
     const images = s.kind === "glance" ? [] : live
       .map((p) => ({ url: effectiveImage(p), alt: itemTitle(p) }))
       .filter((i) => i.url);
-    out.push({ sectionId: s.id, title: s.title, kind: s.kind, unchanged, html, text: htmlToText(html), images });
+    out.push({ sectionId: s.id, title: s.title, kind: s.kind, unchanged: false, html, text: htmlToText(html), images });
   }
   return out;
+}
+
+type Snap = Array<{ sectionId: string; html: string; images: Array<{ url: string; alt: string }> }>;
+
+/** `unchanged` means the block is identical to the previous email's block at the same position. */
+export async function buildSheet(db: Db, issueId: string): Promise<SheetBlock[]> {
+  const issue = await getIssue(db, issueId);
+  if (!issue) return [];
+  const blocks = await renderSheet(db, issueId);
+  const prevIssue = (await listIssues(db)).find((i) => i.issueDate < issue.issueDate) ?? null; // newest first
+  if (!prevIssue) return blocks;
+  const snap = (await db.query("SELECT sheet_snapshot FROM gn_issues WHERE id = $1", [prevIssue.id])).rows[0]?.sheet_snapshot as Snap | null;
+  const prev: Snap = snap ?? (await renderSheet(db, prevIssue.id));
+  const urls = (im: Array<{ url: string }>) => JSON.stringify(im.map((i) => i.url));
+  blocks.forEach((b, i) => {
+    const q = prev[i];
+    b.unchanged = !!q && q.sectionId === b.sectionId && q.html === b.html && urls(q.images) === urls(b.images);
+  });
+  return blocks;
+}
+
+/** Freeze what the email looked like, so next week's "unchanged" compares against what went out. */
+export async function markIssueSent(db: Db, issueId: string): Promise<Result<Issue>> {
+  return withTx(db, async (c): Promise<Result<Issue>> => {
+    const locked = await c.query("SELECT status FROM gn_issues WHERE id = $1 FOR UPDATE", [issueId]);
+    if (!locked.rows[0]) return { ok: false, error: "Issue not found." };
+    if (locked.rows[0].status === "sent") return { ok: false, error: "That issue was already marked sent." };
+    const snap: Snap = (await renderSheet(c, issueId)).map((b) => ({ sectionId: b.sectionId, html: b.html, images: b.images }));
+    await c.query("UPDATE gn_issues SET status = 'sent', sent_at = now(), sheet_snapshot = $2 WHERE id = $1", [issueId, JSON.stringify(snap)]);
+    return { ok: true, value: (await getIssue(c, issueId))! };
+  });
 }

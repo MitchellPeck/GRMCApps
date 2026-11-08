@@ -262,6 +262,7 @@ CREATE TABLE IF NOT EXISTS gn_issues (
   issue_date date NOT NULL UNIQUE,
   status text NOT NULL DEFAULT 'collecting' CHECK (status IN ('collecting','sent')),
   created_at timestamptz NOT NULL DEFAULT now(), sent_at timestamptz);
+ALTER TABLE gn_issues ADD COLUMN IF NOT EXISTS sheet_snapshot jsonb;
 CREATE TABLE IF NOT EXISTS gn_pieces (
   id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
   issue_id text NOT NULL REFERENCES gn_issues(id) ON DELETE CASCADE,
