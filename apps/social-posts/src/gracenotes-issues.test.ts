@@ -137,3 +137,22 @@ test("nextIssueDate", () => {
   assert.equal(nextIssueDate("2026-11-08", 3), "2026-11-11");
   assert.equal(nextIssueDate("2026-11-11", 3), "2026-11-18");
 });
+
+test("carry keeps an event-linked piece whose event has no dates", async () => {
+  const items = await sec("Events", "events");
+  const old = await issue("2026-11-04");
+  const e = await ev("nodate", "Nodate", null);
+  await piece(old.id, items, { eventId: e, title: "Nodate" });
+  const n = await issue("2026-11-11");
+  const { rows } = await pool.query("SELECT title FROM gn_pieces WHERE issue_id = $1", [n.id]);
+  assert.deepEqual(rows.map((r) => r.title), ["Nodate"]);
+});
+
+test("carry does not throw on an impossible details.endDate", async () => {
+  const items = await sec("Events", "events");
+  const old = await issue("2026-11-04");
+  await piece(old.id, items, { title: "Odd", details: { endDate: "2026-02-31" } });
+  const n = await issue("2026-11-11");
+  const { rows } = await pool.query("SELECT title FROM gn_pieces WHERE issue_id = $1", [n.id]);
+  assert.deepEqual(rows.map((r) => r.title), []);
+});

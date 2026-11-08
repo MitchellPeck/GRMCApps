@@ -68,8 +68,8 @@ export async function createIssue(db: Db, issueDate: string): Promise<Result<Iss
              JOIN gn_sections s ON s.id = p.section_id
              LEFT JOIN events e ON e.id = p.event_id
             WHERE p.issue_id = $2 AND p.status <> 'dropped' AND NOT s.retired AND s.kind <> 'glance'
-              AND NOT (e.id IS NOT NULL AND COALESCE(e.end_date, e.start_date) < $3::date)
-              AND NOT COALESCE(p.event_id IS NULL AND p.details->>'endDate' ~ '^\\d{4}-\\d{2}-\\d{2}$' AND (p.details->>'endDate')::date < $3::date, false)`,
+              AND NOT COALESCE(e.id IS NOT NULL AND COALESCE(e.end_date, e.start_date) < $3::date, false)
+              AND NOT COALESCE(p.event_id IS NULL AND p.details->>'endDate' ~ '^\\d{4}-\\d{2}-\\d{2}$' AND p.details->>'endDate' < $3::text, false)`,
           [issue.id, prev.rows[0].id, issueDate]);
       }
       const empty = pieceHash({ title: "", bodyHtml: "", details: {}, imageUrl: "", eventId: null });
