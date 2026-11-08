@@ -204,3 +204,14 @@ test("markIssueSent twice errors", async () => {
   assert.equal(r.ok, false);
   assert.equal((r as { error: string }).error, "That issue was already marked sent.");
 });
+
+test("sheet shows a dated item's date before the details", async () => {
+  const e = await sec("Events", "events");
+  const i = await issue("2026-11-11");
+  ok(await addItem(pool, i, e, { title: "Supper", startDate: "2026-11-18", details: { when: "6pm", place: "Hall" } }, admin));
+  ok(await addItem(pool, i, e, { title: "Retreat", startDate: "2026-11-18", endDate: "2026-11-20" }, admin));
+  const html = by(await buildSheet(pool, i), e).html;
+  await pool.query("DELETE FROM events WHERE id IN (SELECT event_id FROM gn_pieces WHERE issue_id = $1)", [i]);
+  assert.ok(html.includes("<p>Wed Nov 18 · 6pm · Hall</p>"), html);
+  assert.ok(html.includes("<p>Wed Nov 18 – Fri Nov 20</p>"), html);
+});

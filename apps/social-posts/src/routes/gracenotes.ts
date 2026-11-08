@@ -9,7 +9,7 @@ import {
   setSectionOwners, updateContributor, updateSection,
 } from "../gracenotes/repo";
 import { contributorStatus, createIssue, getIssue, listIssues } from "../gracenotes/issues";
-import { Actor, PieceInput, addItem, confirmPiece, dropPiece, editPiece, linkEvent, listPieces } from "../gracenotes/pieces";
+import { Actor, PieceInput, addExistingEvent, addItem, confirmPiece, dropPiece, editPiece, linkEvent, listPieces } from "../gracenotes/pieces";
 import { decideSuggestion, reviewLetter } from "../gracenotes/letter";
 import { buildSheet, markIssueSent } from "../gracenotes/sheet";
 import { remind } from "../gracenotes/mail";
@@ -127,6 +127,10 @@ export async function gracenotesRoutes(app: FastifyInstance, opts: GnRouteOpts =
   }));
   app.post("/api/gracenotes/issues/:id/sections/:sid/items", async (req) => guard(async () => {
     const r = await addItem(db, params(req).id, params(req).sid, pieceInput(body(req)), admin(req));
+    return r.ok ? { ok: true, piece: r.value } : r;
+  }));
+  app.post("/api/gracenotes/issues/:id/sections/:sid/items/from-event", async (req) => guard(async () => {
+    const r = await addExistingEvent(db, params(req).id, params(req).sid, String(body(req).eventId ?? ""), admin(req));
     return r.ok ? { ok: true, piece: r.value } : r;
   }));
   app.post("/api/gracenotes/issues/:id/remind/:contributorId", async (req) => guard(async () => {

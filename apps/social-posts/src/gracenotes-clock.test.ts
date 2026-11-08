@@ -3,8 +3,8 @@ import { test, before, after, beforeEach } from "node:test";
 import { Pool } from "pg";
 import { SCHEMA_SQL } from "./schema";
 import { setSetting } from "./settings";
-import { createContributor, createSection } from "./gracenotes/repo";
-import { createIssue } from "./gracenotes/issues";
+import { createContributor, createSection, setSectionOwners, updateSection } from "./gracenotes/repo";
+import { contributorStatus, createIssue } from "./gracenotes/issues";
 import { dueActions, scheduleFrom, tick } from "./gracenotes/clock";
 import { remind } from "./gracenotes/mail";
 
@@ -29,8 +29,11 @@ async function mailOn() {
   await setSetting(pool, "default_timezone", "America/New_York");
 }
 function stub() {
-  const calls: Array<{ url: string; body: string }> = [];
-  const fn = (async (url: string, init: { body: string }) => { calls.push({ url, body: init.body }); return new Response("{}", { status: 200 }); }) as unknown as typeof fetch;
+  const calls: Array<{ url: string; body: string; key: string }> = [];
+  const fn = (async (url: string, init: { body: string; headers: Record<string, string> }) => {
+    calls.push({ url, body: init.body, key: init.headers["idempotency-key"] ?? "" });
+    return new Response("{}", { status: 200 });
+  }) as unknown as typeof fetch;
   return { fn, calls };
 }
 // A contributor owning a text section, with the issue's carried piece in `status`.
@@ -138,4 +141,75 @@ test("reminder body has link and copy", async () => {
   assert.ok(sent.text.startsWith("Grace Notes goes out Wednesday. Check your piece by Tuesday noon:"));
   const tok = (await pool.query("SELECT token FROM gn_contributors")).rows[0].token;
   assert.ok(sent.text.includes(`https://notes.example.org/gn/${tok}`));
+});
+
+test("two manual nudges use distinct idempotency keys", async () => {
+  await mailOn();
+  const { issueId, ids } = await setup({ Ann: "carried" });
+  const { fn, calls } = stub();
+  assert.equal((await remind(pool, issueId, ids.Ann, "manual", fn)).status, "sent");
+  assert.equal((await remind(pool, issueId, ids.Ann, "manual", fn)).status, "sent");
+  assert.equal(calls.length, 2);
+  assert.ok(calls[0].key && calls[1].key && calls[0].key !== calls[1].key, JSON.stringify(calls.map((c) => c.key)));
+  // Automatic kinds keep one key per issue, contributor and kind.
+  await remind(pool, issueId, ids.Ann, "monday", fn);
+  assert.equal(calls[2].key, `gn-${issueId}-${ids.Ann}-monday`);
+});
+
+test("a later first issue: no stray issue, reminders go to the live one", async () => {
+  await mailOn();
+  const sec = (await createSection(pool, { title: "Pastor", kind: "text" }) as { value: { id: string } }).value.id;
+  const ann = (await createContributor(pool, { name: "Ann", email: "ann@example.org" }) as { value: { id: string } }).value.id;
+  await setSectionOwners(pool, sec, [ann]);
+  const first = (await createIssue(pool, "2026-11-18") as { value: { id: string } }).value.id;
+  const { fn, calls } = stub();
+  const r = await tick(pool, MON_0810, fn);
+  assert.equal(r.created, undefined);
+  assert.deepEqual((await pool.query("SELECT to_char(issue_date,'YYYY-MM-DD') d FROM gn_issues")).rows.map((x) => x.d), ["2026-11-18"]);
+  assert.equal(calls.length, 1);
+  assert.equal(JSON.parse(calls[0].body).subject, "Grace Notes for Wed Nov 18: please check your piece");
+  assert.equal((await pool.query("SELECT issue_id FROM gn_reminders")).rows[0].issue_id, first);
+  // Tuesday's deadline nudge waits for Nov 18's own deadline.
+  calls.length = 0;
+  await tick(pool, TUE_1300, fn);
+  assert.equal(calls.length, 0);
+  assert.equal((await tick(pool, new Date("2026-11-17T18:00:00Z"), fn)).reminded, 1);
+  // Sunday evening before Nov 18 creates nothing either.
+  assert.equal((await tick(pool, new Date("2026-11-15T23:05:00Z"), fn)).created, undefined);
+});
+
+test("no reminder for a sent issue", async () => {
+  await mailOn();
+  const { issueId } = await setup({ Ann: "carried" });
+  await pool.query("UPDATE gn_issues SET status = 'sent' WHERE id = $1", [issueId]);
+  const { fn, calls } = stub();
+  await tick(pool, MON_0810, fn);
+  assert.equal(calls.length, 0);
+});
+
+test("events-section owners get the Monday email with no pieces, not the deadline nudge", async () => {
+  await mailOn();
+  const ev = (await createSection(pool, { title: "Events", kind: "events" }) as { value: { id: string } }).value.id;
+  const { ids } = await setup({ Ann: "none", Bob: "none" });
+  await setSectionOwners(pool, ev, [ids.Ann]);
+  const { fn, calls } = stub();
+  await tick(pool, MON_0810, fn);
+  assert.equal(calls.length, 1);
+  assert.ok(calls[0].body.includes("ann@example.org"));
+  calls.length = 0;
+  await tick(pool, TUE_1300, fn);
+  assert.equal(calls.length, 0);
+});
+
+test("contributorStatus ignores pieces in retired sections and says who has email", async () => {
+  const { issueId, ids } = await setup({ Ann: "carried" });
+  const noMail = (await createContributor(pool, { name: "Dee" }) as { value: { id: string } }).value.id;
+  let st = await contributorStatus(pool, issueId);
+  assert.equal(st.find((c) => c.contributorId === ids.Ann)!.state, "outstanding");
+  assert.equal(st.find((c) => c.contributorId === ids.Ann)!.hasEmail, true);
+  assert.equal(st.find((c) => c.contributorId === noMail)!.hasEmail, false);
+  const sec = (await pool.query("SELECT section_id FROM gn_pieces WHERE issue_id = $1 LIMIT 1", [issueId])).rows[0].section_id;
+  await updateSection(pool, sec, { retired: true });
+  st = await contributorStatus(pool, issueId);
+  assert.deepEqual([st.find((c) => c.contributorId === ids.Ann)!.state, st.find((c) => c.contributorId === ids.Ann)!.pieces], ["none", 0]);
 });

@@ -25,5 +25,5 @@ export interface Piece {
   status: PieceStatus; position: number; carriedFrom: string | null; contentHash: string;
   updatedBy: string; updatedAt: string;
   sectionTitle: string; sectionKind: SectionKind;
-  eventName: string | null; eventStartDate: string | null; eventImageUrl?: string | null;
+  eventName: string | null; eventStartDate: string | null; eventEndDate?: string | null; eventImageUrl?: string | null;
 }

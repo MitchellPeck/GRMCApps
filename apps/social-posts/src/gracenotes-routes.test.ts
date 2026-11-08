@@ -197,3 +197,39 @@ test("admin can create contributors, sections and issues", async () => {
   const bad = await app.inject({ method: "POST", url: "/api/gracenotes/issues", payload: { issueDate: "nonsense" } });
   assert.equal(bad.json().ok, false);
 });
+
+test("gn page answers with or without a trailing slash", async () => {
+  const { ann } = await world();
+  const a = await app.inject({ url: `/gn/${ann.token}` });
+  const b = await app.inject({ url: `/gn/${ann.token}/` });
+  assert.equal(b.statusCode, 200);
+  assert.equal(b.body, a.body);
+  assert.equal((await app.inject({ url: "/gn/nope/" })).statusCode, 404);
+});
+
+test("gn view carries the deadline from the schedule", async () => {
+  const { ann } = await world();
+  try {
+    await setSetting(pool, "gn_deadline_at", "12:00");
+    assert.equal((await app.inject({ url: `/gn/${ann.token}/api/view` })).json().deadline, "Tue noon");
+    await setSetting(pool, "gn_deadline_at", "15:00");
+    assert.equal((await app.inject({ url: `/gn/${ann.token}/api/view` })).json().deadline, "Tue 3pm");
+    await setSetting(pool, "gn_send_dow", "4");
+    await setSetting(pool, "gn_deadline_at", "09:30");
+    assert.equal((await app.inject({ url: `/gn/${ann.token}/api/view` })).json().deadline, "Wed 9:30am");
+  } finally {
+    await pool.query("DELETE FROM settings WHERE key = ANY($1)", [["gn_deadline_at", "gn_send_dow"]]);
+  }
+});
+
+test("admin adds an existing event to an issue", async () => {
+  const { issue } = await world();
+  const items = val<{ id: string }>(await createSection(pool, { title: "Events", kind: "events" }));
+  await pool.query("INSERT INTO events (id, name, start_date) VALUES ('gntest-r1', 'Bazaar', '2026-11-21')");
+  const url = `/api/gracenotes/issues/${issue.id}/sections/${items.id}/items/from-event`;
+  const r = await app.inject({ method: "POST", url, payload: { eventId: "gntest-r1" } });
+  assert.equal(r.json().ok, true);
+  assert.equal(r.json().piece.eventId, "gntest-r1");
+  assert.deepEqual((await app.inject({ method: "POST", url, payload: { eventId: "gntest-r1" } })).json(),
+    { ok: false, error: "That event is already in this issue." });
+});

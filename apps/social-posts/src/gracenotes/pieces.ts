@@ -25,7 +25,8 @@ const PIECE_SQL = `
   SELECT p.id, p.issue_id, p.section_id, p.contributor_id, p.event_id, p.title, p.body_html, p.details, p.image_url,
          p.status, p.position, p.carried_from, p.content_hash, p.updated_by, p.updated_at,
          s.title AS section_title, s.kind AS section_kind,
-         e.name AS event_name, to_char(e.start_date,'YYYY-MM-DD') AS event_start_date, e.image_url AS event_image_url
+         e.name AS event_name, to_char(e.start_date,'YYYY-MM-DD') AS event_start_date,
+         to_char(e.end_date,'YYYY-MM-DD') AS event_end_date, e.image_url AS event_image_url
     FROM gn_pieces p
     JOIN gn_sections s ON s.id = p.section_id
     LEFT JOIN events e ON e.id = p.event_id`;
@@ -37,7 +38,8 @@ function pieceRow(r: Record<string, any>): Piece {
     status: r.status, position: Number(r.position), carriedFrom: r.carried_from, contentHash: r.content_hash,
     updatedBy: r.updated_by, updatedAt: new Date(r.updated_at).toISOString(),
     sectionTitle: r.section_title, sectionKind: r.section_kind,
-    eventName: r.event_name ?? null, eventStartDate: r.event_start_date ?? null, eventImageUrl: r.event_image_url ?? null,
+    eventName: r.event_name ?? null, eventStartDate: r.event_start_date ?? null,
+    eventEndDate: r.event_end_date ?? null, eventImageUrl: r.event_image_url ?? null,
   };
 }
 
@@ -227,15 +229,52 @@ export async function addItem(db: Db, issueId: string, sectionId: string, input:
   });
 }
 
+const ALREADY_IN = "That event is already in this issue.";
+
+/** Is the event already in this issue on a piece other than `exceptPieceId`? Dropped pieces don't count. */
+async function eventInIssue(db: Db, issueId: string, eventId: string, exceptPieceId = ""): Promise<boolean> {
+  const { rowCount } = await db.query(
+    "SELECT 1 FROM gn_pieces WHERE issue_id = $1 AND event_id = $2 AND status <> 'dropped' AND id <> $3",
+    [issueId, eventId, exceptPieceId]);
+  return !!rowCount;
+}
+
 /** Admin only: point a piece at an existing event. */
 export async function linkEvent(db: Db, pieceId: string, eventId: string): Promise<Result<Piece>> {
   const piece = await getPiece(db, pieceId);
   if (!piece) return fail("Piece not found.");
   const ev = await db.query("SELECT 1 FROM events WHERE id = $1", [eventId]);
   if (!ev.rowCount) return fail("Event not found.");
+  if (await eventInIssue(db, piece.issueId, eventId, pieceId)) return fail(ALREADY_IN);
   const hash = pieceHash({ ...piece, eventId });
   await db.query("UPDATE gn_pieces SET event_id = $2, content_hash = $3, updated_at = now() WHERE id = $1", [pieceId, eventId, hash]);
   return { ok: true, value: await must(db, pieceId) };
+}
+
+/** Put an event that already exists on the social side into an issue: a new item linked to it, no new events row. */
+export async function addExistingEvent(
+  db: Db, issueId: string, sectionId: string, eventId: string, actor: Actor = { kind: "admin", email: "" },
+): Promise<Result<Piece>> {
+  const issue = await getIssue(db, issueId);
+  if (!issue) return fail("Issue not found.");
+  if (actor.kind === "contributor" && issue.status !== "collecting") return fail(GONE_OUT);
+  const section = (await listSections(db)).find((s) => s.id === sectionId);
+  if (!section || section.kind !== "events") return fail("Items can only be added to an events section.");
+  const ev = (await db.query("SELECT name FROM events WHERE id = $1", [eventId])).rows[0];
+  if (!ev) return fail("Event not found.");
+  return withTx(db, async (c): Promise<Result<Piece>> => {
+    // Serialise adds to this issue so two clicks can't both pass the duplicate check.
+    await c.query("SELECT 1 FROM gn_issues WHERE id = $1 FOR UPDATE", [issueId]);
+    if (await eventInIssue(c, issueId, eventId)) return fail(ALREADY_IN);
+    const title = String(ev.name ?? "");
+    const pos = await c.query("SELECT COALESCE(max(position), -1) + 1 AS n FROM gn_pieces WHERE issue_id = $1 AND section_id = $2", [issueId, sectionId]);
+    const hash = pieceHash({ title, bodyHtml: "", details: {}, imageUrl: "", eventId });
+    const ins = await c.query(
+      `INSERT INTO gn_pieces (issue_id, section_id, contributor_id, event_id, title, status, position, content_hash, updated_by)
+       VALUES ($1,$2,$3,$4,$5,'new',$6,$7,$8) RETURNING id`,
+      [issueId, sectionId, actor.kind === "contributor" ? actor.contributor.id : null, eventId, title, pos.rows[0].n, hash, actorName(actor)]);
+    return { ok: true, value: await must(c, ins.rows[0].id) };
+  });
 }
 
 export interface ContributorView {
@@ -248,7 +287,9 @@ export interface ContributorView {
 /** Everything a contributor's page shows. Never includes another contributor's data or any token. */
 export async function contributorView(db: Db, contributor: Contributor): Promise<ContributorView> {
   const sections = await listSections(db);
-  const issue = await currentIssue(db);
+  // R18: only a collecting issue is offered; after "Mark sent" the page waits for next week's.
+  const cur = await currentIssue(db);
+  const issue = cur && cur.status === "collecting" ? cur : null;
   const mine = (p: { contributorId: string | null; sectionId: string }) => pieceOwnerIds(p, sections).includes(contributor.id);
   const pieces = issue
     ? (await listPieces(db, issue.id)).filter((p) => p.status !== "dropped" && mine(p)).map((p) => ({ ...p, updatedBy: "" }))

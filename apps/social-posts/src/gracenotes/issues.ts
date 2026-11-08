@@ -113,19 +113,36 @@ export function pieceOwnerIds(piece: { contributorId: string | null; sectionId: 
 
 export async function contributorStatus(db: Db, issueId: string): Promise<Array<{
   contributorId: string; name: string; state: ContributorState; pieces: number; lastReminder: string | null;
+  /** Has an email address, so a Nudge can go; otherwise the admin copies the link. */
+  hasEmail: boolean;
+  /** Owns a live events section, so gets Monday's "anything new?" email even with no pieces (R21). */
+  ownsEvents: boolean;
 }>> {
   const sections = await listSections(db, { includeRetired: true });
+  // Pieces in retired sections don't count, matching what the contributor's page shows.
   const { rows: pieces } = await db.query(
-    "SELECT section_id, contributor_id, status FROM gn_pieces WHERE issue_id = $1 AND status <> 'dropped'", [issueId]);
+    `SELECT p.section_id, p.contributor_id, p.status FROM gn_pieces p JOIN gn_sections s ON s.id = p.section_id
+      WHERE p.issue_id = $1 AND p.status <> 'dropped' AND NOT s.retired`, [issueId]);
   const { rows: people } = await db.query(
-    `SELECT c.id, c.name, (SELECT max(created_at) FROM gn_reminders r WHERE r.issue_id = $1 AND r.contributor_id = c.id AND r.status = 'sent') AS last
+    `SELECT c.id, c.name, c.email, (SELECT max(created_at) FROM gn_reminders r WHERE r.issue_id = $1 AND r.contributor_id = c.id AND r.status = 'sent') AS last
        FROM gn_contributors c WHERE c.retired_at IS NULL ORDER BY lower(c.name), c.created_at`, [issueId]);
   return people.map((p) => {
     const mine = pieces.filter((x) => pieceOwnerIds({ contributorId: x.contributor_id, sectionId: x.section_id }, sections).includes(p.id));
     const has = (s: string) => mine.some((x) => x.status === s);
     const state: ContributorState = !mine.length ? "none" : has("carried") ? "outstanding" : has("new") ? "new" : has("changed") ? "changed" : "confirmed";
-    return { contributorId: p.id, name: p.name, state, pieces: mine.length, lastReminder: p.last ? new Date(p.last).toISOString() : null };
+    return {
+      contributorId: p.id, name: p.name, state, pieces: mine.length, lastReminder: p.last ? new Date(p.last).toISOString() : null,
+      hasEmail: !!String(p.email ?? "").trim(),
+      ownsEvents: sections.some((s) => s.kind === "events" && !s.retired && s.ownerIds.includes(p.id)),
+    };
   });
+}
+
+/** The issue reminders are about: the earliest one still collecting that hasn't gone out by date yet. */
+export async function liveIssue(db: Db, today: string): Promise<Issue | null> {
+  const { rows } = await db.query(
+    `SELECT ${ISSUE_COLS} FROM gn_issues WHERE status = 'collecting' AND issue_date >= $1::date ORDER BY issue_date LIMIT 1`, [today]);
+  return rows[0] ? issueRow(rows[0]) : null;
 }
 
 /** First date strictly after `today` that falls on weekday `sendDow` (0 = Sunday). */

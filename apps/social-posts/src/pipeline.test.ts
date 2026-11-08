@@ -22,7 +22,8 @@ const pool = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
 const REF = "2026-11-01";
 
 before(async () => {
-  await pool.query("DROP TABLE IF EXISTS metricool_links, media_assets, content_items, recurrences, events");
+  // gn_pieces points at events, so the Grace Notes tables go too (SCHEMA_SQL rebuilds them).
+  await pool.query("DROP TABLE IF EXISTS gn_letter_reviews, gn_reminders, gn_pieces, gn_issues, gn_section_owners, gn_sections, gn_contributors, metricool_links, media_assets, content_items, recurrences, events");
   await pool.query(SCHEMA_SQL);
   await pool.query("DELETE FROM series_posts");
   await pool.query("DELETE FROM series");
@@ -2048,4 +2049,26 @@ test("the events list carries imageUrl and reviewNote", async () => {
   await pool.query("UPDATE events SET review_note = 'New from Pat', image_url = 'https://x.test/i.jpg' WHERE id = $1", [e.id]);
   const row = (await listEvents(pool)).find((x) => x.id === e.id);
   assert.deepEqual([row?.reviewNote, row?.imageUrl], ["New from Pat", "https://x.test/i.jpg"]);
+});
+
+test("the events list says which events are in the Grace Notes issue being collected", async () => {
+  const inIt = await createEvent(pool, { name: "In GN", kind: "event" });
+  const dropped = await createEvent(pool, { name: "Dropped from GN", kind: "event" });
+  const sentOnly = await createEvent(pool, { name: "Sent GN", kind: "event" });
+  const sec = (await pool.query("INSERT INTO gn_sections (title, kind, position) VALUES ('PL Events', 'events', 0) RETURNING id")).rows[0].id;
+  const live = (await pool.query("INSERT INTO gn_issues (issue_date) VALUES ('2031-01-08') RETURNING id")).rows[0].id;
+  const sent = (await pool.query("INSERT INTO gn_issues (issue_date, status) VALUES ('2031-01-01', 'sent') RETURNING id")).rows[0].id;
+  try {
+    const add = (issue: string, ev: string, status: string) => pool.query(
+      "INSERT INTO gn_pieces (issue_id, section_id, event_id, status) VALUES ($1,$2,$3,$4)", [issue, sec, ev, status]);
+    await add(live, inIt.id, "new");
+    await add(live, dropped.id, "dropped");
+    await add(sent, sentOnly.id, "confirmed");
+    const rows = await listEvents(pool);
+    const flag = (id: string) => rows.find((x) => x.id === id)?.inGraceNotes;
+    assert.deepEqual([flag(inIt.id), flag(dropped.id), flag(sentOnly.id)], [true, false, false]);
+  } finally {
+    await pool.query("DELETE FROM gn_issues WHERE id = ANY($1)", [[live, sent]]);
+    await pool.query("DELETE FROM gn_sections WHERE id = $1", [sec]);
+  }
 });

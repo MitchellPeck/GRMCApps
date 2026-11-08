@@ -6,7 +6,7 @@ import { createContributor, createSection, setSectionOwners } from "./gracenotes
 import { createIssue, pieceHash } from "./gracenotes/issues";
 import { Contributor } from "./gracenotes/types";
 import {
-  Actor, addItem, canTouch, confirmPiece, contributorView, dropPiece, editPiece, effectiveImage, getPiece, linkEvent,
+  Actor, addExistingEvent, addItem, canTouch, confirmPiece, contributorView, dropPiece, editPiece, effectiveImage, getPiece, linkEvent,
 } from "./gracenotes/pieces";
 import { clearEventReview, getEvent, setEventImage } from "./pipeline/repo";
 
@@ -271,4 +271,55 @@ test("date-only contributor edit counts as changed", async () => {
   const r = ok<{ status: string }>(await editPiece(pool, cur, { startDate: "2026-11-27" }, { kind: "contributor", contributor: a }));
   assert.equal(r.status, "changed");
   assert.equal(await note(e), "Changed by Women of Grace");
+});
+
+test("admin edit without imageUrl keeps the event's picture", async () => {
+  const items = await sec("Events", "events");
+  const i = await issue("2026-11-04");
+  const e = await ev("pic", "Pictured", "2026-11-20");
+  await pool.query("UPDATE events SET image_url = 'https://x.test/e.jpg' WHERE id = $1", [e]);
+  const p = await piece(i.id, items, { eventId: e, title: "Pictured" });
+  ok(await editPiece(pool, p, { title: "Pictured", bodyHtml: "<p>x</p>", details: { when: "6pm" }, startDate: "2026-11-20" }, admin));
+  assert.equal((await pool.query("SELECT image_url FROM events WHERE id = $1", [e])).rows[0].image_url, "https://x.test/e.jpg");
+});
+
+test("contributor view is empty once the issue is sent, with history kept", async () => {
+  const items = await sec("Events", "events");
+  const a = await person("A", "a@x.org");
+  const i = await issue("2026-11-11");
+  await piece(i.id, items, { contributorId: a.id, title: "Supper", body: "<p>x</p>", status: "confirmed" });
+  await pool.query("UPDATE gn_issues SET status = 'sent' WHERE id = $1", [i.id]);
+  const v = await contributorView(pool, a);
+  assert.equal(v.issue, null);
+  assert.deepEqual(v.pieces, []);
+  assert.deepEqual(v.history.map((h) => h.title), ["Supper"]);
+});
+
+test("addExistingEvent links an event without a new events row; a duplicate is refused", async () => {
+  const items = await sec("Events", "events");
+  const text = await sec("Pastor", "text");
+  const i = await issue("2026-11-11");
+  const e = await ev("exist", "Fall Supper", "2026-11-20");
+  const before = Number((await pool.query("SELECT count(*) AS n FROM events")).rows[0].n);
+  const p = ok<{ eventId: string; title: string; status: string; contributorId: string | null; eventName: string }>(
+    await addExistingEvent(pool, i.id, items, e));
+  assert.deepEqual([p.eventId, p.title, p.status, p.contributorId, p.eventName], [e, "Fall Supper", "new", null, "Fall Supper"]);
+  assert.equal(Number((await pool.query("SELECT count(*) AS n FROM events")).rows[0].n), before);
+  assert.deepEqual(await addExistingEvent(pool, i.id, items, e), { ok: false, error: "That event is already in this issue." });
+  assert.equal((await addExistingEvent(pool, i.id, items, "gntest-nope")).ok, false);
+  assert.equal((await addExistingEvent(pool, i.id, text, e)).ok, false);
+  // Once dropped, it can be added again.
+  ok(await dropPiece(pool, (p as unknown as { id: string }).id, admin));
+  ok(await addExistingEvent(pool, i.id, items, e));
+});
+
+test("linkEvent refuses an event already in the issue", async () => {
+  const items = await sec("Events", "events");
+  const i = await issue("2026-11-11");
+  const e = await ev("twice", "Twice", "2026-11-20");
+  const a = await piece(i.id, items, { title: "A" });
+  const b = await piece(i.id, items, { title: "B" });
+  ok(await linkEvent(pool, a, e));
+  assert.deepEqual(await linkEvent(pool, b, e), { ok: false, error: "That event is already in this issue." });
+  ok(await linkEvent(pool, a, e)); // relinking the same piece is fine
 });

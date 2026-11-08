@@ -35,6 +35,8 @@ export interface EventRow {
   imageUrl: string; reviewNote: string;
   drafting: Profile;
   itemCount?: number;
+  /** Grace Notes: the event is in the issue being collected (listEvents only). */
+  inGraceNotes?: boolean;
 }
 
 export interface ContentRow {
@@ -75,6 +77,7 @@ function eventOf(r: any): EventRow {
     drafting: r.drafting || {},
   };
   if (r.item_count != null) e.itemCount = Number(r.item_count);
+  if (r.in_grace_notes != null) e.inGraceNotes = !!r.in_grace_notes;
   return e;
 }
 
@@ -170,7 +173,9 @@ export async function nextEventColor(db: Db): Promise<string> {
 export async function listEvents(db: Db, opts: { archived?: boolean } = {}): Promise<EventRow[]> {
   const where = opts.archived === undefined ? "" : "WHERE e.archived = $1";
   const r = await db.query(
-    `SELECT e.*, (SELECT count(*) FROM content_items ci WHERE ci.event_id = e.id AND ci.status <> 'cancelled') AS item_count
+    `SELECT e.*, (SELECT count(*) FROM content_items ci WHERE ci.event_id = e.id AND ci.status <> 'cancelled') AS item_count,
+            EXISTS (SELECT 1 FROM gn_pieces p JOIN gn_issues i ON i.id = p.issue_id
+                     WHERE p.event_id = e.id AND p.status <> 'dropped' AND i.status = 'collecting') AS in_grace_notes
        FROM events e ${where}
       ORDER BY e.archived, CASE e.kind WHEN 'event' THEN 0 WHEN 'series' THEN 1 ELSE 2 END,
                e.start_date NULLS LAST, lower(e.name)`,

@@ -7,6 +7,7 @@ import { Pool } from "pg";
 import { pool as appPool } from "../db";
 import { getSetting } from "../settings";
 import { contributorByToken } from "../gracenotes/repo";
+import { deadlineLabel, loadSchedule } from "../gracenotes/clock";
 import { Actor, addItem, confirmPiece, contributorView, dropPiece, editPiece } from "../gracenotes/pieces";
 import { Contributor } from "../gracenotes/types";
 import { storeUpload } from "../pipeline/uploads";
@@ -85,17 +86,20 @@ export async function contributorRoutes(app: FastifyInstance, opts: GnRouteOpts 
     return reply.type(FONT_TYPES[file.split(".").pop()!.toLowerCase()]).header("cache-control", "public, max-age=86400").send(readFileSync(path));
   });
 
-  app.get("/gn/:token", async (req, reply) => {
+  const pageHandler = async (req: FastifyRequest, reply: FastifyReply) => {
     if (!(await who(req, reply, false))) return;
     const page = firstExisting(PUBLIC_DIRS.map((d) => join(d, "gn", "contributor.html")));
     if (!page) return reply.code(404).send("Not found");
     return noStore(reply).type("text/html; charset=utf-8").send(readFileSync(page));
-  });
+  };
+  app.get("/gn/:token", pageHandler);
+  app.get("/gn/:token/", pageHandler); // a link pasted with a trailing slash
 
   app.get("/gn/:token/api/view", async (req, reply) => {
     const c = await who(req, reply, true);
     if (!c) return;
-    return noStore(reply).send({ ok: true, name: c.name, ...(await contributorView(db, c)) });
+    const deadline = deadlineLabel(await loadSchedule(db));
+    return noStore(reply).send({ ok: true, name: c.name, deadline, ...(await contributorView(db, c)) });
   });
 
   app.post("/gn/:token/api/pieces/:id/confirm", async (req, reply) => {

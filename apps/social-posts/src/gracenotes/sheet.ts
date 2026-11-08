@@ -1,6 +1,6 @@
 // Grace Notes paste sheet: the issue as email-ready blocks, in section order, with unchanged ones flagged.
 import { Pool, PoolClient } from "pg";
-import { Issue, getIssue, glanceHtml, listIssues } from "./issues";
+import { Issue, getIssue, glanceHtml, label as dayLabel, listIssues } from "./issues";
 import { Result } from "../pipeline/rules";
 import { effectiveImage, listPieces } from "./pieces";
 import { htmlToText } from "./html";
@@ -21,7 +21,10 @@ const itemTitle = (p: Piece) => (p.eventId && p.eventName ? p.eventName : p.titl
 function itemHtml(p: Piece): string {
   const d = p.details;
   const title = itemTitle(p);
-  const meta = [d.when, d.place, d.cost].map((x) => String(x ?? "").trim()).filter(Boolean).map(esc).join(" · ");
+  // The date lives on the event (the editors' date picker); `when` is only the time.
+  const s = p.eventStartDate ?? "", e = p.eventEndDate ?? "";
+  const date = s ? (e && e > s ? `${dayLabel(s)} – ${dayLabel(e)}` : dayLabel(s)) : "";
+  const meta = [date, d.when, d.place, d.cost].map((x) => String(x ?? "").trim()).filter(Boolean).map(esc).join(" · ");
   const link = String(d.link ?? "").trim();
   const label = String(d.linkLabel ?? "").trim() || "Register here";
   const contact = String(d.contact ?? "").trim();

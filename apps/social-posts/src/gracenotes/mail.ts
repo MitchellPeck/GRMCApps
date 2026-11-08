@@ -74,7 +74,9 @@ export async function remind(
   const text = `Grace Notes goes out ${sendDay}. Check your piece by ${deadlineDay} ${clockWords(deadlineAt)}:\n\n${link}\n`;
   const out = await sendMail(fetchFn, { key: key.trim(), from: from.trim() }, {
     to: person.email.trim(), subject: `Grace Notes for ${label(issue.issueDate)}: please check your piece`, text,
-    idempotencyKey: `gn-${issueId}-${contributorId}-${kind}`,
+    // Automatic kinds send once per issue; each manual Nudge is its own row, so its own key
+    // (a per-kind key would make Resend swallow a second Nudge within its 24h window).
+    idempotencyKey: auto ? `gn-${issueId}-${contributorId}-${kind}` : `gn-r${ins.rows[0].id}`,
   });
   await db.query("UPDATE gn_reminders SET status = $2, error = $3 WHERE id = $1",
     [ins.rows[0].id, out.ok ? "sent" : "failed", out.ok ? "" : out.error]);
