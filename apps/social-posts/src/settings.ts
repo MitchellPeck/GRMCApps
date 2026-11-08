@@ -1,5 +1,6 @@
 import { Pool } from "pg";
 import { DEFAULT_VOICE } from "./pipeline/drafting-seed";
+import { loadSchedule } from "./gracenotes/clock";
 
 export async function getSetting(pool: Pool, key: string): Promise<string> {
   const r = await pool.query("SELECT value FROM settings WHERE key = $1", [key]);
@@ -29,6 +30,13 @@ export interface SettingsView {
   buzzsproutPodcastId: string;
   buzzsproutPodcastName: string;
   houseVoice: string;
+  hasResend: boolean;
+  mailFrom: string;
+  publicBaseUrl: string;
+  gnSendDow: number;
+  gnCreateAt: string;
+  gnRemindAt: string;
+  gnDeadlineAt: string;
 }
 
 // Mirrors Code.gs getSettings(): never returns full keys, only a hint + flags.
@@ -42,6 +50,7 @@ export async function getSettingsView(pool: Pool): Promise<SettingsView> {
   const r2Bucket = await getSetting(pool, "r2_bucket");
   const bzToken = await getSetting(pool, "buzzsprout_api_token");
   const bzPodcast = await getSetting(pool, "buzzsprout_podcast_id");
+  const sched = await loadSchedule(pool);
   return {
     anthropicKeyHint: ak ? ak.substring(0, 10) + "..." : "",
     hasAnthropicKey: ak.length > 0,
@@ -58,5 +67,12 @@ export async function getSettingsView(pool: Pool): Promise<SettingsView> {
     buzzsproutPodcastId: bzPodcast,
     buzzsproutPodcastName: await getSetting(pool, "buzzsprout_podcast_name"),
     houseVoice: (await getSetting(pool, "house_voice")) || DEFAULT_VOICE,
+    hasResend: !!(await getSetting(pool, "resend_api_key")),
+    mailFrom: await getSetting(pool, "mail_from"),
+    publicBaseUrl: await getSetting(pool, "public_base_url"),
+    gnSendDow: sched.sendDow,
+    gnCreateAt: sched.createAt,
+    gnRemindAt: sched.remindAt,
+    gnDeadlineAt: sched.deadlineAt,
   };
 }

@@ -15,6 +15,7 @@ import { recoverSermons, sermonOpts } from "./pipeline/sermons";
 import { backfillLinks } from "./pipeline/metricool-links";
 import { checkPublished } from "./pipeline/publish-check";
 import { syncMetricool } from "./pipeline/metricool-sync";
+import { tick as graceNotesTick } from "./gracenotes/clock";
 import { referenceDate } from "./schedule";
 import { addDays, DEFAULT_TZ } from "./dates";
 import { getSetting, setSetting } from "./settings";
@@ -82,6 +83,14 @@ async function start() {
   };
   publishCheck();
   setInterval(publishCheck, 30 * 60 * 1000).unref();
+  // Grace Notes: create the weekly issue and send reminders. Once now, then every 15 minutes.
+  const graceNotesClock = async () => {
+    await graceNotesTick(pool)
+      .then((r) => { if (r.created || r.reminded) app.log.info(r, "grace notes clock"); })
+      .catch((e) => app.log.warn(e, "grace notes clock failed"));
+  };
+  graceNotesClock();
+  setInterval(graceNotesClock, 15 * 60 * 1000).unref();
   await app.listen({ host: "0.0.0.0", port: config.port });
   app.log.info(`social-posts listening on ${config.port}`);
 }

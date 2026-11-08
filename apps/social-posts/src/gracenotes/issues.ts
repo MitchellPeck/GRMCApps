@@ -89,7 +89,7 @@ export async function createIssue(db: Db, issueDate: string): Promise<Result<Iss
 
 const DAY = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-const label = (iso: string) => `${DAY[weekdayOf(iso)]} ${MON[Number(iso.slice(5, 7)) - 1]} ${Number(iso.slice(8, 10))}`;
+export const label = (iso: string) => `${DAY[weekdayOf(iso)]} ${MON[Number(iso.slice(5, 7)) - 1]} ${Number(iso.slice(8, 10))}`;
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
 /** Every non-archived event starting in the four weeks from issueDate, in date order. */

@@ -20,6 +20,13 @@ interface SaveBody {
   buzzsproutPodcastId?: string;
   buzzsproutPodcastName?: string;
   houseVoice?: string;
+  resendKey?: string;
+  mailFrom?: string;
+  publicBaseUrl?: string;
+  gnSendDow?: number | string;
+  gnCreateAt?: string;
+  gnRemindAt?: string;
+  gnDeadlineAt?: string;
 }
 
 export async function settingsRoutes(app: FastifyInstance): Promise<void> {
@@ -68,6 +75,23 @@ export async function settingsRoutes(app: FastifyInstance): Promise<void> {
         await setSetting(pool, "buzzsprout_podcast_name", s.buzzsproutPodcastName.trim());
       if (s.houseVoice && s.houseVoice.trim())
         await setSetting(pool, "house_voice", s.houseVoice.trim());
+      if (s.resendKey && s.resendKey.trim())
+        await setSetting(pool, "resend_api_key", s.resendKey.trim());
+      if (s.mailFrom && s.mailFrom.trim())
+        await setSetting(pool, "mail_from", s.mailFrom.trim());
+      if (s.publicBaseUrl && s.publicBaseUrl.trim())
+        await setSetting(pool, "public_base_url", s.publicBaseUrl.trim().replace(/\/+$/, ""));
+      if (s.gnSendDow !== undefined && s.gnSendDow !== "") {
+        const d = Number(s.gnSendDow);
+        if (!Number.isInteger(d) || d < 0 || d > 6) return { ok: false, error: "Send day must be 0 (Sunday) to 6 (Saturday)." };
+        await setSetting(pool, "gn_send_dow", String(d));
+      }
+      for (const [field, key] of [["gnCreateAt", "gn_create_at"], ["gnRemindAt", "gn_remind_at"], ["gnDeadlineAt", "gn_deadline_at"]] as const) {
+        const v = s[field]?.trim();
+        if (!v) continue;
+        if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(v)) return { ok: false, error: "Times must look like 18:00." };
+        await setSetting(pool, key, v);
+      }
       return { ok: true };
     } catch (e) {
       return { ok: false, error: (e as Error).message };
