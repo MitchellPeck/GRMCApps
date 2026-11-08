@@ -156,6 +156,14 @@ services:
       - "traefik.http.routers.social-ical.entrypoints=websecure"
       - "traefik.http.routers.social-ical.tls=true"
       - "traefik.http.routers.social-ical.service=social"
+      # The Grace Notes contributor pages (/gn/<token>, one link per person) skip
+      # the hub login the same way: contributors have no hub account, so the
+      # token in the path is the credential and the app checks it. The admin
+      # side stays under /api/gracenotes/ behind the login.
+      - "traefik.http.routers.social-gn.rule=Host(`social.${BASE_DOMAIN}`) && PathPrefix(`/gn/`)"
+      - "traefik.http.routers.social-gn.entrypoints=websecure"
+      - "traefik.http.routers.social-gn.tls=true"
+      - "traefik.http.routers.social-gn.service=social"
       # The Claude connector (/mcp/<token>, one link per person) skips the hub
       # login the same way: Claude's servers call it, and can't sign in. The
       # discovery paths (/.well-known/oauth-*, openid-configuration) come along

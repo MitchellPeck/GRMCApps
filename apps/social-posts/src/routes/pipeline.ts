@@ -35,9 +35,9 @@ import {
   isIsoDate, parseContentInput, parseEventInput, parseMediaInput,
 } from "../pipeline/rules";
 import {
-  createContent, createEvent, createMedia, dashboardGaps, dashboardSummary, deleteContent, deleteEvent,
+  clearEventReview, createContent, createEvent, createMedia, dashboardGaps, dashboardSummary, deleteContent, deleteEvent,
   deleteMedia, duplicateEvent, getContent, getEvent, listContent, listEvents, listMedia, updateContent, updateEvent,
-  updateMedia,
+  setEventImage, updateMedia,
 } from "../pipeline/repo";
 
 const ICAL_SETTING = "pipeline_ical_token";
@@ -127,8 +127,22 @@ export async function pipelineRoutes(app: FastifyInstance): Promise<void> {
   app.patch("/api/pipeline/events/:id", async (req) => guard(async () => {
     const input = parseEventInput(req.body, "patch");
     if (!input.ok) return input;
-    const r = await updateEvent(pool, (req.params as { id: string }).id, input.value);
+    const id = (req.params as { id: string }).id;
+    // The picture Grace Notes shows for this event (set by hand, from an upload).
+    const image = (req.body as Record<string, unknown> | null)?.imageUrl;
+    if (image !== undefined) {
+      if (typeof image !== "string") return { ok: false as const, error: "imageUrl must be text." };
+      const set = await setEventImage(pool, id, image.trim());
+      if (!set.ok) return set;
+    }
+    const r = await updateEvent(pool, id, input.value);
     return r.ok ? { ok: true, event: r.value } : r;
+  }));
+
+  // The admin has looked at a Grace Notes marker ("New from…"); clear it.
+  app.post("/api/pipeline/events/:id/reviewed", async (req) => guard(async () => {
+    const r = await clearEventReview(pool, (req.params as { id: string }).id);
+    return r.ok ? { ok: true } : r;
   }));
 
   app.delete("/api/pipeline/events/:id", async (req) => guard(async () => {

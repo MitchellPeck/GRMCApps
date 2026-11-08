@@ -9,6 +9,8 @@ import { metricoolRoutes } from "./routes/metricool";
 import { podcastRoutes } from "./routes/podcast";
 import { pipelineRoutes } from "./routes/pipeline";
 import { mcpRoutes } from "./routes/mcp";
+import { gracenotesRoutes } from "./routes/gracenotes";
+import { contributorRoutes } from "./routes/contributor";
 import { backfillOnce } from "./pipeline/sync";
 import { migrateDrafting } from "./pipeline/migrate-drafting";
 import { recoverSermons, sermonOpts } from "./pipeline/sermons";
@@ -25,6 +27,8 @@ import {
 
 const app = Fastify({ logger: true, trustProxy: true });
 
+// /gn/* (the token-only contributor pages) is registered first so the static handler never claims it.
+app.register(contributorRoutes);
 app.register(fastifyStatic, { root: join(__dirname, "public"), prefix: "/" });
 app.register(meRoutes);
 app.register(settingsRoutes);
@@ -32,6 +36,7 @@ app.register(metricoolRoutes);
 app.register(podcastRoutes);
 app.register(pipelineRoutes);
 app.register(mcpRoutes);
+app.register(gracenotesRoutes);
 // The pipeline is the app now; old bookmarks to /pipeline land on it.
 app.get("/pipeline", async (_req, reply) => reply.redirect("/", 301));
 
