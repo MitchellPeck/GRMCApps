@@ -31,6 +31,8 @@ export interface EventRow {
   id: string; name: string; kind: string; color: string;
   startDate: string | null; endDate: string | null; seriesId: string | null;
   ownerEmail: string; notes: string; archived: boolean;
+  /** Grace Notes: the picture for the email, and the flag asking the admin to look. */
+  imageUrl: string; reviewNote: string;
   drafting: Profile;
   itemCount?: number;
 }
@@ -69,6 +71,7 @@ function eventOf(r: any): EventRow {
     id: r.id, name: r.name, kind: r.kind, color: r.color,
     startDate: r.start_date, endDate: r.end_date, seriesId: r.series_id,
     ownerEmail: r.owner_email, notes: r.notes, archived: r.archived,
+    imageUrl: r.image_url ?? "", reviewNote: r.review_note ?? "",
     drafting: r.drafting || {},
   };
   if (r.item_count != null) e.itemCount = Number(r.item_count);
@@ -203,6 +206,17 @@ export async function updateEvent(db: Db, id: string, input: EventInput): Promis
   }
   const r = await db.query("SELECT * FROM events WHERE id = $1", [id]);
   return r.rowCount ? { ok: true, value: eventOf(r.rows[0]) } : fail("Event not found.");
+}
+
+/** The admin has looked at a Grace Notes marker ("New from…", "Changed by…"); clear it. */
+export async function clearEventReview(db: Db, id: string): Promise<Result<true>> {
+  const r = await db.query("UPDATE events SET review_note = '' WHERE id = $1", [id]);
+  return r.rowCount ? { ok: true, value: true } : fail("Event not found.");
+}
+
+export async function setEventImage(db: Db, id: string, url: string): Promise<Result<true>> {
+  const r = await db.query("UPDATE events SET image_url = $2 WHERE id = $1", [id, url]);
+  return r.rowCount ? { ok: true, value: true } : fail("Event not found.");
 }
 
 // Deleting an event never deletes its posts: the FK clears their event_id.
