@@ -193,6 +193,18 @@ test("linkEvent and event helpers", async () => {
   assert.equal((g as unknown as { value: { event: { imageUrl: string } } }).value.event.imageUrl, "/i.png");
 });
 
+test("editPiece refuses a blank name on an event-backed piece", async () => {
+  const items = await sec("Events", "events");
+  const i = await issue("2026-11-04");
+  const e = await ev("blank", "Named", "2026-11-20");
+  const p = await piece(i.id, items, { title: "" });
+  ok(await linkEvent(pool, p, e));
+  assert.deepEqual(await editPiece(pool, p, { title: "  " }, admin), { ok: false, error: "Give the item a name." });
+  assert.equal((await pool.query("SELECT name FROM events WHERE id=$1", [e])).rows[0].name, "Named");
+  assert.equal((await editPiece(pool, p, { bodyHtml: "<p>x</p>" }, admin)).ok, true); // title untouched
+  assert.equal((await editPiece(pool, p, { title: "Renamed" }, admin)).ok, true);
+});
+
 test("contributor view with no pieces", async () => {
   const items = await sec("Events", "events");
   const a = await person("A", "a@x.org");

@@ -92,7 +92,7 @@
     fn().then(function (r) {
       if (r && r.ok) {
         toast(okMsg || "Saved. Thank you!");
-        return load();
+        return load(btn.closest(".gn-card"));
       }
       btn.disabled = false;
       btn.textContent = label;
@@ -139,7 +139,8 @@
       body.innerHTML = p.bodyHtml; // sanitized on the server before it was saved
       box.appendChild(body);
     }
-    if (/^https?:\/\//i.test(p.imageUrl || "")) box.appendChild(h("img", { src: p.imageUrl, alt: "" }));
+    var shownImg = p.imageUrl || p.eventImageUrl || "";
+    if (/^https?:\/\//i.test(shownImg)) box.appendChild(h("img", { src: shownImg, alt: "" }));
     return box;
   }
 
@@ -219,12 +220,12 @@
   function makeForm(p, kind, onSave, onCancel, saveLabel) {
     var isEvents = kind === "events";
     var d = p ? Object.assign({}, p.details || {}) : {};
-    var title = textInput(p ? p.title : "");
+    var title = textInput(p ? p.title || p.eventName || "" : "");
     var date = textInput(p && p.eventStartDate ? p.eventStartDate.slice(0, 10) : "", "date");
     var editor = makeEditor(p ? p.bodyHtml : "");
     var det = {};
-    var imageUrl = p ? p.imageUrl || "" : "";
-    var originalImage = imageUrl;
+    var imageUrl = p ? p.imageUrl || p.eventImageUrl || "" : "";
+    var uploading = false, picChanged = false;
     var preview = h("div", { class: "gn-pic" });
     var picInput = h("input", { type: "file", accept: PHOTO_TYPES.join(","), id: "pic" + Math.random().toString(36).slice(2) });
     var picLabel = h("label", { class: "btn btn-secondary", for: picInput.id }, "Add a picture");
@@ -233,7 +234,7 @@
       preview.textContent = "";
       if (/^https?:\/\//i.test(imageUrl)) {
         preview.appendChild(h("img", { src: imageUrl, alt: "Your picture" }));
-        preview.appendChild(h("button", { type: "button", class: "btn btn-secondary", onclick: function () { imageUrl = ""; drawPic(); } }, "Take the picture off"));
+        preview.appendChild(h("button", { type: "button", class: "btn btn-secondary", onclick: function () { imageUrl = ""; picChanged = true; drawPic(); } }, "Take the picture off"));
       }
       picLabel.textContent = imageUrl ? "Pick a different picture" : "Add a picture";
     }
@@ -242,10 +243,12 @@
       if (!f) return;
       if (PHOTO_TYPES.indexOf(f.type) < 0) { toast("Upload a photo (JPG, PNG, GIF or WebP).", true); picInput.value = ""; return; }
       if (f.size > MAX_BYTES) { toast("That picture is over 10 MB.", true); picInput.value = ""; return; }
+      uploading = true; save.disabled = true;
       picLabel.textContent = "Uploading...";
       call("POST", "/image", f, { "Content-Type": f.type }).then(function (r) {
         picInput.value = "";
-        if (r.ok && r.url) { imageUrl = r.url; toast("Picture added."); } else toast(r.error || GENERIC, true);
+        uploading = false; save.disabled = false;
+        if (r.ok && r.url) { imageUrl = r.url; picChanged = true; toast("Picture added."); } else toast(r.error || GENERIC, true);
         drawPic();
       });
     });
@@ -267,6 +270,7 @@
     var save = h("button", { type: "button", class: "btn btn-primary btn-grow" }, saveLabel || "Save");
     var cancel = h("button", { type: "button", class: "btn btn-secondary" }, "Cancel");
     save.addEventListener("click", function () {
+      if (uploading) return;
       var payload = { title: title.value.trim(), bodyHtml: editor.html() };
       if (isEvents) {
         if (!p && !payload.title) { toast("Please give it a name first.", true); title.focus(); return; }
@@ -277,12 +281,12 @@
         });
         payload.details = d;
       }
-      if (imageUrl !== originalImage) payload.imageUrl = imageUrl; // untouched pictures are not sent back
+      if (picChanged) payload.imageUrl = imageUrl; // untouched pictures are not sent back
       busy(save, function () { return onSave(payload); });
     });
     cancel.addEventListener("click", onCancel);
     parts.push(h("div", { class: "gn-actions" }, save, cancel));
-    return h("div", null, parts);
+    return h("div", { class: "gn-form" }, parts);
   }
 
   // ---------- cards ----------
@@ -291,11 +295,13 @@
   };
 
   function pieceCard(p) {
-    var card = h("section", { class: "gn-card" });
-    var chip = CHIPS[p.status] || CHIPS.carried;
-    var isEvents = p.sectionKind === "events";
-    var empty = !p.title && !p.bodyHtml && !p.eventName;
+    var card = h("section", { class: "gn-card", "data-pid": p.id });
+    var chip, isEvents, empty;
+    card._update = function (np) { p = np; show(); };
     function show() {
+      chip = CHIPS[p.status] || CHIPS.carried;
+      isEvents = p.sectionKind === "events";
+      empty = !p.title && !p.bodyHtml && !p.eventName;
       card.textContent = "";
       card.appendChild(h("div", { class: "gn-kicker" }, p.sectionTitle, empty ? null : h("span", { class: "gn-chip " + chip[1] }, chip[0])));
       card.appendChild(readOnly(p));
@@ -348,6 +354,7 @@
         return call("POST", "/sections/" + encodeURIComponent(sid) + "/items", payload);
       }, show, "Add it"));
     }
+    card._reset = show;
     show();
     return card;
   }
@@ -407,7 +414,24 @@
     }
   }
 
-  function load() {
+  // After a save: if other cards still have an open form, update only what changed so no draft is lost.
+  function patch(saved) {
+    var cards = Array.prototype.slice.call(app.querySelectorAll("[data-pid]"));
+    var addCardEl = app.querySelector(".gn-add");
+    var seen = {};
+    view.pieces.forEach(function (p) {
+      seen[p.id] = true;
+      var el = cards.filter(function (c) { return c.getAttribute("data-pid") === p.id; })[0];
+      if (el) { if (el === saved || !el.querySelector(".gn-form")) el._update(p); }
+      else if (addCardEl) app.insertBefore(pieceCard(p), addCardEl);
+    });
+    cards.forEach(function (c) {
+      if (!seen[c.getAttribute("data-pid")] && (c === saved || !c.querySelector(".gn-form"))) c.parentNode.removeChild(c);
+    });
+    if (saved && saved === addCardEl && saved._reset) saved._reset();
+  }
+
+  function load(saved) {
     return call("GET", "/view").then(function (r) {
       if (!r.ok && view) { toast(r.error, true); return; }
       if (!r.ok) {
@@ -415,8 +439,10 @@
         app.appendChild(h("div", { class: "gn-note" }, r.error));
         return;
       }
+      var others = Array.prototype.some.call(app.querySelectorAll(".gn-card"), function (c) { return c !== saved && c.querySelector(".gn-form"); });
+      var first = !view;
       view = r;
-      render();
+      if (!first && others) patch(saved); else render();
     });
   }
 

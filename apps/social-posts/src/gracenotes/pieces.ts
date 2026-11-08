@@ -123,6 +123,8 @@ export async function editPiece(db: Db, pieceId: string, input: PieceInput, acto
   if (dateErr) return fail(dateErr);
 
   const title = input.title ?? cur.title;
+  // An event-backed piece takes its name from the event, so a blank title would blank the event's name.
+  if (input.title !== undefined && cur.eventId && !title.trim()) return fail("Give the item a name.");
   let bodyHtml = cur.bodyHtml;
   if (input.bodyHtml !== undefined) {
     const b = cleanBody(input.bodyHtml);
