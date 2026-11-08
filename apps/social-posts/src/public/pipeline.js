@@ -181,10 +181,11 @@ function render() {
   });
   // The filters only narrow the calendar. Settings has no use for New post either.
   $('pl-filters').hidden = r.view !== 'calendar';
-  document.querySelector('.pl-toolbar').hidden = r.view === 'settings';
+  document.querySelector('.pl-toolbar').hidden = r.view === 'settings' || r.view === 'gracenotes';
   var main = $('pl-main');
   var views = { dashboard: renderDashboard, calendar: renderCalendar, board: renderBoard, events: renderEvents, event: renderEvent,
-    gap: renderGapList, recurring: renderRecurring, mine: renderMine, settings: renderSettings };
+    gap: renderGapList, recurring: renderRecurring, mine: renderMine, settings: renderSettings,
+    gracenotes: function(m, a){ return window.GraceNotes.render(m, a); } };
   // Returned so callers can act once the view has finished drawing.
   return (views[r.view] || renderDashboard)(main, r.arg).catch(function(e){
     main.innerHTML = '<div class="alert alert-err">Couldn’t load this view: '+esc(e.message)+'</div>';
@@ -2073,6 +2074,16 @@ function renderSettings(main) {
       +   '<div class="row2"><div class="field"><label for="st-r2s">Secret access key</label><input id="st-r2s" type="text" name="r2SecretAccessKey" autocomplete="off"></div>'
       +   '<div class="field"><label for="st-r2b">Bucket</label><input id="st-r2b" type="text" name="r2Bucket" placeholder="grmc-media"></div></div>'
       +   '<div class="field"><label for="st-r2u">Public base URL</label><input id="st-r2u" type="text" name="r2PublicBaseUrl" placeholder="https://media.grmc.app"></div></section>'
+      + '<section class="card"><h3 class="ct">Grace Notes email</h3>'
+      +   '<div class="field"><label for="st-rk">Resend API key</label><input id="st-rk" type="text" name="resendKey" autocomplete="off" placeholder="re_…">'+keyHint(s.hasResend, 'A key')+'</div>'
+      +   '<div class="row2"><div class="field"><label for="st-mf">From address</label><input id="st-mf" type="text" name="mailFrom" value="'+esc(s.mailFrom)+'" placeholder="Grace Notes &lt;notes@example.org&gt;"></div>'
+      +   '<div class="field"><label for="st-pb">Public link base</label><input id="st-pb" type="text" name="publicBaseUrl" value="'+esc(s.publicBaseUrl)+'" placeholder="https://social.example.org"></div></div>'
+      +   '<div class="row2"><div class="field"><label for="st-gd">Send day</label><select id="st-gd" name="gnSendDow">'
+      +   DOW.map(function(n, i){ return '<option value="'+i+'"'+(Number(s.gnSendDow) === i ? ' selected' : '')+'>'+n+'</option>'; }).join('')+'</select></div>'
+      +   '<div class="field"><label for="st-gc">Create issue at</label><input id="st-gc" type="time" name="gnCreateAt" value="'+esc(s.gnCreateAt)+'"></div></div>'
+      +   '<div class="row2"><div class="field"><label for="st-gr">Reminder at</label><input id="st-gr" type="time" name="gnRemindAt" value="'+esc(s.gnRemindAt)+'"></div>'
+      +   '<div class="field"><label for="st-gl">Deadline at</label><input id="st-gl" type="time" name="gnDeadlineAt" value="'+esc(s.gnDeadlineAt)+'"></div></div>'
+      +   '<div class="hint">The issue is created, reminded and closed on the three days before the send day, at these times.</div></section>'
       + '<div class="pl-form-msg" id="st-msg"></div>'
       + '<div class="btn-row"><button class="btn btn-primary" type="submit">Save settings</button></div></form>';
   });
