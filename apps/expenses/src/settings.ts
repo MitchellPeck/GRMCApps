@@ -48,6 +48,7 @@ export interface SettingsView {
   hasResendKey: boolean;
   resendKeyHint: string;
   appUrl: string;
+  dailyDigest: boolean;
 }
 
 // Never returns the key itself — only whether one is set, plus a short hint,
@@ -70,5 +71,6 @@ export async function getSettingsView(pool: Pool): Promise<SettingsView> {
     hasResendKey: resend.length > 0,
     resendKeyHint: resend ? resend.substring(0, 6) + "..." : "",
     appUrl: config.appUrl,
+    dailyDigest: (await getSetting(pool, "daily_digest")) === "true",
   };
 }

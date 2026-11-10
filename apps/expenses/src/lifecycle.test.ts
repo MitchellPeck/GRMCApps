@@ -11,11 +11,15 @@ import {
   checkEdit,
   checkPaperApproval,
   checkReimburse,
+  checkNewApprover,
+  checkReassign,
+  checkRemind,
   checkResubmit,
   checkVoid,
   describeEdit,
   needsReapproval,
   reapprovalAfterEdit,
+  reminderFor,
   requiredFields,
   stageOf,
   statusAfterDecision,
@@ -492,4 +496,44 @@ test("the office pays someone for a purchase it keyed for them; the payee still 
                   submitted_by_email: "office@grmc.app", purchased_by_email: "jane@grmc.app" });
   assert.equal(checkReimburse(r, "office@grmc.app", assistant).ok, true);
   assert.equal(checkReimburse(r, "jane@grmc.app", { ...NO_PERMISSIONS, pay: true }).ok, false);
+});
+
+// ── reminders and reassigning ───────────────────────────────────────────────
+
+test("a reminder asks for whatever the request is waiting on", () => {
+  assert.equal(reminderFor(req()), "approval");
+  assert.equal(reminderFor(req({ approver_email: "" })), null);
+  assert.equal(reminderFor(req({ status: "changes_requested" })), "changes");
+  assert.equal(reminderFor(req({ status: "approved", kind: "pre_purchase" })), "actuals");
+  assert.equal(reminderFor(req({ status: "approved", receipt_count: 0 })), "receipt");
+  assert.equal(reminderFor(req({ status: "approved", receipt_count: 2 })), null);
+  // Unknown count (pure callers) is not treated as missing.
+  assert.equal(reminderFor(req({ status: "approved" })), null);
+  assert.equal(reminderFor(req({ status: "rejected" })), null);
+});
+
+test("the office reminds anyone; an owner may only nudge their approver", () => {
+  assert.deepEqual(checkRemind(req({ status: "changes_requested" }), "office@grmc.app", assistant),
+                   { ok: true, reason: "changes" });
+  assert.equal(checkRemind(req(), "a@grmc.app", submitter).ok, true);
+  assert.equal(checkRemind(req({ status: "changes_requested" }), "a@grmc.app", submitter).ok, false);
+  assert.equal(checkRemind(req(), "c@grmc.app", submitter).ok, false);
+  assert.equal(checkRemind(req({ status: "voided" }), "office@grmc.app", assistant).ok, false);
+  // Nobody reminds themselves to approve.
+  assert.equal(checkRemind(req({ approver_email: "office@grmc.app" }), "office@grmc.app", assistant).ok, false);
+});
+
+test("the office or the current approver may hand an undecided request to another approver", () => {
+  assert.equal(checkReassign(req(), "office@grmc.app", assistant).ok, true);
+  assert.equal(checkReassign(req(), "b@grmc.app", approver).ok, true);
+  assert.equal(checkReassign(req(), "c@grmc.app", approver).ok, false);
+  assert.equal(checkReassign(req(), "a@grmc.app", submitter).ok, false);
+  assert.equal(checkReassign(req({ status: "approved" }), "office@grmc.app", assistant).ok, false);
+
+  const people = ["b@grmc.app", "d@grmc.app", "a@grmc.app"];
+  assert.equal(checkNewApprover(req(), "D@grmc.app", people, false).ok, true);
+  assert.equal(checkNewApprover(req(), "b@grmc.app", people, false).ok, false);
+  assert.equal(checkNewApprover(req(), "z@grmc.app", people, false).ok, false);
+  assert.equal(checkNewApprover(req(), "a@grmc.app", people, false).ok, false);
+  assert.equal(checkNewApprover(req(), "a@grmc.app", people, true).ok, true);
 });

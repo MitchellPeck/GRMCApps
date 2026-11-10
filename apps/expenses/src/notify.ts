@@ -33,6 +33,7 @@ export const NOTIFIABLE: ReadonlySet<EventType> = new Set<EventType>([
   "submitted", "resubmitted", "reapproval_required",
   "approved", "approved_on_paper", "rejected", "changes_requested",
   "actuals_completed", "reimbursed", "voided", "comment",
+  "reminded", "reassigned",
 ]);
 
 const money = (n: number | null | undefined) =>
@@ -130,6 +131,38 @@ export function notificationsFor(type: EventType, r: NotifyRequest, ctx: NotifyC
       break;
     case "comment":
       add([...owners(r), r.approver_email], type, `New comment on ${what(r)}`, `${who} wrote:${quoted}`);
+      break;
+    case "reminded": {
+      const amount = money(r.estimated_amount ?? r.amount);
+      const note = quoted ? `\n\n${who} added:${quoted}` : "";
+      switch (ctx.meta?.reason) {
+        case "approval":
+          add([r.approver_email], type, `Reminder: please approve ${what(r)}`,
+            `${amount} for ${r.reason || what(r)} is still waiting for your approval.${note}`);
+          break;
+        case "changes":
+          add(owners(r), type, `Reminder: changes needed on ${what(r)}`,
+            `${what(r)} is still waiting for the changes the approver asked for.${note}\n\n` +
+            `Open the request, make the changes, then press "Send back to approver".`);
+          break;
+        case "actuals":
+          add(owners(r), type, `Reminder: what did ${what(r)} cost?`,
+            `Once you have bought it, open the request and record what ${what(r)} actually cost, ` +
+            `with the receipt.${note}`);
+          break;
+        case "receipt":
+          add(owners(r), type, `Reminder: receipt needed for ${what(r)}`,
+            `We don't have a receipt for ${what(r)} (${amount}) yet. ` +
+            `Open the request and add a photo or PDF of it.${note}`);
+          break;
+      }
+      break;
+    }
+    case "reassigned":
+      if (r.status === "pending") {
+        add([r.approver_email], type, `Please approve: ${money(r.estimated_amount ?? r.amount)} — ${what(r)}`,
+          `${who} passed ${what(r)} (${money(r.estimated_amount ?? r.amount)}) to you to approve.${quoted}`);
+      }
       break;
   }
 

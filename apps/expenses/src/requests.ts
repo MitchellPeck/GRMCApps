@@ -55,12 +55,18 @@ export interface ExpenseRequestRow extends ExpenseRequest {
   created_at: string;
   item_count?: number;
   card_label?: string | null;
+  step_since?: string;
 }
 
 // id::int and to_char on purpose: node-pg returns bigserial as a string and a
 // `date` as a JS Date that serializes to a UTC timestamp — which reads as the
 // previous day east of Greenwich and does not match the yyyy-mm-dd the form
 // works in. Numeric columns are cast to float so arithmetic works client-side.
+export const STEP_EVENTS = [
+  "submitted", "resubmitted", "reapproval_required", "changes_requested",
+  "approved", "approved_on_paper", "actuals_completed", "reassigned",
+].map((t) => `'${t}'`).join(", ");
+
 const SELECT_COLUMNS = `
   r.id::int AS id,
   to_char(r.request_date, 'YYYY-MM-DD') AS request_date,
@@ -75,7 +81,11 @@ const SELECT_COLUMNS = `
   r.approved_amount::float8 AS approved_amount, r.version,
   r.voided_at, r.voided_by_email, r.void_reason,
   r.created_by_email, r.created_by_name, r.created_at,
-  CASE WHEN c.id IS NULL THEN NULL ELSE c.nickname || ' ••' || c.last4 END AS card_label`;
+  CASE WHEN c.id IS NULL THEN NULL ELSE c.nickname || ' ••' || c.last4 END AS card_label,
+  (SELECT count(*)::int FROM receipts x WHERE x.request_id = r.id) AS receipt_count,
+  -- When the request reached the step it is on now, for "waiting 3 days".
+  COALESCE((SELECT max(e.created_at) FROM request_events e
+             WHERE e.request_id = r.id AND e.type IN (${STEP_EVENTS})), r.created_at) AS step_since`;
 
 // Without a scope, every request (reports, the office). With one, only what
 // that person may see — the same rule as lifecycle.canSee, in SQL.

@@ -16,6 +16,7 @@ import { receiptRoutes } from "./routes/receipts";
 import { reportRoutes } from "./routes/reports";
 import { pool } from "./db";
 import { startMailer } from "./mailer";
+import { officeRoutes } from "./routes/office";
 
 const app = Fastify({ logger: true, bodyLimit: 2 * 1024 * 1024 });
 
@@ -34,6 +35,7 @@ app.register(cardRoutes);
 app.register(decisionRoutes);
 app.register(receiptRoutes);
 app.register(reportRoutes);
+app.register(officeRoutes);
 
 app.get("/healthz", async () => ({ ok: true }));
 

@@ -17,7 +17,9 @@ export type EventType =
   | "edited"
   | "withdrawn"
   | "resubmitted"
-  | "voided";
+  | "voided"
+  | "reminded"
+  | "reassigned";
 
 export interface RequestEvent {
   id: number;

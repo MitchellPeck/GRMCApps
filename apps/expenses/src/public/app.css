@@ -104,3 +104,10 @@ input[type=text].code-gl { width: 8em; flex: 0 0 8em; padding: 4px 8px }
 /* Seven flags plus a role and an approver: scroll inside the card, never past it. */
 #perm-list { overflow-x: auto }
 .umatrix select { min-width: 12.5em }
+/* Office: missing receipt flag, pay-run tick boxes */
+.tag-warn { color: var(--pending-fg); background: var(--pending-bg); border-color: transparent }
+.pay-pick { width: 18px; height: 18px; flex: 0 0 auto; accent-color: var(--navy) }
+/* Date and number fields look like the other fields (grmc.css styles text only). */
+input[type=date], input[type=number] { width:100%; border:1px solid var(--rule); border-radius:var(--r);
+  padding:9px 11px; font-size:13px; font-family:var(--font-ui); color:var(--ink); background:var(--field-bg) }
+.btn-row input[type=number] { width:auto; flex:0 1 14em }

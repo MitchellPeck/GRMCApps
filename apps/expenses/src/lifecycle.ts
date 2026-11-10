@@ -32,6 +32,9 @@ export interface ExpenseRequest {
   reimbursed_at: string | null;
   voided_at: string | null;
   version: number;
+  // Optional so pure-logic callers need not invent one; the database rows
+  // always carry it.
+  receipt_count?: number;
 }
 
 export type Stage =
@@ -326,6 +329,68 @@ export function checkAddReceipts(
   return ok;
 }
 
+// What a reminder about this request would ask for, if anything: the approver
+// to decide, or the owners to make changes, record the actual cost, or add the
+// missing receipt.
+export type ReminderReason = "approval" | "changes" | "actuals" | "receipt";
+
+export function reminderFor(req: ExpenseRequest): ReminderReason | null {
+  if (req.status === "pending") return req.approver_email.trim() ? "approval" : null;
+  if (req.status === "changes_requested") return "changes";
+  if (req.status !== "approved") return null;
+  if (req.kind === "pre_purchase" && !req.actuals_completed_at) return "actuals";
+  if (req.receipt_count === 0) return "receipt";
+  return null;
+}
+
+export type RemindCheck =
+  | { ok: true; reason: ReminderReason }
+  | { ok: false; status: number; error: string };
+
+// The office chases anyone. An owner may nudge their own approver, which is
+// the one wait they can do nothing else about.
+export function checkRemind(req: ExpenseRequest, actorEmail: string, perms: Permissions): RemindCheck {
+  const reason = reminderFor(req);
+  const office = perms.manage || perms.pay;
+  if (!office && !(reason === "approval" && isOwner(req, actorEmail))) {
+    return { ok: false, status: 403, error: "Only the office can send reminders." };
+  }
+  if (!reason) return { ok: false, status: 409, error: "Nobody needs reminding about this request." };
+  if (reason === "approval" && same(req.approver_email, actorEmail)) {
+    return { ok: false, status: 409, error: "You are the approver on this request." };
+  }
+  return { ok: true, reason };
+}
+
+// Handing a request to a different approver: the pastor is away, or it went
+// to the wrong person. The office may do it, and so may whoever it is with.
+export function checkReassign(req: ExpenseRequest, actorEmail: string, perms: Permissions): CheckResult {
+  if (!perms.manage && !approvesAny(perms) && !same(req.approver_email, actorEmail)) {
+    return deny(403, "Only the office or the current approver can hand this to someone else.");
+  }
+  if (req.status !== "pending" && req.status !== "changes_requested") {
+    return deny(409, "Only a request still awaiting a decision can change approver.");
+  }
+  return ok;
+}
+
+// The person it is being handed to must be able to approve it.
+export function checkNewApprover(
+  req: ExpenseRequest,
+  newApprover: string,
+  approverEmails: string[],
+  allowSelfApproval: boolean
+): CheckResult {
+  if (!approverEmails.some((a) => same(a, newApprover))) {
+    return deny(400, "Choose someone who can approve requests.");
+  }
+  if (same(req.approver_email, newApprover)) return deny(400, "That person is already the approver.");
+  if (!allowSelfApproval && isOwner(req, newApprover)) {
+    return deny(403, "That person is an owner of this request and cannot approve it.");
+  }
+  return ok;
+}
+
 export interface AllowedActions {
   edit: boolean;
   resubmit: boolean;
@@ -338,6 +403,8 @@ export interface AllowedActions {
   void: boolean;
   addReceipts: boolean;
   comment: boolean;
+  remind: boolean;
+  reassign: boolean;
 }
 
 // The same checks the routes run, asked up front, so the page shows exactly
@@ -363,6 +430,8 @@ export function allowedActions(
     void: checkVoid(req, perms, "x").ok && !(del.ok && del.mode === "hard"),
     addReceipts: checkAddReceipts(req, actorEmail, perms).ok,
     comment: canSee(req, actorEmail, perms),
+    remind: checkRemind(req, actorEmail, perms).ok,
+    reassign: checkReassign(req, actorEmail, perms).ok,
   };
 }
 

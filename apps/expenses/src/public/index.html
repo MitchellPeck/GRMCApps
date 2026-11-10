@@ -20,6 +20,7 @@
   <div class="tabs">
     <button class="tab active" data-tab="new" id="tab-new">New request</button>
     <button class="tab" data-tab="queue">Awaiting you <span id="queue-count" class="tcount"></span></button>
+    <button class="tab" data-tab="office" data-needs="office" hidden>Office <span id="office-count" class="tcount"></span></button>
     <button class="tab" data-tab="history">History</button>
     <button class="tab" data-tab="reports" data-needs="reports" hidden>Reports</button>
     <button class="tab" data-tab="settings">Settings</button>
@@ -151,6 +152,43 @@
     </div>
   </div>
 
+  <!-- ── OFFICE ────────────────────────────────────────────────── -->
+  <div class="panel" id="p-office">
+    <div id="office-msg"></div>
+    <div class="card" data-needs="pay" hidden>
+      <div class="ct">Ready to pay</div>
+      <p class="hint" style="margin-top:-6px">Tick the ones you are paying, enter the date and the cheque or
+        transfer reference, and mark them all paid at once.</p>
+      <div id="pay-list"><div class="empty">Loading&hellip;</div></div>
+      <div id="pay-form" class="subform" hidden>
+        <div class="grid2">
+          <div class="field"><label for="pay-date">Paid on</label><input type="date" id="pay-date"></div>
+          <div class="field"><label for="pay-ref">Reference</label>
+            <input type="text" id="pay-ref" placeholder="Cheque nos., transfer"></div>
+        </div>
+        <div class="btn-row">
+          <button class="btn btn-primary" id="btn-pay-run" data-default="Mark selected paid">Mark selected paid</button>
+          <span class="muted" id="pay-total"></span>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="ct">Waiting on receipts</div>
+      <p class="hint" style="margin-top:-6px">Approved, but the receipt or the actual cost is not in yet.</p>
+      <div id="office-receipts"></div>
+    </div>
+    <div class="card">
+      <div class="ct">Changes requested</div>
+      <p class="hint" style="margin-top:-6px">The approver asked for changes; waiting on the person who submitted it.</p>
+      <div id="office-changes"></div>
+    </div>
+    <div class="card">
+      <div class="ct">Awaiting approval</div>
+      <p class="hint" style="margin-top:-6px">Oldest first. Remind the approver, or hand it to someone else from the request.</p>
+      <div id="office-pending"></div>
+    </div>
+  </div>
+
   <!-- ── HISTORY ───────────────────────────────────────────────── -->
   <div class="panel" id="p-history">
     <div class="card">
@@ -168,7 +206,7 @@
           <option>Withdrawn</option>
           <option>Voided</option>
         </select>
-        <input type="text" id="h-search" placeholder="Search reason, vendor or person">
+        <input type="text" id="h-search" placeholder="Search reason, vendor, person, #number or amount" aria-label="Search requests">
         <select id="h-payment">
           <option value="">Any payment</option>
           <option value="church_card">Church card</option>
@@ -263,6 +301,11 @@
       <div class="field"><label for="s_resendKey">Resend API key</label>
         <input type="password" id="s_resendKey" placeholder="re_&hellip;" autocomplete="off">
         <div class="hint" id="resend-hint"></div></div>
+      <div class="field">
+        <label><input type="checkbox" id="s_dailyDigest"> Send a morning summary email</label>
+        <div class="hint">At 8am each approver gets a list of what is waiting for them, and whoever pays
+          gets what is ready to pay. Nobody gets one on a day with nothing waiting.</div>
+      </div>
       <div class="btn-row">
         <button class="btn btn-primary" id="btn-save-mail" data-default="Save">Save</button>
         <button class="btn" id="btn-test-mail" data-default="Send me a test email">Send me a test email</button>

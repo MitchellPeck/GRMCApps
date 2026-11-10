@@ -1,10 +1,14 @@
 import { FastifyInstance } from "fastify";
+import type { PoolClient } from "pg";
+import type { Identity } from "../identity";
+import type { Permissions } from "../permissions";
 import { pool } from "../db";
 import { getIdentity } from "../identity";
 import { loadPermissions, rejectBadIds } from "../guard";
 import { addEvent } from "../events";
 import { getTolerances, selfApprovalAllowed } from "../settings";
 import {
+  FoundRequest,
   approveRequest,
   completeActuals,
   markReimbursed,
@@ -26,7 +30,7 @@ import { Refusal, checkVersion, mutate } from "./requests";
 const ACTIONS: DecisionAction[] = ["approve", "reject", "request_changes"];
 
 // A date someone typed for something that already happened.
-function pastDate(raw: unknown, what: string): string {
+export function pastDate(raw: unknown, what: string): string {
   const s = String(raw ?? "").trim();
   if (!isIsoDate(s)) throw new Refusal(400, `Enter the date ${what}.`);
   if (s > todayIso()) throw new Refusal(400, `The date ${what} can't be in the future.`);
@@ -155,17 +159,29 @@ export async function decisionRoutes(app: FastifyInstance): Promise<void> {
 
     return mutate(reply, Number(id), async (db, found) => {
       checkVersion(found, b.version);
-      const guard = checkReimburse(found.request, identity.email, perms);
-      if (!guard.ok) throw new Refusal(guard.status, guard.error);
-      const paidOn = pastDate(b.paidOn, "it was paid");
-      const reference = String(b.reference ?? "").trim();
-
-      await markReimbursed(db, Number(id), identity.email, paidOn, reference);
-      await addEvent(db, Number(id), "reimbursed", identity, reference, {
-        paidOn,
-        amount: found.request.amount,
-      });
+      await reimburse(db, found, identity, perms, b.paidOn, b.reference);
       return { ok: true };
     });
+  });
+}
+
+// One reimbursement, inside the caller's transaction. Shared by the single
+// button and the office's pay run.
+export async function reimburse(
+  db: PoolClient,
+  found: FoundRequest,
+  identity: Identity,
+  perms: Permissions,
+  rawPaidOn: unknown,
+  rawReference: unknown
+): Promise<void> {
+  const guard = checkReimburse(found.request, identity.email, perms);
+  if (!guard.ok) throw new Refusal(guard.status, guard.error);
+  const paidOn = pastDate(rawPaidOn, "it was paid");
+  const reference = String(rawReference ?? "").trim();
+  await markReimbursed(db, found.request.id, identity.email, paidOn, reference);
+  await addEvent(db, found.request.id, "reimbursed", identity, reference, {
+    paidOn,
+    amount: found.request.amount,
   });
 }

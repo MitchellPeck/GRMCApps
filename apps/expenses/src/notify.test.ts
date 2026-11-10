@@ -95,3 +95,26 @@ test("quiet events send nothing, and no app URL means no link line", () => {
   const out = notificationsFor("submitted", req(), ctx({ appUrl: "" }));
   assert.doesNotMatch(out[0].body, /Open it/);
 });
+
+test("a reminder goes to whoever the request is waiting on, with the office's note", () => {
+  const office = ctx({ actorEmail: "office@x.org", actorName: "Olive" });
+  const approval = notificationsFor("reminded", req(), { ...office, meta: { reason: "approval" } });
+  assert.deepEqual(to(approval), ["pastor@x.org"]);
+  assert.match(approval[0].subject, /Reminder: please approve Hobby Lobby/);
+
+  const receipt = notificationsFor("reminded", req({ purchased_by_email: "bob@x.org", status: "approved" }),
+    { ...office, comment: "Just the photo is fine", meta: { reason: "receipt" } });
+  assert.deepEqual(to(receipt), ["ann@x.org", "bob@x.org"]);
+  assert.match(receipt[0].body, /add a photo or PDF/);
+  assert.match(receipt[0].body, /Olive added:\n\n"Just the photo is fine"/);
+
+  assert.deepEqual(notificationsFor("reminded", req(), { ...office, meta: null }), []);
+});
+
+test("a request handed to a new approver tells the new approver only while it is pending", () => {
+  const r = req({ approver_email: "deacon@x.org" });
+  const out = notificationsFor("reassigned", r, ctx({ actorEmail: "office@x.org", actorName: "Olive" }));
+  assert.deepEqual(to(out), ["deacon@x.org"]);
+  assert.match(out[0].body, /Olive passed Hobby Lobby/);
+  assert.deepEqual(notificationsFor("reassigned", req({ status: "changes_requested" }), ctx()), []);
+});

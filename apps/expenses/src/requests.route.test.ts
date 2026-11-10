@@ -25,6 +25,7 @@ async function setup() {
   await app.register((await import("./routes/decisions")).decisionRoutes);
   await app.register((await import("./routes/receipts")).receiptRoutes);
   await app.register((await import("./routes/reports")).reportRoutes);
+  await app.register((await import("./routes/office")).officeRoutes);
 }
 after(async () => { if (app) await app.close(); if (pool) await pool.end(); });
 
@@ -50,7 +51,7 @@ beforeEach(async () => {
     "INSERT INTO cards (last4, nickname, primary_email) VALUES ('1234', 'Ministry', 'ann@x.org') RETURNING id::int AS id"
   )).rows[0].id;
   await pool.query("UPDATE settings SET value = 'false' WHERE key = 'allow_self_approval'");
-  await pool.query("DELETE FROM settings WHERE key IN ('resend_api_key', 'mail_from')");
+  await pool.query("DELETE FROM settings WHERE key IN ('resend_api_key', 'mail_from', 'daily_digest', 'digest_last_sent')");
 });
 
 const today = new Date().toISOString().slice(0, 10);
@@ -415,4 +416,105 @@ test("review fixes: retired card, unbought pre-purchase amount, paper signer, su
   await pool.query("UPDATE requests SET charge_code = '6200', sub_charge_code = '01' WHERE id = $1", [id]);
   assert.equal(await chargeCodeUsage(pool, a1), 0);
   assert.equal(await chargeCodeUsage(pool, b1), 1);
+});
+
+// ── office: reminders, reassigning, the pay run, the morning digest ─────────
+
+const remind = (id: number, headers: Record<string, string>, comment = "") =>
+  app.inject({ method: "POST", url: `/api/requests/${id}/remind`, headers, payload: { comment } });
+
+test("a reminder emails whoever the request waits on, once per twelve hours", { skip }, async () => {
+  const id = await submit();
+  const version = (await detail(id)).request.version;
+  assert.equal((await remind(id, OFFICE)).statusCode, 409, "no mail set up");
+  await mailOn();
+  assert.equal((await remind(id, BOB)).statusCode, 403);
+  const sent = await remind(id, ANN, "Needed by Sunday");
+  assert.equal(sent.statusCode, 200, sent.body);
+  assert.deepEqual((await outbox()).filter((n: any) => n.kind === "reminded").map((n: any) => n.to_email),
+                   ["pastor@x.org"]);
+  assert.equal((await remind(id, OFFICE)).statusCode, 429);
+  const ev = (await detail(id)).events.find((e: any) => e.type === "reminded");
+  assert.equal(ev.meta.reason, "approval");
+  assert.equal(ev.comment, "Needed by Sunday");
+  // The row's version is untouched: a reminder is not a change to the request.
+  assert.equal((await detail(id)).request.version, version);
+});
+
+test("an approved purchase with no receipt shows up as missing one, and the owner is reminded", { skip }, async () => {
+  await mailOn();
+  const id = await submit();
+  await decide(id, "approve");
+  const d = await detail(id, OFFICE);
+  assert.equal(d.request.receipt_count, 0);
+  assert.equal(d.allowed.remind, true);
+  assert.equal((await remind(id, OFFICE)).statusCode, 200);
+  const last = (await outbox()).at(-1);
+  assert.deepEqual([last.to_email, last.kind], ["ann@x.org", "reminded"]);
+});
+
+test("the office hands a request to another approver; the old one can no longer decide it", { skip }, async () => {
+  await pool.query(`INSERT INTO app_users (email, name, can_submit, can_approve) VALUES ('deacon@x.org', 'Dee Deacon', true, true)`);
+  await mailOn();
+  const id = await submit();
+  const v = (await detail(id)).request.version;
+  const move = (headers: Record<string, string>, approverEmail: string) => app.inject({
+    method: "POST", url: `/api/requests/${id}/reassign`, headers, payload: { approverEmail, version: v },
+  });
+  assert.equal((await move(ANN, "deacon@x.org")).statusCode, 403);
+  assert.equal((await move(OFFICE, "bob@x.org")).statusCode, 400);
+  const ok = await move(OFFICE, "Deacon@x.org");
+  assert.equal(ok.statusCode, 200, ok.body);
+  const d = await detail(id);
+  assert.equal(d.request.approver_email, "deacon@x.org");
+  assert.equal(d.request.approved_by, "Dee Deacon");
+  // The pastor is no longer on it at all, so it is not theirs to see.
+  assert.equal((await app.inject({ url: `/api/requests/${id}`, headers: PASTOR })).statusCode, 404);
+  assert.equal((await app.inject({ method: "POST", url: `/api/requests/${id}/decision`, headers: PASTOR,
+                                   payload: { action: "approve", version: d.request.version } })).statusCode, 403);
+  assert.deepEqual((await outbox()).at(-1).to_email, "deacon@x.org");
+  const deacon = as("deacon@x.org", "Dee Deacon");
+  const queue = JSON.parse((await app.inject({ url: "/api/queue", headers: deacon })).body);
+  assert.deepEqual(queue.requests.map((r: any) => r.id), [id]);
+});
+
+test("the pay run pays what it can and says why it skipped the rest", { skip }, async () => {
+  const a = await submit(ANN, { paymentMethod: "reimbursement", cardId: null });
+  const b = await submit(BOB, { paymentMethod: "reimbursement", cardId: null });
+  const card = await submit();
+  for (const id of [a, b, card]) await decide(id, "approve");
+  const items = await Promise.all([a, b, card].map(async (id) => ({ id, version: (await detail(id, OFFICE)).request.version })));
+
+  const pay = (headers: Record<string, string>, paidOn: string) => app.inject({
+    method: "POST", url: "/api/reimburse-batch", headers, payload: { items, paidOn, reference: "Chk 1200-1201" },
+  });
+  assert.equal((await pay(ANN, today)).statusCode, 403);
+  const bad = await pay(OFFICE, "2999-01-01");
+  assert.equal(bad.statusCode, 400);
+  assert.equal((await detail(a, OFFICE)).request.reimbursed_at, null);
+
+  const res = await pay(OFFICE, today);
+  assert.equal(res.statusCode, 200, res.body);
+  const out = JSON.parse(res.body);
+  assert.equal(out.paid, 2);
+  assert.deepEqual(out.results.filter((r: any) => !r.ok).map((r: any) => [r.id, r.error]),
+                   [[card, "This request is not a reimbursement."]]);
+  assert.equal((await detail(b, OFFICE)).request.reimbursement_reference, "Chk 1200-1201");
+});
+
+test("the morning digest goes out once a day, after eight, only when switched on", { skip }, async () => {
+  const { runDigest } = await import("./digest");
+  await mailOn();
+  await submit();
+  const nineAm = new Date("2026-11-10T15:00:00Z");   // 09:00 in Chicago
+  const sixAm = new Date("2026-11-10T12:00:00Z");
+  assert.equal(await runDigest(pool, nineAm), 0, "off by default");
+  await pool.query("INSERT INTO settings (key, value) VALUES ('daily_digest', 'true')");
+  const before = (await outbox()).length;
+  assert.equal(await runDigest(pool, sixAm), 0);
+  assert.equal(await runDigest(pool, nineAm), 1);
+  assert.equal(await runDigest(pool, nineAm), 0, "already sent today");
+  const sent = (await outbox()).slice(before);
+  assert.deepEqual(sent.map((n: any) => [n.to_email, n.kind]), [["pastor@x.org", "digest"]]);
+  assert.equal(await runDigest(pool, new Date("2026-11-11T15:00:00Z")), 1, "the next day it goes again");
 });

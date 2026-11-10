@@ -4,6 +4,7 @@ import type { Identity } from "./identity";
 import { NOTIFIABLE, NotifyRequest, notificationsFor } from "./notify";
 import { getSetting } from "./settings";
 import { config } from "./config";
+import { runDigest } from "./digest";
 
 type Db = Pick<Pool, "query">;
 export type FetchFn = typeof fetch;
@@ -149,6 +150,7 @@ export function startMailer(pool: Pool, log: { error(obj: unknown, msg?: string)
     if (running) return;
     running = true;
     try {
+      await runDigest(pool);
       await deliverPending(pool);
     } catch (err) {
       log.error(err, "expenses: sending notifications failed");

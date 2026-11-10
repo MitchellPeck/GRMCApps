@@ -12,6 +12,7 @@
   var settings = {};
   var orgName = "Grace Resurrection Methodist Church";
   var detailId = null;
+  var queueIds = [];      // "Awaiting you", oldest first — for "open the next one"
 
   var $ = function (id) { return document.getElementById(id); };
   var HUB = "https://hub." + location.hostname.split(".").slice(1).join(".");
@@ -185,6 +186,7 @@
       showTab(name);
       if (name === "history") loadHistory();
       if (name === "queue") loadQueue();
+      if (name === "office") loadOffice();
       if (name === "settings") loadSettingsTab();
     });
   });
@@ -695,8 +697,24 @@
   });
 
   // ── lists ────────────────────────────────────────────────────────────────
-  function requestRow(r, onOpen) {
+  function daysSince(ts) {
+    var d = Math.floor((Date.now() - new Date(ts).getTime()) / 86400000);
+    return d <= 0 ? "today" : d === 1 ? "1 day" : d + " days";
+  }
+
+  function oldestFirst(a, b) { return new Date(a.step_since) - new Date(b.step_since); }
+
+  function payeeOf(r) { return String(r.purchased_by_email || r.submitted_by_email || "").toLowerCase(); }
+
+  function mailOn() { return !!(settings.hasResendKey && settings.mailFrom); }
+
+  // opts.lead: an element before the text (the pay-run tick box).
+  // opts.age: show how long it has sat at this step.
+  // opts.extra: buttons beside Open.
+  function requestRow(r, onOpen, opts) {
+    opts = opts || {};
     var row = el("div", "hrow");
+    if (opts.lead) row.appendChild(opts.lead);
     var main = el("div", "hrow-main");
     main.appendChild(el("div", "hrow-title", r.reason || "(no reason given)"));
     var bits = [fmtDate(r.request_date), r.vendor, displayCode(r.charge_code),
@@ -708,12 +726,15 @@
     badges.appendChild(el("span", "tagp", r.payment_method === "reimbursement" ? "Reimbursement" : "Church card"));
     if (r.kind === "pre_purchase") badges.appendChild(el("span", "tagp", "Pre-purchase"));
     if (r.approval_method === "paper") badges.appendChild(el("span", "tagp", "Paper"));
+    if (r.status === "approved" && r.receipt_count === 0) badges.appendChild(el("span", "tagp tag-warn", "No receipt"));
+    if (opts.age && r.step_since) badges.appendChild(el("span", "tagp", "Waiting " + daysSince(r.step_since)));
     main.appendChild(badges);
 
     row.appendChild(main);
     row.appendChild(el("div", "hrow-amt", fmtAmount(r.amount || r.estimated_amount || 0)));
     var open = el("button", "btn", "Open");
     open.addEventListener("click", function () { onOpen(r.id); });
+    (opts.extra || []).forEach(function (b) { row.appendChild(b); });
     row.appendChild(open);
     return row;
   }
@@ -724,11 +745,13 @@
       $("queue-count").textContent = data.count ? "(" + data.count + ")" : "";
       var list = $("queue-list");
       list.innerHTML = "";
-      if (!data.requests.length) {
+      var rows = data.requests.slice().sort(oldestFirst);
+      queueIds = rows.map(function (r) { return r.id; });
+      if (!rows.length) {
         list.innerHTML = '<div class="empty">Nothing is waiting on you.</div>';
         return 0;
       }
-      data.requests.forEach(function (r) { list.appendChild(requestRow(r, openDetail)); });
+      rows.forEach(function (r) { list.appendChild(requestRow(r, openDetail, { age: true })); });
       return data.count;
     } catch (err) { msg("queue-msg", err.message, "err"); return 0; }
   }
@@ -743,7 +766,8 @@
         if (stage && r.stage !== stage) return false;
         if (payment && r.payment_method !== payment) return false;
         if (q) {
-          var hay = [r.reason, r.vendor, r.submitted_by, r.submitted_by_email].join(" ").toLowerCase();
+          var hay = [r.reason, r.vendor, r.submitted_by, r.submitted_by_email, r.purchased_by,
+                     "#" + r.id, String(r.amount), fmtAmount(r.amount)].join(" ").toLowerCase();
           if (hay.indexOf(q) === -1) return false;
         }
         return true;
@@ -759,6 +783,131 @@
     $(id).addEventListener("change", loadHistory);
   });
   $("h-search").addEventListener("input", loadHistory);
+
+  // ── office ───────────────────────────────────────────────────────────────
+  // Everything the office chases, worked out from the one list of requests:
+  // what to pay, what is missing a receipt, what is stuck with its submitter,
+  // and what is stuck with its approver.
+  function remindButton(r, label, box) {
+    var b = el("button", "btn btn-sm", label);
+    b.addEventListener("click", async function () {
+      b.disabled = true;
+      try {
+        await api("POST", "/api/requests/" + r.id + "/remind", {});
+        b.textContent = "Reminded";
+      } catch (err) {
+        b.disabled = false;
+        msg(box, err.message, "warn");
+      }
+    });
+    return b;
+  }
+
+  function personOf(r) { return r.purchased_by || r.submitted_by || r.created_by_name || "them"; }
+
+  function officeList(id, rows, empty, remindLabel) {
+    var list = $(id);
+    list.innerHTML = "";
+    if (!rows.length) { list.innerHTML = '<div class="empty">' + empty + "</div>"; return; }
+    rows.forEach(function (r) {
+      var extra = mailOn() ? [remindButton(r, remindLabel(r), "office-msg")] : [];
+      list.appendChild(requestRow(r, openDetail, { age: true, extra: extra }));
+    });
+  }
+
+  async function loadOffice() {
+    try {
+      var rows = (await api("GET", "/api/requests")).requests;
+      var ready = rows.filter(function (r) { return r.stage === "Approved — awaiting reimbursement"; })
+        .sort(oldestFirst);
+      var receipts = rows.filter(function (r) {
+        return r.stage === "Approved — awaiting receipts" || (r.status === "approved" && r.receipt_count === 0);
+      }).sort(oldestFirst);
+      var changes = rows.filter(function (r) { return r.status === "changes_requested"; }).sort(oldestFirst);
+      var pending = rows.filter(function (r) { return r.status === "pending"; }).sort(oldestFirst);
+
+      officeList("office-receipts", receipts, "Every approved request has its receipt.", function (r) {
+        return "Remind " + personOf(r);
+      });
+      officeList("office-changes", changes, "Nothing is waiting on changes.", function (r) {
+        return "Remind " + personOf(r);
+      });
+      officeList("office-pending", pending, "Nothing is awaiting approval.", function (r) {
+        return "Remind " + approverLabel(r);
+      });
+      if (can("pay")) renderPayList(ready);
+      var mine = can("pay") ? ready.filter(function (r) { return payeeOf(r) !== me.email.toLowerCase(); }).length : 0;
+      $("office-count").textContent = mine ? "(" + mine + ")" : "";
+      return mine + receipts.length;
+    } catch (err) { msg("office-msg", err.message, "err"); return 0; }
+  }
+
+  var payRows = [];
+
+  function renderPayList(rows) {
+    payRows = rows;
+    var list = $("pay-list");
+    list.innerHTML = "";
+    $("pay-form").hidden = !rows.length;
+    if (!rows.length) { list.innerHTML = '<div class="empty">Nothing is waiting to be paid.</div>'; return; }
+    rows.forEach(function (r) {
+      var cb = el("input");
+      cb.type = "checkbox";
+      cb.className = "pay-pick";
+      cb.value = String(r.id);
+      cb.setAttribute("aria-label", "Pay " + fmtAmount(r.amount) + " to " + personOf(r));
+      if (payeeOf(r) === me.email.toLowerCase()) {
+        cb.disabled = true;
+        cb.title = "Someone else must record paying you.";
+      }
+      cb.addEventListener("change", payTotal);
+      list.appendChild(requestRow(r, openDetail, { lead: cb, age: true }));
+    });
+    if (!$("pay-date").value) $("pay-date").value = todayISO();
+    $("pay-date").max = todayISO();
+    payTotal();
+  }
+
+  function pickedForPay() {
+    var ids = Array.prototype.map.call(document.querySelectorAll(".pay-pick:checked"),
+                                       function (c) { return Number(c.value); });
+    return payRows.filter(function (r) { return ids.indexOf(r.id) !== -1; });
+  }
+
+  function payTotal() {
+    var p = pickedForPay();
+    var sum = p.reduce(function (s, r) { return s + (Number(r.amount) || 0); }, 0);
+    $("pay-total").textContent = p.length ? p.length + " selected · " + fmtAmount(sum) : "None selected";
+    $("btn-pay-run").disabled = !p.length;
+  }
+
+  $("btn-pay-run").addEventListener("click", async function () {
+    var p = pickedForPay();
+    var paidOn = $("pay-date").value;
+    if (!p.length) return;
+    if (!paidOn) { msg("office-msg", "Choose the date they were paid.", "warn"); return; }
+    var sum = p.reduce(function (s, r) { return s + (Number(r.amount) || 0); }, 0);
+    if (!confirm("Mark " + p.length + (p.length === 1 ? " reimbursement" : " reimbursements") +
+                 " (" + fmtAmount(sum) + ") as paid on " + fmtDate(paidOn) + "?")) return;
+    busy("btn-pay-run", true, "Saving…");
+    try {
+      var out = await api("POST", "/api/reimburse-batch", {
+        items: p.map(function (r) { return { id: r.id, version: r.version }; }),
+        paidOn: paidOn,
+        reference: $("pay-ref").value.trim()
+      });
+      var failed = out.results.filter(function (x) { return !x.ok; });
+      $("pay-ref").value = "";
+      busy("btn-pay-run", false);
+      await loadOffice();
+      msg("office-msg", "Marked " + out.paid + " paid." + (failed.length
+        ? " Not paid: " + failed.map(function (f) { return "#" + f.id + " — " + f.error; }).join("; ")
+        : ""), failed.length ? "warn" : "ok", true);
+    } catch (err) {
+      busy("btn-pay-run", false);
+      msg("office-msg", err.message, "err");
+    }
+  });
 
   // ── detail ───────────────────────────────────────────────────────────────
   async function openDetail(id) {
@@ -1062,12 +1211,24 @@
     comment: "Comment", receipt_added: "Receipt added", receipt_removed: "Receipt removed",
     actuals_completed: "Actual cost recorded", reapproval_required: "Sent back for re-approval",
     reimbursed: "Reimbursed", edited: "Edited", withdrawn: "Withdrawn",
-    resubmitted: "Sent back to approver", voided: "Voided"
+    resubmitted: "Sent back to approver", voided: "Voided",
+    reminded: "Reminder sent", reassigned: "Approver changed"
+  };
+
+  var REMINDER_TEXT = {
+    approval: "Asked the approver to decide", changes: "Asked for the requested changes",
+    actuals: "Asked for the actual cost", receipt: "Asked for the receipt"
   };
 
   function has(v) { return v !== undefined && v !== null; }
 
-  function approverLabel(r) { return r.approved_by || r.approver_email || "the approver"; }
+  function nameFor(email) {
+    var e = String(email || "").toLowerCase();
+    var hit = approvers.concat(people).find(function (p) { return String(p.email).toLowerCase() === e; });
+    return (hit && hit.name) || email;
+  }
+
+  function approverLabel(r) { return r.approved_by || nameFor(r.approver_email) || "the approver"; }
 
   function lastEvent(events, types) {
     for (var i = events.length - 1; i >= 0; i--) {
@@ -1151,7 +1312,7 @@
     grid.appendChild(field("Purchased by", r.purchased_by));
     grid.appendChild(field("Submitted by", r.submitted_by || r.created_by_name));
     if (r.card_label) grid.appendChild(field("Card", r.card_label));
-    grid.appendChild(field("Approver", r.approved_by || r.approver_email));
+    grid.appendChild(field("Approver", approverLabel(r)));
     if (r.reimbursed_at) grid.appendChild(field("Reimbursed", fmtDate(r.reimbursed_at) +
       (r.reimbursement_reference ? " · " + r.reimbursement_reference : "")));
     if (r.voided_at) grid.appendChild(field("Voided", fmtDate(r.voided_at) +
@@ -1329,6 +1490,41 @@
 
     var lastRow = el("div", "btn-row");
 
+    if (allowed.remind && mailOn()) {
+      var rmb = el("button", "btn btn-secondary",
+                   r.status === "pending" ? "Remind " + approverLabel(r) : "Send a reminder");
+      rmb.title = "Emails whoever this request is waiting on.";
+      rmb.addEventListener("click", function () { sendReminder(r, rmb); });
+      lastRow.appendChild(rmb);
+    }
+
+    var rabox = null;
+    if (allowed.reassign) {
+      var choices = approvers.filter(function (a) {
+        return String(a.email).toLowerCase() !== String(r.approver_email || "").toLowerCase();
+      });
+      if (choices.length) {
+        var rab = el("button", "btn btn-secondary", "Change approver…");
+        lastRow.appendChild(rab);
+        rabox = el("div", "subform");
+        rabox.appendChild(el("p", "hint", "Hand this request to someone else to approve. They get an email."));
+        var rsel = el("select"); rsel.id = "d-new-approver";
+        setOptions(rsel, choices.map(function (a) { return [a.email, a.name || a.email]; }), "— choose —");
+        var rnote = el("input"); rnote.type = "text"; rnote.id = "d-reassign-note";
+        rnote.placeholder = "e.g. Pastor is away this week";
+        var rg2 = el("div", "grid2");
+        rg2.appendChild(labelled("New approver", rsel));
+        rg2.appendChild(labelled("Note (optional)", rnote));
+        rabox.appendChild(rg2);
+        var rarow = el("div", "btn-row");
+        var rago = el("button", "btn btn-primary", "Change approver");
+        rago.addEventListener("click", function () { reassign(r); });
+        rarow.appendChild(rago);
+        rabox.appendChild(rarow);
+        reveal(rab, rabox, rsel);
+      }
+    }
+
     if (allowed.edit) {
       var editBtn = el("button", "btn", "Edit request");
       editBtn.addEventListener("click", function () {
@@ -1369,6 +1565,7 @@
       reveal(vb, vbox, vreason);
     }
     if (lastRow.childNodes.length) ac.appendChild(lastRow);
+    if (rabox) ac.appendChild(rabox);
     if (vbox) ac.appendChild(vbox);
     // Kept even when empty: its message box also reports comment errors.
     if (ac.childNodes.length === 2) ac.appendChild(el("div", "empty", "Nothing for you to do on this request."));
@@ -1402,6 +1599,13 @@
       }
       if (m.approvedOn) item.appendChild(el("div", "tl-comment", "Signed on " + fmtDate(m.approvedOn)));
       if (m.paidOn) item.appendChild(el("div", "tl-comment", "Paid on " + fmtDate(m.paidOn)));
+      if (e.type === "reminded" && REMINDER_TEXT[m.reason]) {
+        item.appendChild(el("div", "tl-comment", REMINDER_TEXT[m.reason] + " (by email)"));
+      }
+      if (e.type === "reassigned") {
+        item.appendChild(el("div", "tl-comment",
+          "From " + (m.fromName || nameFor(m.from) || "nobody") + " to " + (m.toName || nameFor(m.to))));
+      }
       if (m.changes) {
         describeChanges(m.changes).forEach(function (line) {
           item.appendChild(el("div", "tl-comment", line));
@@ -1459,9 +1663,52 @@
     try {
       await api("POST", "/api/requests/" + r.id + "/decision",
                 { action: action, comment: comment, version: r.version });
-      await openDetail(r.id); loadQueue();
-      msg("detail-msg", action === "approve" ? "Approved."
-        : action === "reject" ? "Rejected." : "Sent back for changes.", "ok");
+      var done = action === "approve" ? "Approved." : action === "reject" ? "Rejected." : "Sent back for changes.";
+      // Working through the queue: go straight to the next one waiting.
+      var fromQueue = queueIds.indexOf(r.id) !== -1;
+      await loadQueue();
+      if (fromQueue && queueIds.length) {
+        await openDetail(queueIds[0]);
+        msg("detail-msg", done + " Here is the next one waiting for you (" + queueIds.length + " left).", "ok", true);
+        return;
+      }
+      await openDetail(r.id);
+      msg("detail-msg", done + (fromQueue ? " That was the last one waiting for you." : ""), "ok", true);
+    } catch (err) { showActionError("detail-msg", err, r.id); }
+  }
+
+  async function sendReminder(r, btn) {
+    btn.disabled = true;
+    try {
+      await api("POST", "/api/requests/" + r.id + "/remind", {});
+      await openDetail(r.id);
+      msg("detail-msg", "Reminder sent.", "ok");
+    } catch (err) {
+      btn.disabled = false;
+      showActionError("detail-msg", err, r.id);
+    }
+  }
+
+  async function reassign(r) {
+    var to = ($("d-new-approver") || {}).value || "";
+    if (!to) { msg("detail-msg", "Choose who should approve it.", "warn"); return; }
+    var name = (($("d-new-approver").selectedOptions[0]) || {}).text || to;
+    try {
+      await api("POST", "/api/requests/" + r.id + "/reassign", {
+        approverEmail: to, comment: (($("d-reassign-note") || {}).value || "").trim(), version: r.version
+      });
+      loadQueue();
+      // An approver handing it on may no longer be allowed to see it.
+      var mine = [r.submitted_by_email, r.purchased_by_email, r.created_by_email].some(function (e) {
+        return String(e || "").toLowerCase() === me.email.toLowerCase();
+      });
+      if (!can("viewAll") && !mine) {
+        clearLink(); showTab("queue");
+        msg("queue-msg", "Handed to " + name + ".", "ok", true);
+        return;
+      }
+      await openDetail(r.id);
+      msg("detail-msg", "Handed to " + name + ". They have been emailed.", "ok", true);
     } catch (err) { showActionError("detail-msg", err, r.id); }
   }
 
@@ -1824,7 +2071,7 @@
   $("btn-save-mail").addEventListener("click", async function () {
     busy("btn-save-mail", true, "Saving…");
     try {
-      var body = { mailFrom: $("s_mailFrom").value };
+      var body = { mailFrom: $("s_mailFrom").value, dailyDigest: $("s_dailyDigest").checked ? "true" : "false" };
       if ($("s_resendKey").value.trim()) body.resendApiKey = $("s_resendKey").value.trim();
       var data = await api("PUT", "/api/settings", body);
       settings = data.settings;
@@ -1846,6 +2093,7 @@
 
   function renderSettings() {
     $("s_mailFrom").value = settings.mailFrom || "";
+    $("s_dailyDigest").checked = !!settings.dailyDigest;
     $("resend-hint").textContent = (settings.hasResendKey
       ? "A key is stored (" + settings.resendKeyHint + "). Leave blank to keep it."
       : "No key stored yet — no emails will be sent.") +
@@ -1901,6 +2149,7 @@
     applyDefaults();   // also loads the purchaser's cards
     renderItems();
     var waiting = await loadQueue();
+    if (can("office")) await loadOffice();
 
     // Land where this person's work is: the request a link points at, then
     // decisions waiting on them, then — for anyone who does not submit — the
@@ -1908,6 +2157,7 @@
     var linked = linkedId();
     if (linked) openDetail(linked);
     else if (can("approve") && waiting > 0) showTab("queue");
+    else if (can("office")) showTab("office");
     else if (!can("submit") && can("reports")) showTab("reports");
     else if (!can("submit") && can("approve")) showTab("queue");
     else if (!can("submit") && can("viewAll")) { showTab("history"); loadHistory(); }

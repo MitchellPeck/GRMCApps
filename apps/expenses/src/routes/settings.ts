@@ -15,6 +15,7 @@ const TEXT_KEYS: Record<string, string> = {
   overageTolerancePct: "overage_tolerance_pct",
   overageToleranceAbs: "overage_tolerance_abs",
   mailFrom: "mail_from",
+  dailyDigest: "daily_digest",
 };
 
 export async function settingsRoutes(app: FastifyInstance): Promise<void> {

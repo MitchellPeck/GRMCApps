@@ -281,7 +281,19 @@ between apps. Both are served to each app at `/assets/` (see *Shared UI* below).
   owners about decisions, payers about reimbursements ready to pay, payees when
   paid. Emails are queued in the same transaction as the event, sent every 20
   seconds, retried with back-off and dropped after five failures. Links open
-  `https://expenses.$BASE_DOMAIN/#/r/<id>` (override with `APP_URL`).
+  `https://expenses.$BASE_DOMAIN/#/r/<id>` (override with `APP_URL`). An
+  optional **morning summary** (Settings → Email notifications) goes out once a
+  day after 8am church time: each approver gets what waits for them, each payer
+  what is ready to pay.
+
+  **Office tab** (office or pay): ready to pay, with a pay run that marks
+  several reimbursements paid with one date and reference; approved requests
+  still missing a receipt or the actual cost; requests stuck with changes
+  requested; and everything awaiting approval, oldest first. **Remind** emails
+  whoever a request is waiting on (at most once per 12 hours; an owner may also
+  nudge their own approver). **Change approver** hands an undecided request to
+  someone else (the office or the current approver). Approvers working through
+  *Awaiting you* go straight to the next request after each decision.
 
   **Chart of accounts.** Each charge code can carry a GL account (blank = the
   code itself; a sub-code without one uses its parent's). The CSV export has a

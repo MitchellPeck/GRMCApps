@@ -11,7 +11,7 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
     return {
       ok: true,
       ...getIdentity(req),
-      permissions: { ...p, approveAny: approvesAny(p), viewAll: seesAll(p), reports: seesReports(p) },
+      permissions: { ...p, approveAny: approvesAny(p), viewAll: seesAll(p), reports: seesReports(p), office: p.manage || p.pay },
     };
   });
 }
