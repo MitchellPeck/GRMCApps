@@ -85,6 +85,7 @@ ports and no VPN. It runs only on the always-on Mac (it's defined in
    cloudflared tunnel route dns grmc minutes.grmc.app
    cloudflared tunnel route dns grmc expenses.grmc.app
    cloudflared tunnel route dns grmc tv.grmc.app
+   cloudflared tunnel route dns grmc previews.grmc.app
    ```
 6. In the Cloudflare dashboard, **delete the old `A  *.grmc.app → <LAN IP>`
    record** (the new per-host CNAMEs take over; the wildcard A is the LAN-only
