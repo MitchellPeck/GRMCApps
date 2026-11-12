@@ -287,11 +287,14 @@ between apps. Both are served to each app at `/assets/` (see *Shared UI* below).
   what is ready to pay.
 
   **Office tab** (office or pay): ready to pay, with a pay run that marks
-  several reimbursements paid with one date and reference; approved requests
-  still missing a receipt or the actual cost; requests stuck with changes
-  requested; and everything awaiting approval, oldest first. **Remind** emails
-  whoever a request is waiting on (at most once per 12 hours; an owner may also
-  nudge their own approver). **Change approver** hands an undecided request to
+  several reimbursements paid with one date and reference; purchases still
+  missing a receipt or the actual cost; requests stuck with changes requested;
+  and everything awaiting approval, oldest first. **Enter a missing purchase**
+  (needs submit-for-others) keys in a charge nobody submitted for the person who
+  made it, and can email them for the receipt at once. **Remind** emails whoever
+  a request is waiting on — the approver, or the purchaser for a receipt; each
+  kind at most once per 12 hours, and an owner may also nudge their own
+  approver. **Change approver** hands an undecided request to
   someone else (the office or the current approver). Approvers working through
   *Awaiting you* go straight to the next request after each decision.
 

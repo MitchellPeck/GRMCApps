@@ -226,7 +226,7 @@
     $("btn-save").textContent = $("btn-save").getAttribute("data-default");
   }
 
-  $("f_kind").addEventListener("change", function () { applyKindPayment(); loadCards(); });
+  $("f_kind").addEventListener("change", function () { applyKindPayment(); loadCards(); updateAskReceipt(); });
   $("f_payment").addEventListener("change", applyKindPayment);
 
   // ── upload queue ─────────────────────────────────────────────────────────
@@ -274,6 +274,7 @@
 
   function renderQueue() {
     var wrap = $("file-queue");
+    updateAskReceipt();
     if (!queued.length) { wrap.innerHTML = ""; return; }
     wrap.innerHTML = "";
     var box = el("div", "fq");
@@ -291,6 +292,16 @@
       box.appendChild(row);
     });
     wrap.appendChild(box);
+  }
+
+  // Keying a purchase for someone else with no receipt to hand: offer to email
+  // them for it. Hidden the moment a receipt is attached.
+  function updateAskReceipt() {
+    var buyer = can("submitForOthers") ? findEmailByName($("f_purchasedBy").value) : "";
+    var show = !!buyer && buyer.toLowerCase() !== String(me.email).toLowerCase() &&
+      $("f_kind").value === "post_purchase" && !queued.length && mailOn();
+    $("ask-receipt-field").hidden = !show;
+    $("ask-receipt-who").textContent = show ? (nameFor(buyer) || buyer) : "them";
   }
 
   // ── extraction ───────────────────────────────────────────────────────────
@@ -488,6 +499,7 @@
   $("f_purchasedBy").addEventListener("change", function () {
     renderApproverOptions();
     loadCards();
+    updateAskReceipt();
   });
 
   // ── submit ───────────────────────────────────────────────────────────────
@@ -510,6 +522,7 @@
         purchasedBy: $("f_purchasedBy").value,
         purchasedByEmail: findEmailByName($("f_purchasedBy").value),
         submittedBy: $("f_submittedBy").value,
+        askForReceipt: !$("ask-receipt-field").hidden && $("f_askReceipt").checked && !queued.length,
         approverEmail: $("f_approver").value,
         approvedBy: ($("f_approver").selectedOptions[0] || {}).text || "",
         items: items.map(function (i) {
@@ -536,7 +549,9 @@
           "warn", "Try again",
           function () { addReceipts(saved.id, failedFiles.length ? failedFiles : files); });
       } else {
-        msg("detail-note", "Sent to " + approverName + ". You'll see their decision here.", "ok", true);
+        msg("detail-note", "Sent to " + approverName + ". You'll see their decision here." +
+            (saved.askedForReceipt ? " " + (nameFor(body.purchasedByEmail) || body.purchasedBy) +
+              " was emailed for the receipt." : ""), "ok", true);
       }
     } catch (err) {
       msg("form-msg", err.message, "err");
@@ -553,6 +568,8 @@
     ["f_amount", "f_estimate", "f_reason", "f_vendor", "f_chargeCode", "f_subChargeCode"]
       .forEach(function (id) { $(id).value = ""; });
     $("f_date").value = todayISO();
+    $("f_askReceipt").checked = true;
+    msg("missing-note", "");
     applyDefaults();
     onChargeCodeChange();
     msg("import-msg", "");
@@ -567,6 +584,7 @@
     $("behalf-hint").hidden = locked;
     renderApproverOptions();
     loadCards();
+    updateAskReceipt();
   }
 
   // ── PDF (unchanged layout) ───────────────────────────────────────────────
@@ -708,6 +726,14 @@
 
   function mailOn() { return !!(settings.hasResendKey && settings.mailFrom); }
 
+  // Bought, still live, and nothing attached. A pre-purchase counts only once
+  // it is approved — before that there is nothing to have a receipt for.
+  function missingReceipt(r) {
+    if (r.receipt_count !== 0) return false;
+    if (r.status === "approved") return true;
+    return r.kind === "post_purchase" && (r.status === "pending" || r.status === "changes_requested");
+  }
+
   // opts.lead: an element before the text (the pay-run tick box).
   // opts.age: show how long it has sat at this step.
   // opts.extra: buttons beside Open.
@@ -718,7 +744,7 @@
     var main = el("div", "hrow-main");
     main.appendChild(el("div", "hrow-title", r.reason || "(no reason given)"));
     var bits = [fmtDate(r.request_date), r.vendor, displayCode(r.charge_code),
-                r.submitted_by || r.created_by_name || r.submitted_by_email].filter(Boolean);
+                r.purchased_by || r.submitted_by || r.created_by_name || r.submitted_by_email].filter(Boolean);
     main.appendChild(el("div", "hrow-sub", bits.join(" · ")));
 
     var badges = el("div", "hrow-sub");
@@ -726,7 +752,7 @@
     badges.appendChild(el("span", "tagp", r.payment_method === "reimbursement" ? "Reimbursement" : "Church card"));
     if (r.kind === "pre_purchase") badges.appendChild(el("span", "tagp", "Pre-purchase"));
     if (r.approval_method === "paper") badges.appendChild(el("span", "tagp", "Paper"));
-    if (r.status === "approved" && r.receipt_count === 0) badges.appendChild(el("span", "tagp tag-warn", "No receipt"));
+    if (missingReceipt(r)) badges.appendChild(el("span", "tagp tag-warn", "No receipt"));
     if (opts.age && r.step_since) badges.appendChild(el("span", "tagp", "Waiting " + daysSince(r.step_since)));
     main.appendChild(badges);
 
@@ -788,12 +814,12 @@
   // Everything the office chases, worked out from the one list of requests:
   // what to pay, what is missing a receipt, what is stuck with its submitter,
   // and what is stuck with its approver.
-  function remindButton(r, label, box) {
+  function remindButton(r, label, box, reason) {
     var b = el("button", "btn btn-sm", label);
     b.addEventListener("click", async function () {
       b.disabled = true;
       try {
-        await api("POST", "/api/requests/" + r.id + "/remind", {});
+        await api("POST", "/api/requests/" + r.id + "/remind", reason ? { reason: reason } : {});
         b.textContent = "Reminded";
       } catch (err) {
         b.disabled = false;
@@ -805,12 +831,13 @@
 
   function personOf(r) { return r.purchased_by || r.submitted_by || r.created_by_name || "them"; }
 
-  function officeList(id, rows, empty, remindLabel) {
+  function officeList(id, rows, empty, remindLabel, reasonFor) {
     var list = $(id);
     list.innerHTML = "";
     if (!rows.length) { list.innerHTML = '<div class="empty">' + empty + "</div>"; return; }
     rows.forEach(function (r) {
-      var extra = mailOn() ? [remindButton(r, remindLabel(r), "office-msg")] : [];
+      var reason = reasonFor ? reasonFor(r) : null;
+      var extra = mailOn() ? [remindButton(r, remindLabel(r), "office-msg", reason)] : [];
       list.appendChild(requestRow(r, openDetail, { age: true, extra: extra }));
     });
   }
@@ -821,13 +848,15 @@
       var ready = rows.filter(function (r) { return r.stage === "Approved — awaiting reimbursement"; })
         .sort(oldestFirst);
       var receipts = rows.filter(function (r) {
-        return r.stage === "Approved — awaiting receipts" || (r.status === "approved" && r.receipt_count === 0);
+        return r.stage === "Approved — awaiting receipts" || missingReceipt(r);
       }).sort(oldestFirst);
       var changes = rows.filter(function (r) { return r.status === "changes_requested"; }).sort(oldestFirst);
       var pending = rows.filter(function (r) { return r.status === "pending"; }).sort(oldestFirst);
 
-      officeList("office-receipts", receipts, "Every approved request has its receipt.", function (r) {
-        return "Remind " + personOf(r);
+      officeList("office-receipts", receipts, "Every purchase has its receipt.", function (r) {
+        return r.stage === "Approved — awaiting receipts" ? "Remind " + personOf(r) : "Ask " + personOf(r) + " for it";
+      }, function (r) {
+        return r.stage === "Approved — awaiting receipts" ? "actuals" : "receipt";
       });
       officeList("office-changes", changes, "Nothing is waiting on changes.", function (r) {
         return "Remind " + personOf(r);
@@ -841,6 +870,25 @@
       return mine + receipts.length;
     } catch (err) { msg("office-msg", err.message, "err"); return 0; }
   }
+
+  // A charge on the statement with no request behind it: the form, set up for
+  // keying it in on someone's behalf.
+  $("btn-log-missing").addEventListener("click", function () {
+    resetForm();
+    $("f_kind").value = "post_purchase";
+    $("f_payment").value = "church_card";
+    applyKindPayment();
+    $("f_purchasedBy").value = "";
+    $("f_submittedBy").value = me.name;
+    renderApproverOptions();
+    loadCards();
+    updateAskReceipt();
+    clearLink();
+    showTab("new");
+    msg("missing-note", "Entering a purchase for someone else. Put in the date, amount and vendor as they " +
+        "appear on the statement, then choose who made it — their cards and the approver list follow.", "info");
+    $("f_purchasedBy").focus();
+  });
 
   var payRows = [];
 
@@ -1490,12 +1538,16 @@
 
     var lastRow = el("div", "btn-row");
 
-    if (allowed.remind && mailOn()) {
-      var rmb = el("button", "btn btn-secondary",
-                   r.status === "pending" ? "Remind " + approverLabel(r) : "Send a reminder");
-      rmb.title = "Emails whoever this request is waiting on.";
-      rmb.addEventListener("click", function () { sendReminder(r, rmb); });
-      lastRow.appendChild(rmb);
+    if (mailOn()) {
+      (allowed.reminders || []).forEach(function (why) {
+        var label = why === "approval" ? "Remind " + approverLabel(r)
+          : why === "receipt" ? "Ask " + personOf(r) + " for the receipt"
+          : "Remind " + personOf(r);
+        var rmb = el("button", "btn btn-secondary", label);
+        rmb.title = "Sends them an email.";
+        rmb.addEventListener("click", function () { sendReminder(r, rmb, why); });
+        lastRow.appendChild(rmb);
+      });
     }
 
     var rabox = null;
@@ -1677,10 +1729,10 @@
     } catch (err) { showActionError("detail-msg", err, r.id); }
   }
 
-  async function sendReminder(r, btn) {
+  async function sendReminder(r, btn, reason) {
     btn.disabled = true;
     try {
-      await api("POST", "/api/requests/" + r.id + "/remind", {});
+      await api("POST", "/api/requests/" + r.id + "/remind", { reason: reason });
       await openDetail(r.id);
       msg("detail-msg", "Reminder sent.", "ok");
     } catch (err) {

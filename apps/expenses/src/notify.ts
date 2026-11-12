@@ -151,9 +151,15 @@ export function notificationsFor(type: EventType, r: NotifyRequest, ctx: NotifyC
             `with the receipt.${note}`);
           break;
         case "receipt":
-          add(owners(r), type, `Reminder: receipt needed for ${what(r)}`,
-            `We don't have a receipt for ${what(r)} (${amount}) yet. ` +
-            `Open the request and add a photo or PDF of it.${note}`);
+          if (ctx.meta?.keyed) {
+            add(owners(r), type, `Receipt needed: ${amount} at ${what(r)}`,
+              `${who} entered a ${amount} purchase at ${what(r)} for you. ` +
+              `We don't have a receipt for it yet — open the request and add a photo or PDF of it.${note}`);
+          } else {
+            add(owners(r), type, `Reminder: receipt needed for ${what(r)}`,
+              `We don't have a receipt for ${what(r)} (${amount}) yet. ` +
+              `Open the request and add a photo or PDF of it.${note}`);
+          }
           break;
       }
       break;

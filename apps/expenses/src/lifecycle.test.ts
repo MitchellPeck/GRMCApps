@@ -20,6 +20,7 @@ import {
   needsReapproval,
   reapprovalAfterEdit,
   reminderFor,
+  remindersFor,
   requiredFields,
   stageOf,
   statusAfterDecision,
@@ -485,8 +486,9 @@ test("the accountant can do nothing to a request but comment", () => {
                   req({ status: "approved", kind: "pre_purchase" })];
   for (const r of states) {
     const a = allowedActions(r, "cpa@grmc.app", accountant, false);
-    const { comment, ...rest } = a;
+    const { comment, reminders, ...rest } = a;
     assert.equal(comment, true);
+    assert.deepEqual(reminders, []);
     assert.ok(Object.values(rest).every((v) => v === false), JSON.stringify(a));
   }
 });
@@ -521,6 +523,22 @@ test("the office reminds anyone; an owner may only nudge their approver", () => 
   assert.equal(checkRemind(req({ status: "voided" }), "office@grmc.app", assistant).ok, false);
   // Nobody reminds themselves to approve.
   assert.equal(checkRemind(req({ approver_email: "office@grmc.app" }), "office@grmc.app", assistant).ok, false);
+});
+
+test("a keyed-in purchase with no receipt can chase its approver and its receipt at once", () => {
+  assert.deepEqual(remindersFor(req({ receipt_count: 0 })), ["approval", "receipt"]);
+  assert.deepEqual(remindersFor(req({ status: "changes_requested", receipt_count: 0 })), ["changes", "receipt"]);
+  assert.deepEqual(remindersFor(req({ receipt_count: 1 })), ["approval"]);
+  // A pre-purchase has no receipt to ask for until it is bought.
+  assert.deepEqual(remindersFor(req({ kind: "pre_purchase", receipt_count: 0 })), ["approval"]);
+
+  const r = req({ receipt_count: 0, purchased_by_email: "jane@grmc.app" });
+  assert.deepEqual(checkRemind(r, "office@grmc.app", assistant, "receipt"), { ok: true, reason: "receipt" });
+  assert.equal(checkRemind(r, "office@grmc.app", assistant, "actuals").ok, false);
+  // Only the approval nudge is the owner's to send.
+  assert.equal(checkRemind(r, "a@grmc.app", submitter, "receipt").ok, false);
+  assert.deepEqual(allowedActions(r, "office@grmc.app", assistant, false).reminders, ["approval", "receipt"]);
+  assert.deepEqual(allowedActions(r, "a@grmc.app", submitter, false).reminders, ["approval"]);
 });
 
 test("the office or the current approver may hand an undecided request to another approver", () => {

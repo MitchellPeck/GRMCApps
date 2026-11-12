@@ -447,10 +447,46 @@ test("an approved purchase with no receipt shows up as missing one, and the owne
   await decide(id, "approve");
   const d = await detail(id, OFFICE);
   assert.equal(d.request.receipt_count, 0);
-  assert.equal(d.allowed.remind, true);
+  assert.deepEqual(d.allowed.reminders, ["receipt"]);
   assert.equal((await remind(id, OFFICE)).statusCode, 200);
   const last = (await outbox()).at(-1);
   assert.deepEqual([last.to_email, last.kind], ["ann@x.org", "reminded"]);
+});
+
+test("the office logs a charge nobody submitted and the purchaser is asked for the receipt", { skip }, async () => {
+  await mailOn();
+  const keyed = (over: Record<string, unknown>) =>
+    app.inject({ method: "POST", url: "/api/requests", headers: OFFICE, payload: body({
+      purchasedBy: "Ann Member", purchasedByEmail: "ann@x.org", submittedBy: "Olive Office",
+      askForReceipt: true, ...over,
+    }) });
+  const res = await keyed({});
+  assert.equal(res.statusCode, 201, res.body);
+  const { id, askedForReceipt } = JSON.parse(res.body);
+  assert.equal(askedForReceipt, true);
+  const sent = (await outbox()).filter((n: any) => n.kind === "reminded").map((n: any) => n.to_email);
+  assert.deepEqual(sent, ["ann@x.org"]);
+
+  // Ann sees it as hers, and the office can still chase the approver: the
+  // twelve-hour gap is per kind of reminder.
+  const d = await detail(id, ANN);
+  assert.equal(d.request.purchased_by_email, "ann@x.org");
+  assert.deepEqual((await detail(id, OFFICE)).allowed.reminders, ["approval", "receipt"]);
+  const chase = (reason: string) => app.inject({
+    method: "POST", url: `/api/requests/${id}/remind`, headers: OFFICE, payload: { reason },
+  });
+  assert.equal((await chase("receipt")).statusCode, 429);
+  assert.equal((await chase("approval")).statusCode, 200);
+  assert.equal((await chase("actuals")).statusCode, 409);
+
+  // Nobody is asked when the office keys its own purchase, or when the
+  // submitter can't key for others.
+  assert.equal(JSON.parse((await keyed({
+    purchasedBy: "", purchasedByEmail: "", paymentMethod: "reimbursement", cardId: null,
+  })).body).askedForReceipt, false);
+  const own = await app.inject({ method: "POST", url: "/api/requests", headers: ANN,
+                                 payload: body({ askForReceipt: true }) });
+  assert.equal(JSON.parse(own.body).askedForReceipt, false);
 });
 
 test("the office hands a request to another approver; the old one can no longer decide it", { skip }, async () => {

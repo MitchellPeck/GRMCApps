@@ -37,6 +37,7 @@
     </div>
 
     <div id="submit-area">
+      <div id="missing-note"></div>
       <div class="card">
         <div class="ct">What kind of request?</div>
         <div class="grid2">
@@ -119,6 +120,10 @@
             <input type="text" id="f_purchasedBy" list="peopleList" autocomplete="off">
             <datalist id="peopleList"></datalist>
             <div class="hint" id="behalf-hint" hidden>Pick someone on GRMCApps, or type any name.</div>
+            <label class="check-line" id="ask-receipt-field" hidden>
+              <input type="checkbox" id="f_askReceipt" checked>
+              <span>Email <span id="ask-receipt-who">them</span> to ask for the receipt</span>
+            </label>
           </div>
           <div class="field" id="card-field">
             <label for="f_card">Charged to which card</label>
@@ -172,9 +177,16 @@
         </div>
       </div>
     </div>
+    <div class="card" data-needs="submitForOthers" hidden>
+      <div class="ct">A charge nobody submitted?</div>
+      <p class="hint" style="margin-top:-6px">Something on the card statement or in the bank with no request
+        behind it: enter it for the person who made it. They are emailed for the receipt, and it goes to the
+        approver like any other request.</p>
+      <div class="btn-row"><button class="btn btn-primary" id="btn-log-missing">Enter a missing purchase</button></div>
+    </div>
     <div class="card">
       <div class="ct">Waiting on receipts</div>
-      <p class="hint" style="margin-top:-6px">Approved, but the receipt or the actual cost is not in yet.</p>
+      <p class="hint" style="margin-top:-6px">Bought, but the receipt or the actual cost is not in yet.</p>
       <div id="office-receipts"></div>
     </div>
     <div class="card">

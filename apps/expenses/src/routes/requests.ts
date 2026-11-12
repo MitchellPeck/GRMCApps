@@ -6,6 +6,7 @@ import { addEvent, listEvents } from "../events";
 import { listReceipts } from "../receipts";
 import { getTolerances, selfApprovalAllowed } from "../settings";
 import { listApprovers } from "../app-users";
+import { mailConfig } from "../mailer";
 import { approvesAny, seesAll } from "../permissions";
 import { listCards } from "../cards";
 import { visibleCardsFor } from "../cards-logic";
@@ -189,7 +190,16 @@ export async function requestRoutes(app: FastifyInstance): Promise<void> {
       kind,
       paymentMethod,
     });
-    return reply.code(201).send({ ok: true, id });
+
+    // The office keying a charge off the card statement that nobody submitted:
+    // the person who made it is asked for the receipt straight away, without
+    // waiting for the approver. The browser asks only when none is attached.
+    const askForReceipt = b.askForReceipt === true && perms.submitForOthers && !isPre &&
+      !!purchasedByEmail && purchasedByEmail !== identity.email.toLowerCase() && !!(await mailConfig(pool));
+    if (askForReceipt) {
+      await addEvent(pool, id, "reminded", identity, "", { reason: "receipt", keyed: true });
+    }
+    return reply.code(201).send({ ok: true, id, askedForReceipt: askForReceipt });
   });
 
   app.patch("/api/requests/:id", async (req, reply) => {

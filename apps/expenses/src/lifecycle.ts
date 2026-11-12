@@ -334,13 +334,27 @@ export function checkAddReceipts(
 // missing receipt.
 export type ReminderReason = "approval" | "changes" | "actuals" | "receipt";
 
+// Every reminder this request could use, the most pressing first. A purchase
+// the office keyed in from a card statement can be waiting on its approver and
+// on its receipt at the same time, and the two go to different people.
+export function remindersFor(req: ExpenseRequest): ReminderReason[] {
+  const out: ReminderReason[] = [];
+  const noReceipt = req.kind === "post_purchase" && req.receipt_count === 0;
+  if (req.status === "pending") {
+    if (req.approver_email.trim()) out.push("approval");
+    if (noReceipt) out.push("receipt");
+  } else if (req.status === "changes_requested") {
+    out.push("changes");
+    if (noReceipt) out.push("receipt");
+  } else if (req.status === "approved") {
+    if (req.kind === "pre_purchase" && !req.actuals_completed_at) out.push("actuals");
+    else if (req.receipt_count === 0) out.push("receipt");
+  }
+  return out;
+}
+
 export function reminderFor(req: ExpenseRequest): ReminderReason | null {
-  if (req.status === "pending") return req.approver_email.trim() ? "approval" : null;
-  if (req.status === "changes_requested") return "changes";
-  if (req.status !== "approved") return null;
-  if (req.kind === "pre_purchase" && !req.actuals_completed_at) return "actuals";
-  if (req.receipt_count === 0) return "receipt";
-  return null;
+  return remindersFor(req)[0] ?? null;
 }
 
 export type RemindCheck =
@@ -348,14 +362,23 @@ export type RemindCheck =
   | { ok: false; status: number; error: string };
 
 // The office chases anyone. An owner may nudge their own approver, which is
-// the one wait they can do nothing else about.
-export function checkRemind(req: ExpenseRequest, actorEmail: string, perms: Permissions): RemindCheck {
-  const reason = reminderFor(req);
+// the one wait they can do nothing else about. Without a `wanted` reason the
+// most pressing one is sent.
+export function checkRemind(
+  req: ExpenseRequest,
+  actorEmail: string,
+  perms: Permissions,
+  wanted?: ReminderReason
+): RemindCheck {
+  const reasons = remindersFor(req);
+  const reason = wanted ?? reasons[0] ?? null;
   const office = perms.manage || perms.pay;
   if (!office && !(reason === "approval" && isOwner(req, actorEmail))) {
     return { ok: false, status: 403, error: "Only the office can send reminders." };
   }
-  if (!reason) return { ok: false, status: 409, error: "Nobody needs reminding about this request." };
+  if (!reason || !reasons.includes(reason)) {
+    return { ok: false, status: 409, error: "Nobody needs reminding about this request." };
+  }
   if (reason === "approval" && same(req.approver_email, actorEmail)) {
     return { ok: false, status: 409, error: "You are the approver on this request." };
   }
@@ -403,7 +426,8 @@ export interface AllowedActions {
   void: boolean;
   addReceipts: boolean;
   comment: boolean;
-  remind: boolean;
+  // The reminders this person may send, most pressing first.
+  reminders: ReminderReason[];
   reassign: boolean;
 }
 
@@ -430,7 +454,7 @@ export function allowedActions(
     void: checkVoid(req, perms, "x").ok && !(del.ok && del.mode === "hard"),
     addReceipts: checkAddReceipts(req, actorEmail, perms).ok,
     comment: canSee(req, actorEmail, perms),
-    remind: checkRemind(req, actorEmail, perms).ok,
+    reminders: remindersFor(req).filter((why) => checkRemind(req, actorEmail, perms, why).ok),
     reassign: checkReassign(req, actorEmail, perms).ok,
   };
 }

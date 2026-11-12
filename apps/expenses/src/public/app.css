@@ -111,3 +111,9 @@ input[type=text].code-gl { width: 8em; flex: 0 0 8em; padding: 4px 8px }
 input[type=date], input[type=number] { width:100%; border:1px solid var(--rule); border-radius:var(--r);
   padding:9px 11px; font-size:13px; font-family:var(--font-ui); color:var(--ink); background:var(--field-bg) }
 .btn-row input[type=number] { width:auto; flex:0 1 14em }
+
+/* A tick box under a field, in sentence case rather than the field-label style. */
+.check-line { display:flex; gap:8px; align-items:center; margin-top:8px;
+              font-size:13px; font-weight:400; text-transform:none; letter-spacing:0 }
+.check-line input { width:auto; margin:0 }
+.check-line[hidden] { display:none }

@@ -111,6 +111,14 @@ test("a reminder goes to whoever the request is waiting on, with the office's no
   assert.deepEqual(notificationsFor("reminded", req(), { ...office, meta: null }), []);
 });
 
+test("a purchase the office keys in asks its purchaser for the receipt in plain words", () => {
+  const out = notificationsFor("reminded", req({ purchased_by_email: "bob@x.org", submitted_by_email: "office@x.org" }),
+    ctx({ actorEmail: "office@x.org", actorName: "Olive", meta: { reason: "receipt", keyed: true } }));
+  assert.deepEqual(to(out), ["bob@x.org"]);
+  assert.match(out[0].subject, /^Receipt needed: \$/);
+  assert.match(out[0].body, /Olive entered a \$[\d.,]+ purchase at Hobby Lobby for you/);
+});
+
 test("a request handed to a new approver tells the new approver only while it is pending", () => {
   const r = req({ approver_email: "deacon@x.org" });
   const out = notificationsFor("reassigned", r, ctx({ actorEmail: "office@x.org", actorName: "Olive" }));

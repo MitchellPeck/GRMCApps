@@ -7,11 +7,11 @@ import { listApprovers } from "../app-users";
 import { mailConfig } from "../mailer";
 import { selfApprovalAllowed } from "../settings";
 import { withRequest } from "../requests";
-import { checkNewApprover, checkReassign, checkRemind } from "../lifecycle";
+import { ReminderReason, checkNewApprover, checkReassign, checkRemind } from "../lifecycle";
 import { Refusal, checkVersion, mutate } from "./requests";
 import { pastDate, reimburse } from "./decisions";
 
-// One reminder per request per this many hours, so a double-click or an eager
+// One reminder of each kind per request per this many hours, so a double-click or an eager
 // week does not fill someone's inbox.
 export const REMIND_GAP_HOURS = 12;
 const MAX_PAY_RUN = 100;
@@ -23,21 +23,22 @@ export async function officeRoutes(app: FastifyInstance): Promise<void> {
   // timeline shows who was chased and when.
   app.post("/api/requests/:id/remind", async (req, reply) => {
     const { id } = req.params as { id: string };
-    const b = (req.body ?? {}) as { comment?: string };
+    const b = (req.body ?? {}) as { comment?: string; reason?: string };
     const identity = getIdentity(req);
     const perms = await loadPermissions(req);
 
     return mutate(reply, Number(id), async (db, found) => {
-      const guard = checkRemind(found.request, identity.email, perms);
+      const wanted = b.reason ? (String(b.reason) as ReminderReason) : undefined;
+      const guard = checkRemind(found.request, identity.email, perms, wanted);
       if (!guard.ok) throw new Refusal(guard.status, guard.error);
       if (!(await mailConfig(db))) {
         throw new Refusal(409, "Email is not set up yet, so a reminder can't be sent.");
       }
       const recent = await db.query(
         `SELECT 1 FROM request_events
-          WHERE request_id = $1 AND type = 'reminded'
+          WHERE request_id = $1 AND type = 'reminded' AND meta->>'reason' = $3
             AND created_at > now() - make_interval(hours => $2::int)`,
-        [Number(id), REMIND_GAP_HOURS]
+        [Number(id), REMIND_GAP_HOURS, guard.reason]
       );
       if (recent.rowCount) {
         throw new Refusal(429, `A reminder went out less than ${REMIND_GAP_HOURS} hours ago.`);
