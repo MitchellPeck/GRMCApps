@@ -206,3 +206,26 @@ export async function reorderItems(
     client.release();
   }
 }
+
+export type BulkItemAction = "remove" | "skip" | "play";
+
+/** One action over many items, scoped to the playlist so a stray id from
+ *  another playlist is ignored rather than touched. Returns rows affected. */
+export async function bulkItems(
+  pool: Pool,
+  playlistId: number,
+  itemIds: number[],
+  action: BulkItemAction
+): Promise<number> {
+  if (!itemIds.length) return 0;
+  const r = action === "remove"
+    ? await pool.query(
+        "DELETE FROM playlist_items WHERE playlist_id = $1 AND id = ANY($2::bigint[])",
+        [playlistId, itemIds]
+      )
+    : await pool.query(
+        "UPDATE playlist_items SET enabled = $3 WHERE playlist_id = $1 AND id = ANY($2::bigint[])",
+        [playlistId, itemIds, action === "play"]
+      );
+  return r.rowCount ?? 0;
+}

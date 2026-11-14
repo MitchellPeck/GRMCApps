@@ -11,7 +11,7 @@
   var settings = null;
   var people = [];
   var openPlaylist = null;   // { playlist, items }
-  var picked = {};           // media ids ticked in the "add media" picker
+  var itemSel = null;        // null, or item ids ticked in the open playlist
   var timezone = "America/Chicago";
   var power = null;          // { events, onAction, offAction }
 
@@ -698,8 +698,8 @@
   async function openEditor(id) {
     try {
       var data = await api("GET", "/api/playlists/" + id);
+      if (!openPlaylist || openPlaylist.playlist.id !== data.playlist.id) itemSel = null;
       openPlaylist = { playlist: data.playlist, items: data.items || [] };
-      picked = {};
       $("playlist-editor").hidden = false;
       $("pe-title").textContent = data.playlist.name;
       $("pe-image-seconds").value = data.playlist.imageSeconds || "";
@@ -759,24 +759,134 @@
     return bits.join(" · ");
   }
 
+  // Sort keys for "Put in order": file names usually carry the order a family
+  // or photographer intended (IMG_0001, 01 Childhood…), so compare digits as
+  // numbers rather than text.
+  var ITEM_ORDERS = {
+    file: { label: "File name", cmp: function (a, b) { return (a.fileName || a.title).localeCompare(b.fileName || b.title, undefined, { numeric: true, sensitivity: "base" }); } },
+    title: { label: "Name", cmp: function (a, b) { return a.title.localeCompare(b.title, undefined, { numeric: true, sensitivity: "base" }); } },
+    added: { label: "Upload order", cmp: function (a, b) { return a.mediaId - b.mediaId; } },
+    reverse: { label: "Reverse the current order", cmp: null }
+  };
+
+  async function reorderTo(items) {
+    try {
+      var data = await api("POST", "/api/playlists/" + openPlaylist.playlist.id + "/reorder",
+        { itemIds: items.map(function (i) { return i.id; }) });
+      openPlaylist.items = data.items;
+      renderItems();
+    } catch (e) { msg("pe-msg", e.message, "err"); }
+  }
+
+  async function bulkItemAction(action) {
+    var ids = Object.keys(itemSel || {}).filter(function (k) { return itemSel[k]; }).map(Number);
+    if (!ids.length) return;
+    if (action === "remove" && !confirm("Take " + plural(ids.length, "item") +
+        " out of this playlist? The media stays in the library.")) return;
+    try {
+      var data = await api("POST", "/api/playlists/" + openPlaylist.playlist.id + "/items/bulk",
+        { itemIds: ids, action: action });
+      openPlaylist.items = data.items;
+      if (action === "remove") itemSel = {};
+      renderItems();
+      loadPlaylists();
+      loadNow();
+    } catch (e) { msg("pe-msg", e.message, "err"); }
+  }
+
+  function itemsToolbar(items) {
+    var bar = el("div", "mb-sel mb-items");
+    if (!itemSel) {
+      bar.appendChild(el("strong", null, plural(items.length, "item")));
+      if (items.length > 1) {
+        var order = el("select");
+        order.title = "Rearrange every item in one go";
+        var first = el("option", null, "Put in order by…");
+        first.value = "";
+        order.appendChild(first);
+        Object.keys(ITEM_ORDERS).forEach(function (k) {
+          var o = el("option", null, ITEM_ORDERS[k].label);
+          o.value = k;
+          order.appendChild(o);
+        });
+        order.addEventListener("change", function () {
+          var how = ITEM_ORDERS[order.value];
+          order.value = "";
+          if (!how) return;
+          var next = items.slice();
+          if (how.cmp) next.sort(how.cmp); else next.reverse();
+          reorderTo(next);
+        });
+        bar.appendChild(order);
+      }
+      bar.appendChild(el("span", "mb-spacer"));
+      bar.appendChild(button("Select", "btn-sm", function () { itemSel = {}; renderItems(); }));
+      return bar;
+    }
+
+    var n = Object.keys(itemSel).filter(function (k) { return itemSel[k]; }).length;
+    bar.appendChild(el("strong", null, n ? n + " selected" : "Tick items, shift-click for a run"));
+    bar.appendChild(button("Select all", "btn-sm", function () {
+      items.forEach(function (i) { itemSel[i.id] = true; });
+      renderItems();
+    }));
+    bar.appendChild(button("Clear", "btn-sm", function () { itemSel = {}; renderItems(); }));
+    bar.appendChild(el("span", "mb-spacer"));
+    [["Play", "play", "btn-sm"], ["Skip", "skip", "btn-sm"], ["Remove", "remove", "btn-sm btn-danger"]]
+      .forEach(function (b) {
+        var btn = button(b[0], b[2], function () { bulkItemAction(b[1]); });
+        btn.disabled = !n;
+        bar.appendChild(btn);
+      });
+    bar.appendChild(button("Done", "btn-sm", function () { itemSel = null; renderItems(); }));
+    return bar;
+  }
+
+  var lastItemClicked = -1;
+
   function renderItems() {
     var box = $("pe-items");
     box.innerHTML = "";
     var items = openPlaylist.items;
     if (!items.length) {
+      itemSel = null;
       box.className = "empty";
       box.textContent = "No items yet. Add some media below.";
       return;
     }
     box.className = "";
+    if (can("schedule")) box.appendChild(itemsToolbar(items));
+    var present = {};
+    items.forEach(function (i) { present[i.id] = true; });
+    if (itemSel) Object.keys(itemSel).forEach(function (id) { if (!present[id]) delete itemSel[id]; });
 
     items.forEach(function (item, i) {
       var note = windowNote(item);
       var offAir = Boolean(note && (note.text === "expired" || /^starts in/.test(note.text)));
       var row = el("div", "item-row" + (item.enabled && !offAir ? "" : " is-off"));
 
+      if (itemSel) {
+        var tick = el("input");
+        tick.type = "checkbox";
+        tick.className = "item-tick";
+        tick.checked = Boolean(itemSel[item.id]);
+        tick.setAttribute("aria-label", "Select " + item.title);
+        tick.addEventListener("click", function (ev) {
+          if (ev.shiftKey && lastItemClicked >= 0) {
+            var a = Math.min(lastItemClicked, i), b = Math.max(lastItemClicked, i);
+            for (var j = a; j <= b; j++) itemSel[items[j].id] = tick.checked;
+          } else {
+            itemSel[item.id] = tick.checked;
+          }
+          lastItemClicked = i;
+          renderItems();
+        });
+        row.appendChild(tick);
+      }
+
       var shot = el("div", "item-shot");
       var img = el("img");
+      img.loading = "lazy";
       img.src = "/api/media/" + item.mediaId + "/poster";
       img.alt = "";
       img.addEventListener("error", function () { img.remove(); });
@@ -793,10 +903,10 @@
       }
       main.appendChild(name);
       main.appendChild(el("div", "item-meta", itemMeta(item)));
-      if (can("schedule")) main.appendChild(itemDates(item));
+      if (can("schedule") && !itemSel) main.appendChild(itemDates(item));
       row.appendChild(main);
 
-      if (can("schedule")) {
+      if (can("schedule") && !itemSel) {
         var secs = el("div", "item-secs field");
         secs.style.margin = "0";
         var input = el("input");
@@ -877,12 +987,7 @@
     var tmp = items[index];
     items[index] = items[target];
     items[target] = tmp;
-    try {
-      var data = await api("POST", "/api/playlists/" + openPlaylist.playlist.id + "/reorder",
-        { itemIds: items.map(function (i) { return i.id; }) });
-      openPlaylist.items = data.items;
-      renderItems();
-    } catch (e) { msg("pe-msg", e.message, "err"); }
+    await reorderTo(items);
   }
 
   $("pe-add").addEventListener("click", function () {
@@ -892,34 +997,36 @@
   });
 
   function renderPicker() {
-    var box = $("pe-picker");
-    box.innerHTML = "";
-    var ready = mediaList.filter(function (m) { return m.status === "ready"; });
-    if (!ready.length) {
-      box.appendChild(el("div", "empty", "Nothing in the library yet — upload some media first."));
-      return;
-    }
-    var grid = el("div", "tiles");
-    ready.forEach(function (m) {
-      grid.appendChild(mediaTile(m, true));
+    mediaBrowser({
+      box: $("pe-picker"),
+      source: function () { return mediaList.filter(function (m) { return m.status === "ready"; }); },
+      alwaysSelecting: true,
+      empty: "Nothing in the library yet — upload some media first.",
+      actions: function (bar, browser) {
+        var add = button("Add the ticked items", "btn btn-primary", async function () {
+          var ids = browser.ids();
+          if (!ids.length) { msg("pe-msg", "Tick something first.", "err"); return; }
+          add.disabled = true;
+          try {
+            var data = await api("POST", "/api/playlists/" + openPlaylist.playlist.id + "/items", { mediaIds: ids });
+            openPlaylist.items = data.items;
+            $("pe-picker").hidden = true;
+            renderItems();
+            loadPlaylists();
+            msg("pe-msg", "Added " + plural(data.added, "item") + ".", "ok");
+          } catch (e) {
+            msg("pe-msg", e.message, "err");
+          } finally {
+            add.disabled = false;
+          }
+        });
+        bar.appendChild(add);
+        return function (n) {
+          add.disabled = !n;
+          add.textContent = n ? "Add " + plural(n, "item") : "Add the ticked items";
+        };
+      }
     });
-    box.appendChild(grid);
-
-    var row = el("div", "btn-row");
-    row.appendChild(button("Add the ticked items", "btn btn-primary", async function () {
-      var ids = Object.keys(picked).filter(function (k) { return picked[k]; }).map(Number);
-      if (!ids.length) { msg("pe-msg", "Tick something first.", "err"); return; }
-      try {
-        var data = await api("POST", "/api/playlists/" + openPlaylist.playlist.id + "/items", { mediaIds: ids });
-        openPlaylist.items = data.items;
-        picked = {};
-        box.hidden = true;
-        renderItems();
-        loadPlaylists();
-        msg("pe-msg", "Added.", "ok");
-      } catch (e) { msg("pe-msg", e.message, "err"); }
-    }));
-    box.appendChild(row);
   }
 
   $("pe-save").addEventListener("click", async function () {
@@ -970,12 +1077,15 @@
   }
 
   // ── media ────────────────────────────────────────────────────────────────
-  function mediaTile(m, selectable) {
-    var tile = el("div", "tile" + (selectable && picked[m.id] ? " picked" : ""));
+  // `pick` is null for the plain library (tile gets its own buttons), or
+  // { picked, onClick } when the tile is being ticked as part of a selection.
+  function mediaTile(m, pick) {
+    var tile = el("div", "tile" + (pick && pick.picked ? " picked" : ""));
 
     var shot = el("div", "tile-shot");
     if (m.hasPoster) {
       var img = el("img");
+      img.loading = "lazy";
       img.src = "/api/media/" + m.id + "/poster";
       img.alt = "";
       img.addEventListener("error", function () {
@@ -1002,12 +1112,9 @@
     }
     tile.appendChild(body);
 
-    if (selectable) {
+    if (pick) {
       tile.classList.add("clickable");
-      tile.addEventListener("click", function () {
-        picked[m.id] = !picked[m.id];
-        tile.classList.toggle("picked", Boolean(picked[m.id]));
-      });
+      tile.addEventListener("click", pick.onClick);
       return tile;
     }
 
@@ -1053,18 +1160,302 @@
     }
   }
 
-  function renderMedia() {
-    var box = $("media-grid");
+  // ── browsing a lot of media at once ─────────────────────────────────────
+  // Shared by the library and the playlist picker. A funeral slideshow is a
+  // few hundred photos uploaded in one sitting, so "this upload" (same day,
+  // same person) is the handle that matters most. Filters and the selection
+  // live in here rather than in the DOM, so the refresh that runs while
+  // things are converting never throws away what somebody has ticked.
+
+  function dayKey(iso) {
+    var d = new Date(iso);
+    return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") +
+           "-" + String(d.getDate()).padStart(2, "0");
+  }
+
+  function batchKey(m) { return dayKey(m.createdAt) + "|" + (m.uploadedBy || ""); }
+
+  function batchLabel(key, n) {
+    var parts = key.split("|");
+    var d = new Date(parts[0] + "T12:00:00");
+    var opts = { weekday: "short", day: "numeric", month: "short" };
+    if (d.getFullYear() !== new Date().getFullYear()) opts.year = "numeric";
+    return d.toLocaleDateString(undefined, opts) + (parts[1] ? " · " + parts[1] : "") +
+           " — " + n + " item" + (n === 1 ? "" : "s");
+  }
+
+  function plural(n, one) { return n + " " + one + (n === 1 ? "" : "s"); }
+
+  // opts: { box, source() → media[], alwaysSelecting, empty, actions(bar, api) }
+  // Returns { draw, ids, clear }.
+  function mediaBrowser(opts) {
+    var state = { q: "", kind: "", batch: "", selecting: Boolean(opts.alwaysSelecting) };
+    var sel = {};
+    var shown = [];
+    var tiles = {};
+    var lastClicked = -1;
+
+    var box = opts.box;
     box.innerHTML = "";
-    if (!mediaList.length) {
-      box.className = "empty";
-      box.textContent = "Nothing uploaded yet.";
-      return;
-    }
     box.className = "";
-    var grid = el("div", "tiles");
-    mediaList.forEach(function (m) { grid.appendChild(mediaTile(m, false)); });
-    box.appendChild(grid);
+
+    var head = el("div", "mb-head");
+    var bar = el("div", "mb-bar");
+    var search = el("input");
+    search.type = "search";
+    search.placeholder = "Search by name";
+    var kind = el("select");
+    [["", "All types"], ["image", "Photos"], ["video", "Videos"], ["deck", "Presentations"]]
+      .forEach(function (o) { var opt = el("option", null, o[1]); opt.value = o[0]; kind.appendChild(opt); });
+    var batch = el("select");
+    batch.title = "Everything one person uploaded on one day";
+    bar.appendChild(search);
+    bar.appendChild(kind);
+    bar.appendChild(batch);
+    var count = el("span", "mb-count");
+    bar.appendChild(count);
+    var toggle = null;
+    if (!opts.alwaysSelecting) {
+      toggle = button("Select", "btn-sm", function () {
+        state.selecting = !state.selecting;
+        if (!state.selecting) sel = {};
+        draw();
+      });
+      bar.appendChild(toggle);
+    }
+    head.appendChild(bar);
+
+    var selBar = el("div", "mb-sel");
+    var selCount = el("strong", null, "");
+    selBar.appendChild(selCount);
+    selBar.appendChild(button("Select all shown", "btn-sm", function () {
+      shown.forEach(function (m) { sel[m.id] = true; });
+      paint();
+    }));
+    selBar.appendChild(button("Clear", "btn-sm", function () { sel = {}; paint(); }));
+    var spacer = el("span", "mb-spacer");
+    selBar.appendChild(spacer);
+    var api_ = {
+      ids: function () { return Object.keys(sel).filter(function (k) { return sel[k]; }).map(Number); },
+      clear: function () { sel = {}; paint(); },
+      draw: function () { draw(); }
+    };
+    var refreshActions = opts.actions ? opts.actions(selBar, api_) : null;
+    head.appendChild(selBar);
+    box.appendChild(head);
+
+    var gridBox = el("div");
+    box.appendChild(gridBox);
+
+    var timer = null;
+    search.addEventListener("input", function () {
+      clearTimeout(timer);
+      timer = setTimeout(function () { state.q = search.value.trim().toLowerCase(); draw(); }, 150);
+    });
+    kind.addEventListener("change", function () { state.kind = kind.value; draw(); });
+    batch.addEventListener("change", function () { state.batch = batch.value; draw(); });
+
+    function paint() {
+      var n = api_.ids().length;
+      selCount.textContent = n ? n + " selected" : "Nothing selected — tap tiles, shift-click for a run";
+      Object.keys(tiles).forEach(function (id) { tiles[id].classList.toggle("picked", Boolean(sel[id])); });
+      if (refreshActions) refreshActions(n);
+    }
+
+    function fillBatches(list) {
+      var counts = {};
+      var order = [];
+      list.forEach(function (m) {
+        var k = batchKey(m);
+        if (!counts[k]) { counts[k] = 0; order.push(k); }
+        counts[k]++;
+      });
+      order.sort().reverse();
+      if (state.batch && !counts[state.batch]) state.batch = "";
+      batch.innerHTML = "";
+      var all = el("option", null, "Any upload");
+      all.value = "";
+      batch.appendChild(all);
+      order.forEach(function (k) {
+        var o = el("option", null, batchLabel(k, counts[k]));
+        o.value = k;
+        batch.appendChild(o);
+      });
+      batch.value = state.batch;
+    }
+
+    function draw() {
+      var list = opts.source();
+      var present = {};
+      list.forEach(function (m) { present[m.id] = true; });
+      Object.keys(sel).forEach(function (id) { if (!present[id]) delete sel[id]; });
+
+      fillBatches(list);
+      shown = list.filter(function (m) {
+        if (state.kind && m.kind !== state.kind) return false;
+        if (state.batch && batchKey(m) !== state.batch) return false;
+        if (state.q && (m.title + " " + (m.fileName || "")).toLowerCase().indexOf(state.q) < 0) return false;
+        return true;
+      });
+
+      count.textContent = shown.length === list.length
+        ? plural(list.length, "item")
+        : "Showing " + shown.length + " of " + list.length;
+      if (toggle) toggle.textContent = state.selecting ? "Done" : "Select";
+      selBar.hidden = !state.selecting;
+      bar.hidden = !list.length;
+
+      gridBox.innerHTML = "";
+      tiles = {};
+      lastClicked = -1;
+      if (!list.length) {
+        gridBox.className = "empty";
+        gridBox.textContent = opts.empty;
+      } else if (!shown.length) {
+        gridBox.className = "empty";
+        gridBox.textContent = "Nothing matches those filters.";
+      } else {
+        gridBox.className = "";
+        var grid = el("div", "tiles");
+        shown.forEach(function (m, i) {
+          var tile = mediaTile(m, state.selecting ? {
+            picked: Boolean(sel[m.id]),
+            onClick: function (ev) {
+              // Shift-click ticks the whole run since the last tile clicked:
+              // the quick way to grab the first 200 of a long upload.
+              if (ev.shiftKey && lastClicked >= 0) {
+                var to = !sel[m.id];
+                var a = Math.min(lastClicked, i), b = Math.max(lastClicked, i);
+                for (var j = a; j <= b; j++) sel[shown[j].id] = to;
+              } else {
+                sel[m.id] = !sel[m.id];
+              }
+              lastClicked = i;
+              paint();
+            }
+          } : null);
+          tiles[m.id] = tile;
+          grid.appendChild(tile);
+        });
+        gridBox.appendChild(grid);
+      }
+      paint();
+    }
+
+    draw();
+    return api_;
+  }
+
+  var library = null;
+
+  function renderMedia() {
+    if (!library) {
+      library = mediaBrowser({
+        box: $("media-grid"),
+        source: function () { return mediaList; },
+        empty: "Nothing uploaded yet.",
+        actions: libraryActions
+      });
+    } else {
+      library.draw();
+    }
+  }
+
+  // What you can do to a selection in the library: put it in a playlist (new
+  // or existing), or delete it.
+  function libraryActions(bar, browser) {
+    var target = null, addBtn = null, delBtn = null;
+    if (can("schedule")) {
+      target = el("select");
+      target.title = "Which playlist to add the selected items to";
+      addBtn = button("Add to playlist", "btn-sm", async function () {
+        var ids = browser.ids();
+        if (!ids.length) return;
+        var playlistId = Number(target.value), name;
+        try {
+          if (target.value === "new") {
+            name = prompt("Name the new playlist", "");
+            if (name === null || !name.trim()) return;
+            name = name.trim();
+            playlistId = (await api("POST", "/api/playlists", { name: name })).playlist.id;
+          } else {
+            name = target.options[target.selectedIndex].textContent;
+          }
+          addBtn.disabled = true;
+          var data = await api("POST", "/api/playlists/" + playlistId + "/items", { mediaIds: ids });
+          await loadPlaylists();
+          if (openPlaylist && openPlaylist.playlist.id === playlistId) openEditor(playlistId);
+          browser.clear();
+          msg("media-msg", "Added " + plural(data.added, "item") + " to “" + name + "”. It's under Playlists.", "ok");
+        } catch (e) {
+          msg("media-msg", e.message, "err");
+        } finally {
+          addBtn.disabled = false;
+        }
+      });
+      bar.appendChild(target);
+      bar.appendChild(addBtn);
+    }
+    if (can("upload")) {
+      delBtn = button("Delete", "btn-sm btn-danger", function () { deleteMany(browser.ids(), browser); });
+      bar.appendChild(delBtn);
+    }
+
+    return function refresh(n) {
+      if (target) {
+        var current = target.value;
+        target.innerHTML = "";
+        playlists.forEach(function (pl) {
+          var o = el("option", null, pl.name);
+          o.value = pl.id;
+          target.appendChild(o);
+        });
+        var o = el("option", null, "New playlist…");
+        o.value = "new";
+        target.appendChild(o);
+        if (current) target.value = current;
+        if (!target.value) target.value = playlists.length ? String(playlists[0].id) : "new";
+        addBtn.disabled = !n;
+      }
+      if (delBtn) delBtn.disabled = !n;
+    };
+  }
+
+  async function deleteMany(ids, browser) {
+    if (!ids.length) return;
+    if (!confirm("Delete " + plural(ids.length, "item") + "? This can't be undone.")) return;
+    try {
+      var data = await api("POST", "/api/media/delete", { ids: ids });
+      var deleted = data.deleted;
+      if (data.inUse.length) {
+        var names = {};
+        data.inUse.forEach(function (u) { u.playlists.forEach(function (n) { names["“" + n + "”"] = true; }); });
+        var ask = plural(data.inUse.length, "item") + " " + (data.inUse.length === 1 ? "is" : "are") +
+          " still in " + Object.keys(names).join(", ") +
+          ". Delete " + (data.inUse.length === 1 ? "it" : "them") + " anyway? " +
+          (data.inUse.length === 1 ? "It" : "They") + " will be taken out of the playlist.";
+        if (confirm(ask)) {
+          var forced = await api("POST", "/api/media/delete", {
+            ids: data.inUse.map(function (u) { return u.id; }),
+            force: true
+          });
+          deleted += forced.deleted;
+        }
+      }
+      var text = deleted ? "Deleted " + plural(deleted, "item") + "." : "Nothing was deleted.";
+      if (data.notYours) {
+        text += " " + plural(data.notYours, "item") + " uploaded by someone else " +
+          (data.notYours === 1 ? "was" : "were") + " left alone — ask someone who manages Narthex TV.";
+      }
+      msg("media-msg", text, data.notYours ? "info" : "ok");
+    } catch (e) {
+      msg("media-msg", e.message, "err");
+    }
+    browser.clear();
+    await loadMedia();
+    if (openPlaylist) openEditor(openPlaylist.playlist.id);
+    loadPlaylists();
+    loadNow();
   }
 
   async function loadMedia() {

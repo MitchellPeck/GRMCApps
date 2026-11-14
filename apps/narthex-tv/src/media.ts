@@ -191,3 +191,30 @@ export async function listUnfinished(pool: Pool): Promise<MediaRow[]> {
   );
   return r.rows;
 }
+
+export async function getMediaMany(pool: Pool, ids: number[]): Promise<MediaRow[]> {
+  if (!ids.length) return [];
+  const r = await pool.query<MediaRow>(
+    `SELECT ${COLUMNS} FROM media WHERE id = ANY($1::bigint[])`,
+    [ids]
+  );
+  return r.rows;
+}
+
+/** mediaUsage for a whole batch in one query: media id → live playlist names. */
+export async function mediaUsageMany(pool: Pool, ids: number[]): Promise<Map<number, string[]>> {
+  const usage = new Map<number, string[]>();
+  if (!ids.length) return usage;
+  const r = await pool.query<{ media_id: string; name: string }>(
+    `SELECT DISTINCT i.media_id, p.name
+       FROM playlist_items i JOIN playlists p ON p.id = i.playlist_id
+      WHERE i.media_id = ANY($1::bigint[]) AND p.archived = false
+      ORDER BY 2`,
+    [ids]
+  );
+  for (const row of r.rows) {
+    const id = Number(row.media_id);
+    usage.set(id, [...(usage.get(id) ?? []), row.name]);
+  }
+  return usage;
+}

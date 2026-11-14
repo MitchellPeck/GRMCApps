@@ -5,13 +5,14 @@ import { pipeline } from "node:stream/promises";
 import { join } from "node:path";
 import { pool } from "../db";
 import { getIdentity } from "../identity";
-import { requirePermission } from "../guard";
+import { loadPermissions, requirePermission } from "../guard";
 import { queue } from "../worker";
 import { enqueueMedia } from "../queue";
 import {
-  createMedia, deleteMedia, getMedia, getPagePath, listMedia, mediaDir, mediaUsage,
-  renameMedia, setMediaPaths, setMediaStatus,
+  createMedia, deleteMedia, getMedia, getMediaMany, getPagePath, listMedia, mediaDir,
+  mediaUsage, mediaUsageMany, renameMedia, setMediaPaths, setMediaStatus,
 } from "../media";
+import { planBulkDelete } from "../bulk-delete";
 import { contentTypeFor, detectKind, safeFileName, titleFromFileName } from "../ingest";
 import { sendFile } from "../files";
 import { config } from "../config";
@@ -169,6 +170,39 @@ export async function mediaRoutes(app: FastifyInstance): Promise<void> {
       }
       await deleteMedia(pool, id);
       return { ok: true };
+    }
+  );
+
+  // Many at once — a funeral slideshow is a few hundred photos, and clearing
+  // them one confirm at a time is not a workable afternoon. Same rules as the
+  // single delete; anything held back is reported rather than failing the lot.
+  app.post(
+    "/api/media/delete",
+    { preHandler: requirePermission("upload") },
+    async (req, reply) => {
+      const body = req.body as { ids?: unknown; force?: unknown };
+      const requested = Array.isArray(body?.ids)
+        ? [...new Set(body.ids.map(intParam).filter(Boolean))]
+        : [];
+      if (!requested.length) return reply.code(400).send({ ok: false, error: "Pick something to delete." });
+      if (requested.length > 5000) return reply.code(400).send({ ok: false, error: "That's too many at once." });
+
+      const perms = await loadPermissions(req);
+      const plan = planBulkDelete({
+        rows: await getMediaMany(pool, requested),
+        requested,
+        email: getIdentity(req).email,
+        manage: Boolean(perms.manage),
+        usage: await mediaUsageMany(pool, requested),
+        force: body?.force === true,
+      });
+      for (const id of plan.deletable) await deleteMedia(pool, id);
+      return {
+        ok: true,
+        deleted: plan.deletable.length,
+        notYours: plan.notYours.length,
+        inUse: plan.inUse,
+      };
     }
   );
 
