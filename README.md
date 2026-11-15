@@ -48,6 +48,7 @@ Cloudflare Tunnel, with no per-device certificate install.
 - Meeting Minutes: https://minutes.grmc.app
 - Expenses:        https://expenses.grmc.app
 - Narthex TV:      https://tv.grmc.app
+- Website Previews: https://previews.grmc.app
 - Traefik dashboard (host-local only): http://localhost:8080
 
 ## Apps
@@ -308,6 +309,15 @@ between apps. Both are served to each app at `/assets/` (see *Shared UI* below).
 
   **Reports** (manage only): spend by charge code over a date range, and a CSV
   export for bookkeeping. Data lives in the `expenses` database.
+
+- **Website Previews** (`previews.grmc.app`) — the theme candidates for the
+  church website, each a complete homepage built with the church's real photos,
+  video and copy. The front page lists the themes; a switcher in the corner of
+  each one jumps between them. The app is the website itself (the Next.js app
+  in the sibling **GRMC-Online** repo, `apps/web/Dockerfile`), so
+  `docker compose build site-previews` needs that repo checked out next to this
+  one. It has no database and does not load the shared header, because each
+  page is a full-bleed preview of the public site.
 
 ## Users and access
 

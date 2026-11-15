@@ -374,6 +374,26 @@ services:
       - "traefik.http.routers.narthextv-player.service=narthextv"
       - "com.centurylinklabs.watchtower.enable=true"
 
+  # Website Previews: the theme candidates for the church website, served from
+  # the sibling GRMC-Online repo (its Next.js app, built as a standalone
+  # server). No database. Gated by the hub like every other app, so only people
+  # ticked into "Website Previews" on the Users screen can open it.
+  site-previews:
+    build:
+      context: ../GRMC-Online
+      dockerfile: apps/web/Dockerfile
+    image: ghcr.io/mitchellpeck/grmc-site-previews:latest
+    restart: unless-stopped
+    networks: [hubnet]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.previews.rule=Host(`previews.${BASE_DOMAIN}`)"
+      - "traefik.http.routers.previews.entrypoints=websecure"
+      - "traefik.http.routers.previews.tls=true"
+      - "traefik.http.routers.previews.middlewares=hub-forward-auth@file"
+      - "traefik.http.services.previews.loadbalancer.server.port=3000"
+      - "com.centurylinklabs.watchtower.enable=true"
+
 networks:
   hubnet:
 

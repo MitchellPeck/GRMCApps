@@ -17,5 +17,6 @@ INSERT INTO apps (slug, name, subdomain, icon) VALUES
   ('approvals',       'Approvals',       'approvals', '✅'),
   ('meeting-minutes', 'Meeting Minutes', 'minutes',   '📝'),
   ('expenses',        'Expenses',        'expenses',  '🧾'),
-  ('narthex-tv',      'Narthex TV',      'tv',        '📺')
+  ('narthex-tv',      'Narthex TV',      'tv',        '📺'),
+  ('site-previews',   'Website Previews', 'previews', '🎨')
 ON CONFLICT (slug) DO NOTHING;
