@@ -39,7 +39,9 @@ second copy of that logic to drift.
 
     ./playout.py --url 'https://tv.grmc.app/player?t=<token>'
     ./playout.py --url 'http://127.0.0.1:3010/player?t=...' \
-                 --device 'UltraStudio Express Monitor 3G' --mode 1920x1080@30
+                 --device '<ID from --list-devices>' --mode 1920x1080@59.94
+    ./playout.py --list-devices
+    ./playout.py --identify '<ID>'      # which TV is this card wired to?
 """
 
 import argparse
@@ -539,6 +541,111 @@ def outer_command(ffmpeg, device, width, height, fps, codec="v210"):
     if codec == "wrapped_avframe":
         command += ["-pix_fmt", "uyvy422"]
     return command + ["-f", "decklink", device]
+
+
+# ── which card ──────────────────────────────────────────────────────────────
+#
+# With one UltraStudio attached, its name was enough. With two of the same
+# model the driver numbers them -- "UltraStudio Express Monitor 3G (1)" and
+# "(2)" -- so the old bare name matches neither, and the numbers follow
+# plug-in order, so they can swap after a reboot or a replug. ffmpeg also
+# accepts each unit's device handle (`-sinks decklink` prints it first), which
+# belongs to the unit and does not move. So a name is resolved to a handle
+# once, here, and the handle is what is opened.
+
+# "  41:00000000:00a1b2c3 [UltraStudio Express Monitor 3G (1)] (video)"
+# fftools prints "<device_name> [<description>] (<media types>)"; the decklink
+# device puts the handle in the first and the display name in the second.
+SINK_LINE = re.compile(r"^[ *] (\S.*?) \[(.*)\] \([^()]*\)\s*$")
+
+
+class DeviceError(ValueError):
+    """The card asked for is not one, or is not only one, of those attached."""
+
+
+def parse_sinks(listing):
+    cards = []
+    for line in listing.splitlines():
+        match = SINK_LINE.match(line)
+        if match:
+            cards.append({"id": match.group(1), "name": match.group(2)})
+    return cards
+
+
+def list_sinks(ffmpeg, run=None):
+    """The attached output cards, or None if this ffmpeg could not say."""
+    if run is None:
+        def run(command):
+            return subprocess.run(command, capture_output=True, text=True,
+                                  timeout=20).stdout
+    try:
+        return parse_sinks(run([ffmpeg, "-hide_banner", "-sinks", "decklink"]))
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def describe_cards(cards):
+    width = max(len(c["id"]) for c in cards)
+    return "\n".join(f"    {c['id'].ljust(width)}  {c['name']}" for c in cards)
+
+
+def resolve_device(requested, cards):
+    """
+    The one card `requested` means, as {"id", "name"}.
+
+    `requested` may be a handle, a display name, or a display name without the
+    driver's "(n)" -- the last being what every configuration written before
+    the second unit says. Two matches is refused rather than guessed: guessing
+    is how the picture ends up on a box nobody is looking at.
+    """
+    if cards is None:
+        # Could not list. ffmpeg is still the judge of whether this opens.
+        return {"id": requested, "name": requested}
+    if not cards:
+        raise DeviceError(
+            "No Blackmagic output was found. Check the Thunderbolt cable and "
+            "that Desktop Video is installed, then run --list-devices.")
+    for card in cards:
+        if card["id"] == requested:
+            return card
+    numbered = re.compile(re.escape(requested) + r" \(\d+\)$")
+    matches = [c for c in cards if c["name"] == requested or numbered.match(c["name"])]
+    if len(matches) == 1:
+        return matches[0]
+    if matches:
+        raise DeviceError(
+            f"{len(matches)} cards answer to \"{requested}\":\n"
+            f"{describe_cards(matches)}\n"
+            "Pass --device with the ID of the one wired to the narthex TV. "
+            "To see which is which, stop the playout and run --identify <ID>: "
+            "that card shows a test pattern for 30 seconds.")
+    raise DeviceError(
+        f"No card called \"{requested}\". These are attached:\n"
+        f"{describe_cards(cards)}")
+
+
+def identify_command(ffmpeg, device, width, height, fps, seconds,
+                     font=None, label_file=None, codec="v210"):
+    """
+    A moving test pattern on one card for `seconds`, then stop.
+
+    testsrc2 rather than bars because it has a running counter, so a frozen
+    card cannot pass for a working one. The label goes in through a file, as
+    every drawn string here does, because a handle is full of colons.
+    """
+    command = [
+        ffmpeg, "-hide_banner", "-loglevel", "warning",
+        "-f", "lavfi", "-i", f"testsrc2=size={width}x{height}:rate={rate_arg(fps)}",
+        "-t", str(seconds),
+    ]
+    if font and label_file:
+        size = max(24, round(height * 0.06))
+        command += ["-vf", (
+            f"drawtext=fontfile={drawtext_escape(font)}"
+            f":textfile={drawtext_escape(label_file)}"
+            f":fontsize={size}:fontcolor=white:box=1:boxcolor=black@0.75:boxborderw={size // 2}"
+            ":x=(w-text_w)/2:y=(h-text_h)/2")]
+    return command + ["-an", "-c:v", codec, "-f", "decklink", device]
 
 
 def describe_frame(frame):
@@ -1105,7 +1212,21 @@ class Playout:
         self.log(f"wrote {path} using font {self.font or '(none)'}")
         return 0
 
+    def choose_card(self):
+        """
+        Turn --device into the handle of exactly one attached card.
+
+        Raises DeviceError rather than opening a guess; under launchd that
+        means the reason is in the log every 15 seconds until it is fixed,
+        which beats a screen fed to the wrong box.
+        """
+        card = resolve_device(self.device, list_sinks(self.ffmpeg))
+        if card["id"] != self.device or card["name"] != self.device:
+            self.log(f"using {card['name']} ({card['id']})")
+        self.device = card["id"]
+
     def run(self):
+        self.choose_card()
         self.check_overlays()
         threading.Thread(target=self.poll_forever, daemon=True).start()
         # Before anything decodes: drawtext fails outright on a textfile that
@@ -1214,10 +1335,19 @@ def build_parser():
     """
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--url", required=True,
-                        help="the link from Narthex TV -> Screens -> Copy link")
+    parser.add_argument("--url",
+                        help="the link from Narthex TV -> Screens -> Copy link "
+                             "(required except with --list-devices / --identify)")
     parser.add_argument("--device", default="UltraStudio Express Monitor 3G",
-                        help="exactly as `ffmpeg -sinks decklink` prints it")
+                        help="which card: the ID from --list-devices (best: it "
+                             "never changes), or its name. A name two cards "
+                             "share is refused rather than guessed.")
+    parser.add_argument("--list-devices", action="store_true",
+                        help="print every Blackmagic output with its ID, and stop")
+    parser.add_argument("--identify", metavar="ID",
+                        help="show a labelled test pattern on that card for 30 "
+                             "seconds, to see which TV it is wired to. Stop the "
+                             "playout first: a card takes one owner at a time.")
     parser.add_argument("--mode", default="1920x1080@59.94",
                         help="must be a mode the device supports. 1080p59.94 is "
                              "the one every television accepts; 1080p30 is a "
@@ -1247,8 +1377,55 @@ def build_parser():
     return parser
 
 
+def list_devices(args):
+    ffmpeg = which_ffmpeg(args.ffmpeg)
+    cards = list_sinks(ffmpeg)
+    if cards is None:
+        raise SystemExit(f"{ffmpeg} could not list its outputs. Is it the "
+                         "decklink build (build-ffmpeg-decklink.sh)?")
+    if not cards:
+        raise SystemExit("No Blackmagic output was found. Check the cable and "
+                         "that Desktop Video is installed.")
+    print("Blackmagic outputs (use the ID with --device):\n" + describe_cards(cards))
+    return 0
+
+
+def identify(args, seconds=30):
+    ffmpeg = which_ffmpeg(args.ffmpeg)
+    try:
+        card = resolve_device(args.identify, list_sinks(ffmpeg))
+        width, height, fps = parse_mode(args.mode)
+    except ValueError as exc:
+        raise SystemExit(str(exc))
+    font = find_font() if has_filter(ffmpeg, "drawtext") else None
+    label_file = None
+    if font:
+        cache = os.path.expanduser(args.cache)
+        os.makedirs(cache, exist_ok=True)
+        label_file = os.path.join(cache, "identify.txt")
+        with open(label_file, "w") as handle:
+            handle.write(f"Narthex TV: this is {card['name']}\n{card['id']}")
+    print(f"Showing a test pattern on {card['name']} ({card['id']}) for {seconds}s...",
+          flush=True)
+    result = subprocess.run(identify_command(ffmpeg, card["id"], width, height, fps,
+                                             seconds, font, label_file, args.codec))
+    if result.returncode != 0:
+        print("It did not open. If the playout is running it is holding the "
+              "card: launchctl unload -w "
+              "~/Library/LaunchAgents/com.grmc.narthextv-playout.plist, then "
+              "try again.")
+    return result.returncode
+
+
 def main(argv=None):
     args = build_parser().parse_args(argv)
+    if args.list_devices:
+        return list_devices(args)
+    if args.identify:
+        return identify(args)
+    if not args.url:
+        raise SystemExit("--url is required: the local link from Narthex TV -> "
+                         "Screens -> Copy local link")
 
     try:
         playout = Playout(args)
@@ -1262,7 +1439,10 @@ def main(argv=None):
 
     signal.signal(signal.SIGTERM, playout.stop)
     signal.signal(signal.SIGINT, playout.stop)
-    playout.run()
+    try:
+        playout.run()
+    except DeviceError as exc:
+        raise SystemExit(f"[narthex-playout] {exc}")
     return 0
 
 
