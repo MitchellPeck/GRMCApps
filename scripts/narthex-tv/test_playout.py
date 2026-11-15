@@ -801,6 +801,105 @@ class FrameSelection(unittest.TestCase):
         self.assertEqual(instance.frames_now(), frames)
 
 
+# What `ffmpeg -sinks decklink` prints with two of the same unit attached:
+# fftools prints "<device_name> [<description>] (<media types>)", and the
+# decklink device sets device_name to the unit's handle, description to the
+# driver's display name -- which numbers identical models.
+TWO_SINKS = (
+    "Auto-detected sinks for decklink:\n"
+    "  41:00000000:00a1b2c3 [UltraStudio Express Monitor 3G (1)] (video)\n"
+    "  42:00000000:00d4e5f6 [UltraStudio Express Monitor 3G (2)] (video)\n"
+)
+
+
+class ChoosingTheCard(unittest.TestCase):
+    def setUp(self):
+        self.cards = playout.parse_sinks(TWO_SINKS)
+
+    def test_the_listing_gives_each_card_its_handle_and_name(self):
+        self.assertEqual(self.cards, [
+            {"id": "41:00000000:00a1b2c3", "name": "UltraStudio Express Monitor 3G (1)"},
+            {"id": "42:00000000:00d4e5f6", "name": "UltraStudio Express Monitor 3G (2)"},
+        ])
+
+    def test_lines_that_are_not_cards_are_ignored(self):
+        self.assertEqual(playout.parse_sinks("Auto-detected sinks for decklink:\n"), [])
+        self.assertEqual(playout.parse_sinks("Cannot list sinks: Not implemented\n"), [])
+
+    def test_a_card_is_found_by_its_handle(self):
+        self.assertEqual(playout.resolve_device("42:00000000:00d4e5f6", self.cards),
+                         self.cards[1])
+
+    def test_a_name_shared_by_two_cards_is_refused_rather_than_guessed(self):
+        # The old configuration: before the second unit, this name was unique.
+        # ffmpeg would now take whichever the driver lists first, or neither.
+        with self.assertRaises(playout.DeviceError) as caught:
+            playout.resolve_device("UltraStudio Express Monitor 3G", self.cards)
+        message = str(caught.exception)
+        self.assertIn("41:00000000:00a1b2c3", message)
+        self.assertIn("42:00000000:00d4e5f6", message)
+        self.assertIn("--identify", message)
+
+    def test_the_numbered_name_still_works_but_resolves_to_the_handle(self):
+        # "(2)" follows plug-in order and can swap; the handle does not, so the
+        # handle is what reaches ffmpeg.
+        self.assertEqual(
+            playout.resolve_device("UltraStudio Express Monitor 3G (2)", self.cards)["id"],
+            "42:00000000:00d4e5f6")
+
+    def test_a_unique_name_is_enough(self):
+        cards = playout.parse_sinks(
+            "  41:00000000:00a1b2c3 [UltraStudio Express Monitor 3G] (video)\n"
+            "  77:00000000:00999999 [UltraStudio Mini Monitor] (video)\n")
+        self.assertEqual(playout.resolve_device("UltraStudio Mini Monitor", cards)["id"],
+                         "77:00000000:00999999")
+        self.assertEqual(playout.resolve_device("UltraStudio Express Monitor 3G", cards)["id"],
+                         "41:00000000:00a1b2c3")
+
+    def test_an_unknown_card_names_the_ones_that_are_there(self):
+        with self.assertRaises(playout.DeviceError) as caught:
+            playout.resolve_device("DeckLink Mini Monitor", self.cards)
+        self.assertIn("UltraStudio Express Monitor 3G (1)", str(caught.exception))
+
+    def test_no_cards_at_all_says_so(self):
+        with self.assertRaises(playout.DeviceError) as caught:
+            playout.resolve_device("anything", [])
+        self.assertIn("No Blackmagic output", str(caught.exception))
+
+    def test_a_listing_that_could_not_be_had_passes_the_name_through(self):
+        # An ffmpeg that cannot list must not stop a name that would have
+        # worked; ffmpeg itself is still the judge.
+        self.assertEqual(playout.resolve_device("X", None), {"id": "X", "name": "X"})
+
+    def test_listing_failure_is_none_not_a_crash(self):
+        def explode(command):
+            raise OSError("no such file")
+        self.assertIsNone(playout.list_sinks("/nope/ffmpeg", run=explode))
+        self.assertEqual(len(playout.list_sinks("ffmpeg", run=lambda c: TWO_SINKS)), 2)
+
+    def test_identify_drives_the_chosen_card_and_stops_by_itself(self):
+        command = playout.identify_command("ffmpeg", "42:00000000:00d4e5f6",
+                                           1920, 1080, 59.94, 30)
+        self.assertEqual(command[-3:], ["-f", "decklink", "42:00000000:00d4e5f6"])
+        self.assertIn("testsrc2=size=1920x1080:rate=60000/1001", command)
+        self.assertEqual(command[command.index("-t") + 1], "30")
+        self.assertEqual(command[command.index("-c:v") + 1], "v210")
+
+    def test_identify_labels_the_picture_only_through_a_file(self):
+        command = playout.identify_command("ffmpeg", "dev", 1920, 1080, 59.94, 30,
+                                           font="/f.ttf", label_file="/tmp/a:b.txt")
+        graph = command[command.index("-vf") + 1]
+        self.assertIn("textfile=/tmp/a\\:b.txt", graph)
+        self.assertNotIn(":text=", graph)
+
+    def test_the_command_line_offers_listing_and_identifying(self):
+        args = playout.build_parser().parse_args(["--list-devices"])
+        self.assertTrue(args.list_devices)
+        self.assertIsNone(args.url)
+        args = playout.build_parser().parse_args(["--identify", "42:00000000:00d4e5f6"])
+        self.assertEqual(args.identify, "42:00000000:00d4e5f6")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
 

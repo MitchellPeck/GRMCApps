@@ -9,9 +9,12 @@
        loopback: no WAN, no Cloudflare, and the narthex keeps playing through
        an internet outage.
     2. Build ffmpeg first — Homebrew's ffmpegdecklink does not compile against
-       a current DeckLink SDK (see build-ffmpeg-decklink.sh), then confirm the
-       device name matches what it reports:
-         ~/.local/bin/ffmpeg-decklink -sinks decklink
+       a current DeckLink SDK (see build-ffmpeg-decklink.sh), then put the ID
+       of the card wired to the narthex TV in as the device argument below:
+         ./playout.py (list-devices option)  : every card, with its ID
+         ./playout.py (identify option) ID   : test pattern on it, 30s
+       Use the ID, not the name: with two of the same model attached the
+       driver numbers them "(1)"/"(2)" in plug-in order, which can swap.
     3. cp com.grmc.narthextv-playout.plist ~/Library/LaunchAgents/
        launchctl load -w ~/Library/LaunchAgents/com.grmc.narthextv-playout.plist
 
@@ -37,7 +40,9 @@
     <string>--url</string>
     <string>http://127.0.0.1:3010/player?t=CHANGEME</string>
     <string>--device</string>
-    <string>UltraStudio Express Monitor 3G</string>
+    <!-- The ID that playout.py prints when listing devices. A bare model name is
+         refused once two cards share it, rather than guessed. -->
+    <string>CHANGEME-DEVICE-ID</string>
     <string>--mode</string>
     <string>1920x1080@59.94</string>
     <!-- How large the clock and footer are. Only judgeable from across the

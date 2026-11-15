@@ -58,16 +58,46 @@ nothing to log in to.
 #    see "Getting an ffmpeg that builds" below.
 ./build-ffmpeg-decklink.sh ~/Downloads/Blackmagic_DeckLink_SDK_12.4.2
 
-# 2. Confirm the card is visible. Note -sinks, not -sources: it is an output,
-#    which is also why -sources and -list_formats will never show it.
-~/.local/bin/ffmpeg-decklink -sinks decklink
+# 2. Find the card's ID, and check it is the one wired to the narthex TV.
+./playout.py --list-devices
+./playout.py --identify '<ID>'     # labelled test pattern on that card, 30s
 
 # 3. Run it. Note the loopback URL -- Screens -> Copy local link.
 ./playout.py --url 'http://127.0.0.1:3010/player?t=<token>' \
-             --device 'UltraStudio Express Monitor 3G' \
+             --device '<ID>' \
              --mode 1920x1080@59.94 \
              --ffmpeg ~/.local/bin/ffmpeg-decklink
 ```
+
+#### More than one UltraStudio on the Mac
+
+`--device` takes the card's **ID**, as `--list-devices` prints it, or its name.
+Use the ID. With two of the same model attached, the driver numbers their names
+-- `UltraStudio Express Monitor 3G (1)` and `(2)` -- in the order it found them,
+so the numbers can swap after a reboot or a replug, and the bare name that
+worked with one card now matches neither. The ID belongs to the unit and does
+not move.
+
+A name that two cards answer to is refused, with both IDs in the message,
+rather than guessed. Under launchd that line repeats in
+`/tmp/narthex-playout.err.log` every 15 seconds until `--device` is fixed.
+
+To find out which card is wired to which television:
+
+```sh
+launchctl unload -w ~/Library/LaunchAgents/com.grmc.narthextv-playout.plist
+./playout.py --list-devices
+./playout.py --identify '<ID>'     # that card shows a test pattern for 30s
+```
+
+The pattern carries the card's name and ID in large type, and a running
+counter so a frozen card cannot pass for a working one. Put the right ID in
+the plist after `--device`, then `launchctl load -w` it again.
+
+Driving both televisions means two copies of the LaunchAgent, each with its own
+`Label`, `--device`, screen link (**Screens → New screen**), log paths and
+`--cache` directory -- the clock and footer files live in the cache, and two
+runs sharing one would draw each other's.
 
 #### Match the SDK to the driver, and build current FFmpeg
 
