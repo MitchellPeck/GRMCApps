@@ -3,7 +3,7 @@ import { pool } from "../db";
 import { getIdentity } from "../identity";
 import { requirePermission } from "../guard";
 import {
-  addItems, createPlaylist, deletePlaylist, getPlaylist, listItems, listPlaylists,
+  addItems, bulkItems, BulkItemAction, createPlaylist, deletePlaylist, getPlaylist, listItems, listPlaylists,
   removeItem, reorderItems, updateItem, updatePlaylist, PlaylistRow, PlaylistItemRow,
 } from "../playlists";
 
@@ -70,6 +70,7 @@ function itemView(row: PlaylistItemRow) {
     status: row.status,
     pageCount: Number(row.page_count ?? 0),
     durationMs: row.duration_ms === null ? null : Number(row.duration_ms),
+    fileName: row.file_name,
   };
 }
 
@@ -181,6 +182,19 @@ export async function playlistRoutes(app: FastifyInstance): Promise<void> {
     const params = req.params as { id: string; itemId: string };
     await removeItem(pool, intParam(params.itemId));
     return { ok: true, items: (await listItems(pool, intParam(params.id))).map(itemView) };
+  });
+
+  app.post("/api/playlists/:id/items/bulk", { preHandler: requirePermission("schedule") }, async (req, reply) => {
+    const id = intParam((req.params as { id: string }).id);
+    const body = req.body as { itemIds?: unknown; action?: unknown };
+    const action = String(body?.action ?? "") as BulkItemAction;
+    if (!["remove", "skip", "play"].includes(action)) {
+      return reply.code(400).send({ ok: false, error: "Unknown action." });
+    }
+    const ids = Array.isArray(body?.itemIds) ? body.itemIds.map(intParam).filter(Boolean) : [];
+    if (!ids.length) return reply.code(400).send({ ok: false, error: "Pick something first." });
+    const changed = await bulkItems(pool, id, ids, action);
+    return { ok: true, changed, items: (await listItems(pool, id)).map(itemView) };
   });
 
   app.post("/api/playlists/:id/reorder", { preHandler: requirePermission("schedule") }, async (req, reply) => {
