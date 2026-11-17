@@ -432,6 +432,13 @@ header a.btn-hdr{text-decoration:none}
 .gnx-sug.done{opacity:.6}
 .gnx-sug del{color:var(--rej-fg)}
 .gnx-sug ins{color:var(--ok-fg);text-decoration:none;font-weight:600}
+.gnx-versions{margin-top:10px;border-top:1px dashed var(--rule);padding-top:10px}
+.gnx-versions h4{margin:0 0 8px;color:var(--navy)}
+.gnx-vgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr));gap:12px;margin-top:8px}
+.gnx-version{border:1px solid var(--rule);border-radius:var(--r);padding:10px 12px;min-width:0}
+.gnx-version .gnx-blockhead .btn-sm{margin-left:0}
+.gnx-version .gnx-blockhead .btn-sm:first-of-type{margin-left:auto}
+.gnx-vpreview{background:#fff;border:1px solid var(--rule);border-radius:var(--r);padding:18px 20px;max-height:560px;overflow:auto}
 .gnx-block{border:1px solid var(--rule);border-radius:var(--r);padding:10px 12px;margin-bottom:10px}
 .gnx-blockhead{display:flex;gap:10px;align-items:center;margin-bottom:6px}
 .gnx-blockhead .btn-sm{margin-left:auto}
