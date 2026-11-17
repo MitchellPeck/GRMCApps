@@ -7,6 +7,7 @@ var DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 var MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 var STATE = { outstanding: ['Outstanding', 'pill-pending'], confirmed: ['Confirmed', 'pill-ok'], changed: ['Changed', 'pill-info'],
   'new': ['Added', 'pill-info'], none: ['No pieces', ''] };
+var autoVersions = {}; // letter piece ids we've already tried making versions for this session
 var KINDS = { text: 'Text', events: 'Events list', glance: 'Grace at a Glance (automatic)' };
 
 // ── helpers (copies of the small ones in pipeline.js) ────────────────────────
@@ -237,7 +238,7 @@ function drawIssue(main, data, blocks, people, sections, settings, histHtml, eve
   html += '<section class="card">' + cardTitle('Pieces') + live.map(function (s) {
     var mine = pieces.filter(function (p) { return p.sectionId === s.id; });
     var body = s.kind === 'glance' ? '<p class="hint">Built automatically from the events calendar.</p>'
-      : mine.map(function (p) { return pieceHtml(p, s, data.reviews[p.id], sent, !!eventOptions); }).join('')
+      : mine.map(function (p) { return pieceHtml(p, s, data.reviews[p.id], sent, !!eventOptions, (data.versions || {})[p.id]); }).join('')
         + (s.kind === 'events' && !sent ? '<button class="btn-sm" type="button" data-act="add-item" data-sid="' + esc(s.id) + '">Add an item</button>'
           + (eventOptions ? '<div class="field gnx-existing"><label>Add an existing event</label>' + pickerHtml('add-existing', s.id, 'Add') + '</div>' : '') : '')
         + (!mine.length && s.kind !== 'events' ? '<p class="hint">Nothing yet.</p>' : '');
@@ -264,6 +265,19 @@ function drawIssue(main, data, blocks, people, sections, settings, histHtml, eve
     'copy-link': function (b) { copyLink(b.getAttribute('data-url')); },
     nudge: function (b) { run(b, function () { return call('POST', '/api/gracenotes/issues/' + encodeURIComponent(issue.id) + '/remind/' + encodeURIComponent(b.getAttribute('data-id'))); }, 'Reminder sent.'); },
     'copy-block': function (b) { var bl = blocks[+b.getAttribute('data-i')]; copyBlock(bl.html, bl.text || plain(bl.html)); },
+    'make-versions': function (b) {
+      b.textContent = 'Making the email versions…';
+      run(b, function () { return call('POST', '/api/gracenotes/pieces/' + encodeURIComponent(b.getAttribute('data-id')) + '/versions', {}); }, null)
+        .then(function () { if (b.isConnected) b.textContent = 'Make email versions'; }, function () {});
+    },
+    'copy-version': function (b) {
+      var v = (data.versions || {})[b.getAttribute('data-id')], w = b.getAttribute('data-which');
+      if (v) copyBlock(v[w + 'Html'], v[w + 'Text']);
+    },
+    'copy-version-html': function (b) {
+      var v = (data.versions || {})[b.getAttribute('data-id')];
+      if (v) copyText(v[b.getAttribute('data-which') + 'Html']).then(function () { toast('HTML copied. Paste it into a Code block.', 'ok'); }, function () { toast('Couldn’t copy.', 'err'); });
+    },
     'mark-sent': function (b) {
       if (!window.confirm('Mark this issue as sent? It moves into history and the next one copies from it.')) return;
       run(b, function () { return call('POST', '/api/gracenotes/issues/' + encodeURIComponent(issue.id) + '/sent'); }, 'Marked sent.');
@@ -305,9 +319,25 @@ function drawIssue(main, data, blocks, people, sections, settings, histHtml, eve
     },
   };
   wire(main, h);
+  // Headline / closing / signer edits save on change and redraw both versions.
+  Array.prototype.forEach.call(main.querySelectorAll('[data-vfield]'), function (el) {
+    el.addEventListener('change', function () {
+      var patch = {}; patch[el.getAttribute('data-vfield')] = el.value;
+      el.disabled = true;
+      api('PATCH', '/api/gracenotes/pieces/' + encodeURIComponent(el.getAttribute('data-id')) + '/versions', patch)
+        .then(function (d) { if (!d.ok) { el.disabled = false; toast(d.error || 'Couldn’t save that.', 'err'); } else reload(); });
+    });
+  });
+  // Once every suggestion is decided, make the versions without being asked (once per page session).
+  Array.prototype.forEach.call(main.querySelectorAll('[data-act="make-versions"][data-auto]'), function (b) {
+    var id = b.getAttribute('data-id');
+    if (autoVersions[id]) return;
+    autoVersions[id] = true;
+    h['make-versions'](b);
+  });
 }
 
-function pieceHtml(p, section, review, sent, canLink) {
+function pieceHtml(p, section, review, sent, canLink, versions) {
   var chip = { carried: ['Not checked', 'pill-pending'], confirmed: ['Confirmed', 'pill-ok'], changed: ['Changed', 'pill-info'], 'new': ['Added', 'pill-info'] }[p.status] || ['', ''];
   var title = p.title || p.eventName || '';
   var d = p.details || {};
@@ -326,6 +356,8 @@ function pieceHtml(p, section, review, sent, canLink) {
       + (isLetter ? '<button class="btn-sm" type="button" data-act="review" data-id="' + esc(p.id) + '">Review letter</button>' : '') + '</div>';
   }
   if (isLetter && review && review.length) h += reviewHtml(p.id, review, sent);
+  var decided = isLetter && Array.isArray(review) && !review.some(function (s) { return s.state === 'open'; });
+  if (decided) h += versionsHtml(p.id, versions, sent);
   return h + '</div>';
 }
 
@@ -342,6 +374,32 @@ function reviewHtml(pieceId, list, sent) {
         : '<div class="hint">' + (s.state === 'missed' ? 'That sentence has changed since the review. Edit it by hand.' : s.state === 'accepted' ? 'Accepted' : s.state === 'rejected' ? 'Rejected' : '') + '</div>')
       + '</div>';
   }).join('') + '</div>';
+}
+
+// The two email versions of the reviewed letter: a short cut and the full letter, styled for Mailchimp.
+function versionsHtml(pieceId, v, sent) {
+  var id = esc(pieceId);
+  if (!v) {
+    return sent ? '' : '<div class="gnx-versions"><button class="btn-sm" type="button" data-act="make-versions" data-auto="1" data-id="' + id + '">Make email versions</button></div>';
+  }
+  var field = function (k, label, ph) {
+    return '<div class="field"><label>' + label + '</label><input type="text" data-vfield="' + k + '" data-id="' + id + '" value="' + esc(v[k]) + '" placeholder="' + ph + '"' + (sent ? ' disabled' : '') + '></div>';
+  };
+  var card = function (which, label) {
+    return '<div class="gnx-version"><div class="gnx-blockhead"><strong>' + label + '</strong>'
+      + '<button class="btn-sm" type="button" data-act="copy-version" data-which="' + which + '" data-id="' + id + '">Copy</button>'
+      + '<button class="btn-sm" type="button" data-act="copy-version-html" data-which="' + which + '" data-id="' + id + '">Copy HTML</button></div>'
+      + '<div class="gnx-vpreview">' + v[which + 'Html'] + '</div></div>'; // built and escaped on the server
+  };
+  return '<div class="gnx-versions"><h4>Email versions</h4>'
+    + (v.stale ? '<div class="alert alert-warn">The letter changed after these were made.'
+      + (sent ? '' : ' <button class="btn-sm" type="button" data-act="make-versions" data-id="' + id + '">Remake</button>') + '</div>' : '')
+    + '<div class="row2">' + field('title', 'Headline', 'Preparing for our most significant year') + field('signoff', 'Closing', 'In Christ, James')
+    + field('signer', 'Name and role', 'Rev. James Williams, Senior Pastor') + '</div>'
+    + '<p class="hint">Copy pastes the styled text into a Mailchimp text block; Copy HTML is for a Code block. The short cut uses only sentences from the letter.</p>'
+    + '<div class="gnx-vgrid">' + card('short', 'Short email cut') + card('full', 'Full letter') + '</div>'
+    + (sent || v.stale ? '' : '<div class="gnx-acts"><button class="btn-sm" type="button" data-act="make-versions" data-id="' + id + '">Make them again</button></div>')
+    + '</div>';
 }
 
 // Edit in place (or add, when piece is null). Mitchell may edit any piece.

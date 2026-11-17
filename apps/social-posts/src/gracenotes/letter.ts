@@ -97,7 +97,7 @@ export async function reviewLetter(db: Pool, pieceId: string, call: Call = callC
     }));
   await db.query(
     `INSERT INTO gn_letter_reviews (piece_id, suggestions, created_at) VALUES ($1,$2::jsonb, now())
-     ON CONFLICT (piece_id) DO UPDATE SET suggestions = EXCLUDED.suggestions, created_at = now()`,
+     ON CONFLICT (piece_id) DO UPDATE SET suggestions = EXCLUDED.suggestions, created_at = now(), versions = NULL`,
     [pieceId, JSON.stringify(list)]);
   return list;
 }

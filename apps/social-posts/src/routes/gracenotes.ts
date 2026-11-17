@@ -11,6 +11,7 @@ import {
 import { contributorStatus, createIssue, getIssue, listIssues, fillOpenIssues } from "../gracenotes/issues";
 import { Actor, PieceInput, addExistingEvent, addItem, confirmPiece, dropPiece, editPiece, linkEvent, listPieces } from "../gracenotes/pieces";
 import { decideSuggestion, reviewLetter } from "../gracenotes/letter";
+import { LetterVersions, makeVersions, updateVersions, viewOf } from "../gracenotes/letter-versions";
 import { buildSheet, markIssueSent } from "../gracenotes/sheet";
 import { remind } from "../gracenotes/mail";
 import { Contributor } from "../gracenotes/types";
@@ -114,10 +115,14 @@ export async function gracenotesRoutes(app: FastifyInstance, opts: GnRouteOpts =
     if (issue.status === "collecting") await fillOpenIssues(db);
     const pieces = await listPieces(db, id);
     const { rows } = await db.query(
-      "SELECT piece_id, suggestions FROM gn_letter_reviews WHERE piece_id = ANY($1)", [pieces.map((p) => p.id)]);
+      "SELECT piece_id, suggestions, versions FROM gn_letter_reviews WHERE piece_id = ANY($1)", [pieces.map((p) => p.id)]);
     const reviews: Record<string, unknown> = {};
-    for (const r of rows) reviews[r.piece_id] = r.suggestions;
-    return { ok: true, issue, pieces, contributors: await contributorStatus(db, id), reviews };
+    const versions: Record<string, unknown> = {};
+    for (const r of rows) {
+      reviews[r.piece_id] = r.suggestions;
+      if (r.versions) versions[r.piece_id] = viewOf(r.versions as LetterVersions, pieces.find((p) => p.id === r.piece_id)?.bodyHtml ?? "");
+    }
+    return { ok: true, issue, pieces, contributors: await contributorStatus(db, id), reviews, versions };
   }));
   // The sheet is what gets pasted into Mailchimp; marking it sent stores a snapshot (markIssueSent).
   app.post("/api/gracenotes/issues/:id/sent", async (req) => guard(async () => {
@@ -165,5 +170,15 @@ export async function gracenotesRoutes(app: FastifyInstance, opts: GnRouteOpts =
     if (decision !== "accepted" && decision !== "rejected") return { ok: false as const, error: "Decision must be accepted or rejected." };
     const r = await decideSuggestion(db, params(req).id, params(req).sid, decision, getIdentity(req).email);
     return r.ok ? { ok: true, suggestion: r.value } : r;
+  }));
+  app.post("/api/gracenotes/pieces/:id/versions", async (req) => guard(async () => {
+    const r = await makeVersions(db, params(req).id);
+    return r.ok ? { ok: true } : r;
+  }));
+  app.patch("/api/gracenotes/pieces/:id/versions", async (req) => guard(async () => {
+    const b = body(req);
+    const pick = (k: string) => (typeof b[k] === "string" ? (b[k] as string) : undefined);
+    const r = await updateVersions(db, params(req).id, { title: pick("title"), signoff: pick("signoff"), signer: pick("signer") });
+    return r.ok ? { ok: true } : r;
   }));
 }
