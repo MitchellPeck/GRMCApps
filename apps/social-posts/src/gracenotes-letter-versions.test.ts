@@ -78,9 +78,9 @@ test("rendered versions carry inline styles and escape the headline", () => {
   const v = assemble(LETTER, { ...LAYOUT, title: "Faith & <works>" }, "Rev. J");
   const view = viewOf(v, LETTER);
   assert.equal(view.stale, false);
-  assert.match(view.fullHtml, /<h1 style="[^"]*DM Serif Display[^"]*">Faith &amp; &lt;works&gt;<\/h1>/);
+  assert.match(view.fullHtml, /<h1 style="[^"]*Noto Serif Display[^"]*">Faith &amp; &lt;works&gt;<\/h1>/);
   assert.match(view.fullHtml, /<p style="[^"]*text-align:center[^"]*">“It’s not equal giving/);
-  assert.match(view.fullHtml, /<a href="https:\/\/graceresurrection.org\/give" style="color:#3f6e78;font-weight:700;text-decoration:underline">/);
+  assert.match(view.fullHtml, /<a href="https:\/\/graceresurrection.org\/give" style="color:#427682;font-weight:700;text-decoration:underline">/);
   assert.match(view.fullHtml, /font-style:italic[^"]*">In Christ, James<\/p><p style="[^"]*">Rev\. J<\/p><\/div>$/);
   assert.ok(view.shortHtml.length < view.fullHtml.length);
   assert.match(view.shortText, /^Faith & <works>\n\nFamily of Grace,/);

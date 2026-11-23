@@ -146,9 +146,10 @@ export function assemble(sourceHtml: string, raw: any, savedSigner: string): Let
 }
 
 // ── Rendering: inline styles only, so the look survives a paste into Mailchimp. ──
-const SERIF = "'DM Serif Display',Georgia,'Times New Roman',serif";
+// The church's email templates: Noto Serif Display + Work Sans, navy / slate / teal.
+const SERIF = "'Noto Serif Display',Georgia,'Times New Roman',serif";
 const SANS = "'Work Sans',Helvetica,Arial,sans-serif";
-const NAVY = "#14293a", INK = "#3d4549", LINK = "#3f6e78";
+const NAVY = "#092D3E", INK = "#3F4A50", LINK = "#427682";
 const P = `margin:0 0 18px;font-family:${SANS};font-size:16px;line-height:1.65;color:${INK}`;
 
 function styleLinks(html: string): string {
