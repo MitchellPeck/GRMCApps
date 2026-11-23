@@ -12,7 +12,7 @@ import { contributorStatus, createIssue, getIssue, listIssues, fillOpenIssues } 
 import { Actor, PieceInput, addExistingEvent, addItem, confirmPiece, dropPiece, editPiece, linkEvent, listPieces } from "../gracenotes/pieces";
 import { decideSuggestion, reviewLetter } from "../gracenotes/letter";
 import { LetterVersions, makeVersions, updateVersions, viewOf } from "../gracenotes/letter-versions";
-import { buildSheet, markIssueSent } from "../gracenotes/sheet";
+import { buildSheet, markIssueSent, unmarkIssueSent } from "../gracenotes/sheet";
 import { remind } from "../gracenotes/mail";
 import { Contributor } from "../gracenotes/types";
 
@@ -127,6 +127,10 @@ export async function gracenotesRoutes(app: FastifyInstance, opts: GnRouteOpts =
   // The sheet is what gets pasted into Mailchimp; marking it sent stores a snapshot (markIssueSent).
   app.post("/api/gracenotes/issues/:id/sent", async (req) => guard(async () => {
     const r = await markIssueSent(db, params(req).id);
+    return r.ok ? { ok: true, issue: r.value } : r;
+  }));
+  app.delete("/api/gracenotes/issues/:id/sent", async (req) => guard(async () => {
+    const r = await unmarkIssueSent(db, params(req).id);
     return r.ok ? { ok: true, issue: r.value } : r;
   }));
   app.get("/api/gracenotes/issues/:id/sheet", async (req) => guard(async () => {

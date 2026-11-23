@@ -4,7 +4,7 @@ import { Pool } from "pg";
 import { SCHEMA_SQL } from "./schema";
 import { createSection, reorderSections } from "./gracenotes/repo";
 import { createIssue } from "./gracenotes/issues";
-import { buildSheet, markIssueSent } from "./gracenotes/sheet";
+import { buildSheet, markIssueSent, unmarkIssueSent } from "./gracenotes/sheet";
 import { Actor, confirmPiece, dropPiece, editPiece, addItem, listPieces } from "./gracenotes/pieces";
 
 const pool = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
@@ -203,6 +203,17 @@ test("markIssueSent twice errors", async () => {
   const r = await markIssueSent(pool, i);
   assert.equal(r.ok, false);
   assert.equal((r as { error: string }).error, "That issue was already marked sent.");
+});
+
+test("unmarkIssueSent reopens a sent issue and clears its snapshot", async () => {
+  const i = await issue("2026-11-04");
+  assert.equal((await unmarkIssueSent(pool, i)).ok, false);
+  ok(await markIssueSent(pool, i));
+  const r = await unmarkIssueSent(pool, i);
+  ok(r);
+  const row = (await pool.query("SELECT status, sent_at, sheet_snapshot FROM gn_issues WHERE id = $1", [i])).rows[0];
+  assert.deepEqual([row.status, row.sent_at, row.sheet_snapshot], ["collecting", null, null]);
+  ok(await markIssueSent(pool, i)); // and it can be marked sent again
 });
 
 test("sheet shows a dated item's date before the details", async () => {
