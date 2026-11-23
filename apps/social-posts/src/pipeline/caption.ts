@@ -89,6 +89,8 @@ export async function draftCaptions(pool: Pool, req: DraftRequest, createdBy: st
   const { effective, source, event } = resolved;
   if (effective.source.kind === "buzzsprout" && !source) return fail("Pick the episode this post is about.");
   if (effective.source.kind === "sermon" && !source) return fail("Upload the video first.");
+  if (effective.source.kind === "youtube" && !source) return fail("Pick the YouTube video this post is about.");
+  if (source?.kind === "youtube" && source.captionsError) return fail(source.captionsError);
   // A podcast episode drafts from what was said: wait for its transcript. If
   // the audio can't be transcribed, draft from the show notes and say so.
   const audio = source?.kind === "buzzsprout" ? source.audio : undefined;

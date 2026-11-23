@@ -287,7 +287,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS gn_reminders_auto_once ON gn_reminders (issue_
 CREATE TABLE IF NOT EXISTS gn_letter_reviews (
   piece_id text PRIMARY KEY REFERENCES gn_pieces(id) ON DELETE CASCADE,
   suggestions jsonb NOT NULL, created_at timestamptz NOT NULL DEFAULT now());
-ALTER TABLE gn_letter_reviews ADD COLUMN IF NOT EXISTS versions jsonb; -- the styled email versions, made once every suggestion is decided
+ALTER TABLE gn_letter_reviews ADD COLUMN IF NOT EXISTS versions jsonb;
+CREATE TABLE IF NOT EXISTS youtube_captions (
+  video_id text PRIMARY KEY, track_kind text NOT NULL DEFAULT '', language text NOT NULL DEFAULT '',
+  text text NOT NULL, fetched_at timestamptz NOT NULL DEFAULT now()); -- the styled email versions, made once every suggestion is decided
 ALTER TABLE events ADD COLUMN IF NOT EXISTS image_url text NOT NULL DEFAULT '';
 ALTER TABLE events ADD COLUMN IF NOT EXISTS review_note text NOT NULL DEFAULT '';
 `;

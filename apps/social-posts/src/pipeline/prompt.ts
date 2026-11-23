@@ -5,11 +5,15 @@ import { formatMonthDayYear } from "../dates";
 import { PLATFORMS } from "./config";
 
 export interface SourceContent {
-  kind: "mailchimp" | "buzzsprout" | "manual" | "sermon";
+  kind: "mailchimp" | "buzzsprout" | "manual" | "sermon" | "youtube";
   id: string; title: string; url: string; date: string; dateLine: string; content: string;
   isDraft?: boolean; notYetPublic?: boolean; durationLabel?: string;
   /** A podcast episode's transcript, once its audio has been transcribed. */
   transcript?: string;
+  /** A YouTube video whose captions couldn't be had (yet): why. Drafting refuses until there are some. */
+  captionsError?: string;
+  /** "asr" when the captions are YouTube's automatic ones. */
+  trackKind?: string;
   /** Where the episode's transcription is: its recording's id and state. */
   audio?: { id: string; status: string; progress: string; error: string };
 }
@@ -54,6 +58,13 @@ export function buildDraftPrompt(p: PromptInput): { system: string; user: string
       "This post goes out with or about this video. The caption should fit what is said in it.",
       "This is an automatic transcript: names, places and scripture references may be misheard. Don't quote a verse reference unless it's clear from the text.",
       "", "VIDEO TRANSCRIPT:", s.content || "(not provided)");
+  } else if (s && s.kind === "youtube") {
+    lines.push("", "--- SOURCE ---", "YOUTUBE VIDEO: " + (s.title || "(untitled)") + (s.dateLine ? ` (${s.dateLine})` : ""), "VIDEO URL: " + (s.url || "(not provided)"),
+      "This post goes out about this video (often a Sunday service: the sermon is usually the heart of it). The caption should fit what is said in it.",
+      s.trackKind === "asr"
+        ? "These are YouTube's automatic captions: names, places and scripture references may be misheard. Don't quote a verse reference unless it's clear from the text."
+        : "These are the video's captions.",
+      "", "VIDEO CAPTIONS:", s.content || "(not provided)");
   } else if (s && s.kind === "buzzsprout") {
     lines.push("", "--- SOURCE ---", "EPISODE TITLE: " + (s.title || "(not available)"), "LISTEN URL: " + (s.url || "(not provided)"));
     if (s.durationLabel) lines.push("EPISODE LENGTH: " + s.durationLabel);
