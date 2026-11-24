@@ -29,6 +29,8 @@ export interface SettingsView {
   hasBuzzsprout: boolean;
   buzzsproutPodcastId: string;
   buzzsproutPodcastName: string;
+  hasYoutubeClient: boolean;
+  youtubeChannel: string;
   houseVoice: string;
   hasResend: boolean;
   mailFrom: string;
@@ -66,6 +68,9 @@ export async function getSettingsView(pool: Pool): Promise<SettingsView> {
     hasBuzzsprout: !!(bzToken && bzPodcast),
     buzzsproutPodcastId: bzPodcast,
     buzzsproutPodcastName: await getSetting(pool, "buzzsprout_podcast_name"),
+    hasYoutubeClient: !!((await getSetting(pool, "youtube_client_id")) && (await getSetting(pool, "youtube_client_secret"))),
+    // Empty until someone signs in; the refresh token itself never leaves the server.
+    youtubeChannel: (await getSetting(pool, "youtube_refresh_token")) ? await getSetting(pool, "youtube_channel_title") || "your channel" : "",
     houseVoice: (await getSetting(pool, "house_voice")) || DEFAULT_VOICE,
     hasResend: !!(await getSetting(pool, "resend_api_key")),
     mailFrom: await getSetting(pool, "mail_from"),

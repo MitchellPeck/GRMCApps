@@ -88,3 +88,14 @@ export async function markIssueSent(db: Db, issueId: string): Promise<Result<Iss
     return { ok: true, value: (await getIssue(c, issueId))! };
   });
 }
+
+/** Undo "Mark sent": the issue can be edited again, and its frozen snapshot is dropped until it's re-sent. */
+export async function unmarkIssueSent(db: Db, issueId: string): Promise<Result<Issue>> {
+  return withTx(db, async (c): Promise<Result<Issue>> => {
+    const locked = await c.query("SELECT status FROM gn_issues WHERE id = $1 FOR UPDATE", [issueId]);
+    if (!locked.rows[0]) return { ok: false, error: "Issue not found." };
+    if (locked.rows[0].status !== "sent") return { ok: false, error: "That issue isn't marked sent." };
+    await c.query("UPDATE gn_issues SET status = 'collecting', sent_at = NULL, sheet_snapshot = NULL WHERE id = $1", [issueId]);
+    return { ok: true, value: (await getIssue(c, issueId))! };
+  });
+}

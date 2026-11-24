@@ -10,6 +10,7 @@ import { Cutoff, SourceConfig, SourceRef } from "./drafting";
 import { SourceContent } from "./prompt";
 import { SermonOpts, durationLabel, getSermon, notReadyMessage, sermonOpts } from "./sermons";
 import { startEpisodeTranscript } from "./episode-audio";
+import { getCaptions, getVideo } from "../youtube";
 
 /** The last day an issue may have been created on, or null for "newest". */
 export function cutoffDate(cutoff: Cutoff, postDate: string | null): string | null {
@@ -55,6 +56,18 @@ export async function resolveSource(
     if (s.status !== "ready") throw new Error(notReadyMessage(s));
     return { kind: "sermon", id: s.id, title: s.title, url: "", date: "", dateLine: durationLabel(s.durationSeconds) + " recording",
              content: s.transcript.slice(0, 60000) };
+  }
+  // A YouTube video is picked per post, like an episode; its captions are the content.
+  if (ref?.kind === "youtube" || (!ref && source.kind === "youtube")) {
+    if (!ref?.id) return null;
+    const v = await getVideo(pool, ref.id);
+    const out: SourceContent = { kind: "youtube", id: v.id, title: v.title, url: v.url, date: v.publishedAt.slice(0, 10), dateLine: v.dateLine, content: "" };
+    try {
+      const c = await getCaptions(pool, v.id);
+      out.content = c.text.slice(0, 60000);
+      out.trackKind = c.trackKind;
+    } catch (e) { out.captionsError = (e as Error).message; }
+    return out;
   }
   // "Don't use the event's source for this post" outranks an issue or episode stored earlier.
   if (source.kind === "none") return null;

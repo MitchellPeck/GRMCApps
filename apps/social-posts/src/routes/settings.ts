@@ -19,6 +19,8 @@ interface SaveBody {
   buzzsproutToken?: string;
   buzzsproutPodcastId?: string;
   buzzsproutPodcastName?: string;
+  youtubeClientId?: string;
+  youtubeClientSecret?: string;
   houseVoice?: string;
   resendKey?: string;
   mailFrom?: string;
@@ -92,6 +94,10 @@ export async function settingsRoutes(app: FastifyInstance): Promise<void> {
         await setSetting(pool, "buzzsprout_api_token", s.buzzsproutToken.trim());
       if (s.buzzsproutPodcastId && s.buzzsproutPodcastId.trim())
         await setSetting(pool, "buzzsprout_podcast_id", s.buzzsproutPodcastId.trim());
+      if (s.youtubeClientId && s.youtubeClientId.trim())
+        await setSetting(pool, "youtube_client_id", s.youtubeClientId.trim());
+      if (s.youtubeClientSecret && s.youtubeClientSecret.trim())
+        await setSetting(pool, "youtube_client_secret", s.youtubeClientSecret.trim());
       if (s.buzzsproutPodcastName && s.buzzsproutPodcastName.trim())
         await setSetting(pool, "buzzsprout_podcast_name", s.buzzsproutPodcastName.trim());
       if (s.houseVoice && s.houseVoice.trim())

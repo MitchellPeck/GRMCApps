@@ -171,9 +171,11 @@ function renderIssuePage(main, issueId) {
     var issues = r[0].issues, settings = r[1].ok ? r[1] : {};
     var target = issueId ? issues.filter(function (i) { return i.id === issueId; })[0]
       : issues.filter(function (i) { return i.status === 'collecting'; })[0];
-    var history = issues.filter(function (i) { return i.status === 'sent' && (!target || i.id !== target.id); });
-    var histHtml = history.length ? '<section class="card">' + cardTitle('Sent issues') + history.map(function (i) {
-      return '<div class="gnx-row"><a href="#gracenotes/issue/' + esc(i.id) + '">' + esc(dayLabel(i.issueDate)) + '</a><span class="hint">sent ' + esc((i.sentAt || '').slice(0, 10)) + '</span></div>';
+    // Every other issue, so one that was un-marked sent can still be found.
+    var history = issues.filter(function (i) { return !target || i.id !== target.id; });
+    var histHtml = history.length ? '<section class="card">' + cardTitle('Other issues') + history.map(function (i) {
+      return '<div class="gnx-row"><a href="#gracenotes/issue/' + esc(i.id) + '">' + esc(dayLabel(i.issueDate)) + '</a><span class="hint">'
+        + (i.status === 'sent' ? 'sent ' + esc((i.sentAt || '').slice(0, 10)) : 'not sent yet') + '</span></div>';
     }).join('') + '</section>' : '';
     if (!target) return renderStart(main, settings, histHtml);
     return Promise.all([call('GET', '/api/gracenotes/issues/' + encodeURIComponent(target.id)), call('GET', '/api/gracenotes/issues/' + encodeURIComponent(target.id) + '/sheet'),
@@ -256,7 +258,8 @@ function drawIssue(main, data, blocks, people, sections, settings, histHtml, eve
           return '<figure>' + (ok ? '<img src="' + esc(im.url) + '" alt="' + esc(im.alt) + '"><a class="btn-sm" href="' + esc(im.url) + '" download target="_blank" rel="noopener">Download</a>' : '') + '</figure>';
         }).join('') + '</div>' : '') + '</div>';
     }).join('')
-    + (sent ? '' : '<div class="btn-row"><button class="btn btn-primary" type="button" data-act="mark-sent">Mark sent</button></div>') + '</section>' + histHtml;
+    + '<div class="btn-row">' + (sent ? '<button class="btn" type="button" data-act="unmark-sent">Unmark sent</button>'
+      : '<button class="btn btn-primary" type="button" data-act="mark-sent">Mark sent</button>') + '</div></section>' + histHtml;
   main.innerHTML = html;
 
   var byId = {};
@@ -281,6 +284,10 @@ function drawIssue(main, data, blocks, people, sections, settings, histHtml, eve
     'mark-sent': function (b) {
       if (!window.confirm('Mark this issue as sent? It moves into history and the next one copies from it.')) return;
       run(b, function () { return call('POST', '/api/gracenotes/issues/' + encodeURIComponent(issue.id) + '/sent'); }, 'Marked sent.');
+    },
+    'unmark-sent': function (b) {
+      if (!window.confirm('Unmark this issue as sent? It opens for editing again; mark it sent again when it goes out.')) return;
+      run(b, function () { return call('DELETE', '/api/gracenotes/issues/' + encodeURIComponent(issue.id) + '/sent'); }, 'No longer marked sent.');
     },
     confirm: function (b) { run(b, function () { return call('POST', '/api/gracenotes/pieces/' + encodeURIComponent(b.getAttribute('data-id')) + '/confirm', {}); }, 'Confirmed.'); },
     drop: function (b) {

@@ -822,7 +822,7 @@ function draftingCardHtml(e) {
     + '<p class="hint pl-under">How Draft with Claude writes this event’s posts. A recurring post or a single post can override the instructions.'
     + ' Background comes from the event’s notes'+(e.notes ? '' : ' (empty: <button class="pl-link" type="button" data-act="edit-event" data-id="'+esc(e.id)+'">add some</button>)')+'.</p>'
     + '<div class="row2"><div class="field"><label for="dr-kind">Source</label><select id="dr-kind" name="kind" data-act="dr-kind">'
-    +   opt('none', 'None', src.kind) + opt('mailchimp', 'A Mailchimp newsletter', src.kind) + opt('buzzsprout', 'A podcast episode (Buzzsprout)', src.kind) + opt('sermon', 'A video (uploaded to each post)', src.kind) + '</select></div>'
+    +   opt('none', 'None', src.kind) + opt('mailchimp', 'A Mailchimp newsletter', src.kind) + opt('buzzsprout', 'A podcast episode (Buzzsprout)', src.kind) + opt('sermon', 'A video (uploaded to each post)', src.kind) + opt('youtube', 'A YouTube video’s captions (picked for each post)', src.kind) + '</select></div>'
     + '<div class="field" data-dr="mailchimp"><label for="dr-subject">Campaigns whose subject contains</label>'
     +   '<input id="dr-subject" type="text" name="subjectContains" value="'+esc(src.subjectContains || '')+'" placeholder="grace notes"></div></div>'
     + '<div class="field" data-dr="mailchimp"><label for="dr-cutoff">Which issue</label><select id="dr-cutoff" name="cutoff">'
@@ -1513,6 +1513,9 @@ function loadSourcePanel() {
       drawer.preview = res;
       panel.innerHTML = sourcePanelHtml(res);
       panel.hidden = !panel.innerHTML;
+      // A YouTube post with no video yet: show the channel's videos straight away.
+      if (res.effective && !res.source && !res.error && $('pf-src-list')
+          && (drawer.sourceRef ? drawer.sourceRef.kind : res.effective.source.kind) === 'youtube') showSourceChoices('youtube');
     }).catch(function(e){ panel.innerHTML = '<div class="alert alert-err">'+esc(e.message)+'</div>'; });
   }, 250);
 }
@@ -1532,6 +1535,7 @@ function sourcePanelHtml(res) {
     + '<span>'+(kind !== 'manual' ? '<button class="btn-sm" type="button" data-act="src-change" data-kind="'+kind+'">Change</button> ' : '')+video+' '+paste+'</span></div>';
   if (kind === 'sermon' && !s) return sermonUploadHtml();
   if (kind === 'buzzsprout' && !s) return head + '<p class="pl-gaptext">Pick the episode this post is about.</p><div id="pf-src-list"></div>';
+  if (kind === 'youtube' && !s) return head + '<p class="pl-gaptext">Pick the YouTube video this post is about.</p><div id="pf-src-list"></div>';
   if (!s) return head + '<p class="hint">Nothing found to draft from.</p>' + reset;
   var marks = (s.isDraft ? ' <span class="pl-status pl-s-drafted">Not sent yet</span>' : '')
     + (s.notYetPublic ? ' <span class="pl-status pl-s-drafted">Not out yet</span>' : '');
@@ -1541,8 +1545,17 @@ function sourcePanelHtml(res) {
     + (s.url ? '<p class="hint"><a href="'+esc(s.url)+'" target="_blank" rel="noopener">'+esc(s.url)+'</a></p>' : '')
     + (s.excerpt ? '<p class="pl-src-excerpt">'+esc(s.excerpt)+'…</p>' : '')
     + (s.audio ? episodeAudioHtml(s) : '')
+    + (s.kind === 'youtube' ? youtubeCaptionsHtml(s) : '')
     + (ref ? '<p class="hint">Picked for this post.'+reset+'</p>' : '')
     + '<div id="pf-src-list"></div>';
+}
+
+// A YouTube video drafts from its captions; until YouTube has made them, say so and offer to look again.
+function youtubeCaptionsHtml(s) {
+  var again = '<button class="btn-sm" type="button" data-act="yt-captions" data-id="'+esc(s.id)+'">'+(s.captionsError ? 'Look again' : 'Fetch captions again')+'</button>';
+  if (s.captionsError) return '<div class="alert alert-warn">'+esc(s.captionsError)+' '+again+'</div>';
+  return '<p class="hint"><span class="pl-status pl-s-ready">Captions ready</span> '
+    + (s.trackKind === 'asr' ? 'YouTube’s automatic captions. ' : '') + 'Claude drafts from what’s said in the video. '+again+'</p>';
 }
 
 // A podcast episode's audio is transcribed on the church's server; drafting waits for it.
@@ -1656,7 +1669,13 @@ function showSourceChoices(kind) {
   var list = $('pf-src-list');
   list.innerHTML = '<p class="hint">Loading…</p>';
   var eff = drawer.preview && drawer.preview.effective;
-  var req = kind === 'buzzsprout'
+  var req = kind === 'youtube'
+    ? api('GET', '/api/youtube/videos').then(function(d){
+        return d.videos.filter(function(v){ return v.live === 'none'; }).map(function(v){
+          return { ref: { kind: 'youtube', id: v.id, title: v.title, url: v.url, date: (v.publishedAt || '').slice(0, 10) }, label: v.label };
+        });
+      })
+    : kind === 'buzzsprout'
     ? api('GET', '/api/pipeline/sources/episodes').then(function(d){
         return d.episodes.map(function(ep){
           return { ref: { kind: 'buzzsprout', id: String(ep.id), title: ep.title, url: ep.listenUrl, date: ep.publishDate },
@@ -2080,8 +2099,11 @@ function renderMine(main) {
 
 // ── Settings ─────────────────────────────────────────────────────────────────
 // Keys never come back from the server: a blank key box means "keep the saved one".
-function renderSettings(main) {
-  return api('GET', '/api/settings').then(function(s){
+function renderSettings(main, arg) {
+  // Back from Google's sign-in: #settings/<what happened>.
+  if (arg) { toast(arg, /^Connected/.test(arg) ? 'ok' : 'err'); history.replaceState(null, '', '#settings'); }
+  return Promise.all([api('GET', '/api/settings'), api('GET', '/api/youtube/redirect-uri').catch(function(){ return {}; })]).then(function(rs){
+    var s = rs[0], ytRedirect = rs[1].redirectUri || '';
     var keyHint = function(has, what){ return '<div class="hint">' + (has ? esc(what) + ' is set. Leave blank to keep it.' : 'Not set yet.') + '</div>'; };
     main.innerHTML = '<form class="pl-settings" data-form="settings">'
       + '<section class="card"><h3 class="ct">Drafting</h3>'
@@ -2099,6 +2121,18 @@ function renderSettings(main) {
       +   '<input type="hidden" name="buzzsproutPodcastName" value="'+esc(s.buzzsproutPodcastName)+'">'
       +   '<button class="btn-sm" type="button" data-act="load-podcasts">Load podcasts</button></div><select id="st-bz-list" hidden></select>'
       +   '<div class="hint">Save the token first, then load the podcasts on the account.</div></div></section>'
+      + '<section class="card"><h3 class="ct">YouTube</h3>'
+      +   '<div class="hint pl-under">Lets a post draft from a video’s captions (Sunday services, past live streams). '
+      +   'In Google Cloud: enable the YouTube Data API v3, make an OAuth client (type Web application) with this redirect URI, '
+      +   'and set the consent screen’s publishing status to <em>In production</em> (in Testing, the sign-in lapses after 7 days).</div>'
+      +   '<div class="field"><label for="st-ytr">Redirect URI</label><div class="pl-copyrow"><input id="st-ytr" type="text" readonly value="'+esc(ytRedirect)+'"></div></div>'
+      +   '<div class="row2"><div class="field"><label for="st-ytc">OAuth client ID</label><input id="st-ytc" type="text" name="youtubeClientId" autocomplete="off" placeholder="…apps.googleusercontent.com"></div>'
+      +   '<div class="field"><label for="st-yts">Client secret</label><input id="st-yts" type="text" name="youtubeClientSecret" autocomplete="off"></div></div>'
+      +   keyHint(s.hasYoutubeClient, 'A client')
+      +   '<div class="btn-row">'+(s.youtubeChannel
+          ? '<span class="hint">Connected to <strong>'+esc(s.youtubeChannel)+'</strong>.</span> <a class="btn-sm" href="/api/youtube/connect">Connect again</a> <button class="btn-sm" type="button" data-act="yt-disconnect">Disconnect</button>'
+          : (s.hasYoutubeClient ? '<a class="btn btn-gold" href="/api/youtube/connect">Connect YouTube</a> <span class="hint">Sign in as the church channel’s owner and pick the church channel.</span>'
+            : '<span class="hint">Save the client ID and secret, then connect.</span>'))+'</div></section>'
       + '<section class="card"><h3 class="ct">Metricool</h3>'
       +   '<div class="field"><label for="st-mc">API token</label><input id="st-mc" type="text" name="metricoolToken" autocomplete="off">'+keyHint(s.hasMetricool, 'A token')+'</div>'
       +   '<div class="row2"><div class="field"><label for="st-mcu">User ID</label><input id="st-mcu" type="text" name="metricoolUserId" value="'+esc(s.metricoolUserId)+'"></div>'
@@ -2293,6 +2327,15 @@ document.addEventListener('click', function(e){
     case 'remove-angle': el.closest('.pl-angle-row').remove(); break;
     case 'load-podcasts':
       loadPicker('/api/podcast/podcasts', 'podcasts', 'st-bz-list', 'buzzsproutPodcastId', function(p){ return { value: p.id, label: p.title }; });
+      break;
+    case 'yt-disconnect':
+      if (!window.confirm('Disconnect YouTube? Posts can’t draft from YouTube captions until it’s connected again.')) break;
+      api('POST', '/api/youtube/disconnect').then(function(){ toast('YouTube disconnected.', 'ok'); render(); }).catch(function(e){ toast(e.message, 'err'); });
+      break;
+    case 'yt-captions':
+      el.disabled = true;
+      api('POST', '/api/youtube/videos/' + encodeURIComponent(el.getAttribute('data-id')) + '/captions')
+        .then(function(){ toast('Captions fetched.', 'ok'); loadSourcePanel(); }, function(e){ el.disabled = false; toast(e.message, 'err'); });
       break;
     case 'load-brands':
       loadPicker('/api/metricool/brands', 'brands', 'st-mc-list', 'metricoolBlogId', function(b){ return { value: b.id, label: b.label }; });
