@@ -331,6 +331,17 @@ test("fetch failure flags nothing", async () => {
   assert.equal((await events("breeze_missing_since IS NOT NULL")).length, 0);
 });
 
+test("a calendar with a dateless event fails and flags nothing", async () => {
+  feed["10"] = [inst("d1", "sd", "Advent Supper", "2026-12-09"), inst("d2", "se", "Carols", "2026-12-12")];
+  await sync();
+  // Breeze now sends one of them back with no date: it must not read as Carols being removed.
+  feed["10"] = [inst("d1", "sd", "Advent Supper", "2026-12-09"), { id: "d2", event_id: "se", name: "Carols", category_id: "10" }];
+  const r = await sync();
+  assert.deepEqual(r.failedCalendars, ["10"]);
+  assert.equal(r.flaggedMissing, 0);
+  assert.equal((await events("breeze_missing_since IS NOT NULL")).length, 0);
+});
+
 test("the settings page sees the last sync time and which calendars failed", async () => {
   feed["10"] = 500;
   await sync();

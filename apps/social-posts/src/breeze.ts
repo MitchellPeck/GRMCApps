@@ -71,5 +71,9 @@ export async function listInstances(
   // Hitting the limit means the reply may be cut off, which would look like removals.
   if (rows.length >= 500)
     throw new Error("Breeze calendar has too many events in this window to read safely");
-  return rows.map(parseInstance).filter((i) => /^\d{4}-\d{2}-\d{2}$/.test(i.date));
+  const out = rows.map(parseInstance);
+  // A row we can't date is an error, not a skip: dropping it would read as the event being removed.
+  if (out.some((i) => !/^\d{4}-\d{2}-\d{2}$/.test(i.date)))
+    throw new Error("Breeze returned an event without a date we can read");
+  return out;
 }

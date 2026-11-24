@@ -93,13 +93,14 @@ test("listInstances refuses a reply that hit the 500 limit", async () => {
   await assert.rejects(listInstances(cfg, "0", "2026-12-01", "2026-12-31", fakeFetch(JSON.stringify(rows)).fn), /too many events/);
 });
 
-test("listInstances drops rows without a usable start date", async () => {
+test("listInstances throws on a row without a usable start date, since a dropped row would look like a removal", async () => {
   const rows = [
     { id: "1", event_id: "1", name: "ok", category_id: "0", start_datetime: "2026-12-06 10:00:00" },
     { id: "2", event_id: "1", name: "no date", category_id: "0" },
   ];
-  const out = await listInstances(cfg, "0", "2026-12-01", "2026-12-31", fakeFetch(JSON.stringify(rows)).fn);
-  assert.deepEqual(out.map((i) => i.instanceId), ["1"]);
+  await assert.rejects(listInstances(cfg, "0", "2026-12-01", "2026-12-31", fakeFetch(JSON.stringify(rows)).fn), /without a date we can read/);
+  const bad = [{ id: "3", event_id: "1", name: "bad date", category_id: "0", start_datetime: "soon" }];
+  await assert.rejects(listInstances(cfg, "0", "2026-12-01", "2026-12-31", fakeFetch(JSON.stringify(bad)).fn), /without a date we can read/);
 });
 
 test("an invalid subdomain is rejected on save and treated as not connected", async () => {
