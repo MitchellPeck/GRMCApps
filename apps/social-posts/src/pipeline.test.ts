@@ -2072,3 +2072,33 @@ test("the events list says which events are in the Grace Notes issue being colle
     await pool.query("DELETE FROM gn_sections WHERE id = $1", [sec]);
   }
 });
+
+test("posts can be undated; clearing the date clears the time; Scheduled/Published need a date", async () => {
+  const made = await createContent(pool, { title: "Someday post" }, "t@x.org");
+  assert.ok(made.ok);
+  assert.equal(made.value.publishDate, null);
+
+  const sched = await createContent(pool, { title: "No day", status: "scheduled" }, "t@x.org");
+  assert.ok(!sched.ok);
+  assert.match(sched.error, /Pick a publish date before marking it Scheduled/);
+
+  const dated = await createContent(pool, { title: "Dated", publishDate: "2026-12-01", publishTime: "09:30" }, "t@x.org");
+  assert.ok(dated.ok);
+  const cleared = await updateContent(pool, dated.value.id, { publishDate: null });
+  assert.ok(cleared.ok);
+  assert.equal(cleared.value.item.publishDate, null);
+  assert.equal(cleared.value.item.publishTime, null);
+
+  // Can't mark an undated post Scheduled, and can't clear the date of a Scheduled one.
+  const mark = await updateContent(pool, made.value.id, { status: "scheduled" });
+  assert.ok(!mark.ok);
+  assert.match(mark.error, /Pick a publish date before marking it Scheduled/);
+  const ok = await createContent(pool, { title: "Sched", publishDate: "2026-12-02", status: "scheduled", platforms: ["facebook"], noMediaNeeded: true }, "t@x.org");
+  assert.ok(ok.ok, ok.ok ? "" : ok.error);
+  const clearSched = await updateContent(pool, ok.value.id, { publishDate: null });
+  assert.ok(!clearSched.ok);
+  assert.match(clearSched.error, /Pick a publish date before marking it Scheduled/);
+  // Setting the date and status together is fine.
+  const both = await updateContent(pool, made.value.id, { publishDate: "2026-12-03", status: "scheduled", platforms: ["facebook"], noMediaNeeded: true });
+  assert.ok(both.ok);
+});

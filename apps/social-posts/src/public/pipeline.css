@@ -512,3 +512,5 @@ header a.btn-hdr{text-decoration:none}
   .pl-rule{flex-direction:column}
   .pl-rf-match{flex-direction:column;align-items:stretch}
 }
+.pl-datewrap{display:flex;gap:6px;align-items:center}
+.pl-datewrap input{flex:1;min-width:0}

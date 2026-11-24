@@ -407,8 +407,8 @@ function renderCalendar(main) {
     html += '<section class="pl-tray" data-drop="">'
       + '<h3>'+(publish ? 'Posts with no publish date' : 'Media with no gather date')+' <span class="badge-count'+(tray.length ? '' : ' zero')+'">'+tray.length+'</span></h3>'
       + (tray.length ? '<div class="pl-tray-list">'+tray.map(card).join('')+'</div>'
-          : '<p class="hint">'+(publish ? 'Every post has a date.' : 'Every capture has a day. Drag a card here to unschedule it.')+'</p>')
-      + (tray.length ? '<p class="hint">Drag a card onto a day to schedule it'+(publish ? '' : ', or back here to unschedule it')+'.</p>' : '')
+          : '<p class="hint">'+(publish ? 'Every post has a date. Drag a card here to take its date off.' : 'Every capture has a day. Drag a card here to unschedule it.')+'</p>')
+      + (tray.length ? '<p class="hint">Drag a card onto a day to schedule it, or back here to take its date off.</p>' : '')
       + '</section>';
     main.innerHTML = html;
     var scroller = main.querySelector('.pl-wk-scroll');
@@ -562,7 +562,6 @@ function moveDate(kind, id, date) {
   if (!row) return;
   var field = kind === 'content' ? 'publishDate' : 'gatherDate';
   if (row[field] === date) return;
-  if (kind === 'content' && !date) { toast('A post needs a publish date. Open it to change the date instead.', 'warn'); return; }
   var before = row[field];
   // Optimistic: show it where it was dropped straight away.
   var el = document.querySelector('[data-kind="'+kind+'"][data-id="'+CSS.escape(id)+'"]');
@@ -1042,7 +1041,7 @@ function editorHtml(i) {
     + (!isNew && i.status === 'scheduled' && i.publishCheck ? '<div class="alert alert-warn">'+esc(i.publishCheck)+'</div>' : '')
     + metricoolPanel(i, isNew)
     + '<div class="field"><label for="pf-title">Title</label><input id="pf-title" type="text" name="title" required value="'+esc(i.title)+'" placeholder="Kids Camp: first day recap"></div>'
-    + '<div class="row2"><div class="field"><label for="pf-date">Publish date</label><input id="pf-date" type="date" name="publishDate" required value="'+esc(i.publishDate || '')+'"></div>'
+    + '<div class="row2"><div class="field"><label for="pf-date">Publish date</label><div class="pl-datewrap"><input id="pf-date" type="date" name="publishDate" value="'+esc(i.publishDate || '')+'" aria-describedby="pf-date-help"><button type="button" class="btn btn-secondary btn-sm" data-act="clear-date"'+(i.publishDate ? '' : ' hidden')+'>Clear</button></div><p class="hint" id="pf-date-help">Leave blank if you don’t know yet.</p></div>'
     + '<div class="field"><label for="pf-time">Time (optional)</label><input id="pf-time" type="time" name="publishTime" value="'+esc(i.publishTime || '')+'"></div></div>'
     + '<div class="row2"><div class="field"><label for="pf-event">Event or department</label><select id="pf-event" name="eventId">'+eventOptions(i.eventId, { blank: 'None' })+'</select></div>'
     + '<div class="field"><label for="pf-status">Status</label><select id="pf-status" name="status">'
@@ -1515,7 +1514,7 @@ function savePost(form, opts) {
   opts = opts || {};
   var body = readForm(form), msg = $('pf-msg'), btn = form.querySelector('[type=submit]');
   msg.innerHTML = '';
-  var bad = !body.title ? 'Give the post a title.' : !body.publishDate ? 'Pick a publish date.' : '';
+  var bad = !body.title ? 'Give the post a title.' : '';
   if (bad) { msg.innerHTML = '<div class="alert alert-err">'+bad+'</div>'; return Promise.reject(new Error(bad)); }
   btn.disabled = true;
   var req;
@@ -2650,6 +2649,12 @@ document.addEventListener('click', function(e){
       newPost({ date: el.getAttribute('data-date'), time: minutesTime(slotAt(el, e.clientY)) });
       break;
     case 'close': closeDrawer(); break;
+    case 'clear-date': {
+      // An undated post is allowed ("not sure when yet"); the time goes with the day.
+      var f = el.closest('form'); f.elements.publishDate.value = ''; f.elements.publishTime.value = '';
+      el.hidden = true; f.elements.publishDate.dispatchEvent(new Event('change', { bubbles: true }));
+      break;
+    }
     case 'clear-filters':
       S.filters = { eventId: '', platform: '', status: '', owner: '' };
       storeSet('pipeline.filters', S.filters); renderFilters(); render(); break;
@@ -2912,6 +2917,7 @@ document.addEventListener('change', function(e){
   }
 });
 document.addEventListener('input', function(e){
+  if (e.target.id === 'pf-date') { var clr = e.target.parentNode.querySelector('[data-act=clear-date]'); if (clr) clr.hidden = !e.target.value; }
   if (e.target.getAttribute && e.target.getAttribute('data-ri') === 'title') refreshForPostLabels(e.target.closest('form'));
   if (e.target.classList && e.target.classList.contains('pl-caption')) refreshCaptionUi();
   if (e.target.closest && e.target.closest('form[data-form=recurrence]') && e.target.closest('[data-rule]')) previewRule();

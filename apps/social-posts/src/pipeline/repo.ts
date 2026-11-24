@@ -9,6 +9,7 @@ import {
   ContentInput, ContentStatus, EventInput, Gap, MediaInput, MediaStatus, Result,
   checkStatusChange, computeGaps, GapEvent, lateMediaWarning, resolveMediaStatus,
   CONTENT_STATUSES,
+  datelessStatusError,
 } from "./rules";
 import { propagate } from "./recurring";
 import { describeRule } from "./recurrence";
@@ -374,6 +375,8 @@ export function autoStatus(s: ContentStatus, item: { brief?: string; caption?: s
 }
 
 export async function createContent(db: Db, input: ContentInput, createdBy: string): Promise<Result<ContentRow>> {
+  const dateErr = datelessStatusError(input.status, input.publishDate);
+  if (dateErr) return fail(dateErr);
   if (!(await eventExists(db, input.eventId))) return fail("That event no longer exists.");
   const imageErr = imageRuleError(input.platforms ?? DEFAULT_PLATFORMS, !!input.noMediaNeeded);
   if (imageErr) return fail(imageErr);
@@ -416,6 +419,16 @@ export async function updateContent(
   if ("eventId" in input && !(await eventExists(db, input.eventId))) return fail("That event no longer exists.");
   const imageErr = imageRuleError(input.platforms ?? current.platforms, input.noMediaNeeded ?? current.noMediaNeeded);
   if (imageErr) return fail(imageErr);
+
+  // The status and date this change would leave behind.
+  // Only judged when the change touches one of them, so an old undated
+  // Scheduled post can still have its title fixed.
+  const dateErr = "status" in input || "publishDate" in input
+    ? datelessStatusError(input.status ?? current.status, "publishDate" in input ? input.publishDate : current.publishDate)
+    : null;
+  if (dateErr) return fail(dateErr);
+  // A time with no day means nothing, so clearing the date clears the time too.
+  if ("publishDate" in input && !input.publishDate) { input.publishDate = null; input.publishTime = null; }
 
   const media = await listMedia(db, { contentItemId: id });
   if (input.status && input.status !== current.status) {

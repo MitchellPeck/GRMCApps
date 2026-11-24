@@ -103,7 +103,8 @@ function openMetricool(text, opts){
     return '<div class="field"><label for="mc-text-'+n+'">'+mcEsc(MC_NETWORK_LABELS[n] || n)+' text</label>'
       + '<textarea id="mc-text-'+n+'" style="min-height:90px">'+mcEsc(opts.texts[n])+'</textarea></div>';
   }).join('');
-  document.getElementById('mc-date').value = opts.date || new Date().toLocaleDateString('en-CA');
+  // An undated pipeline post starts with no date (it has to be picked), not today.
+  document.getElementById('mc-date').value = opts.date || (opts.contentItemId ? '' : new Date().toLocaleDateString('en-CA'));
   document.getElementById('mc-time').value = opts.time || (window._mcDefaults && _mcDefaults.time) || '09:00';
   // Callers that know the post's platforms pre-tick just those networks.
   if (opts.networks) {
@@ -213,6 +214,7 @@ function readMetricoolImage(){
 function submitMetricool(){
   var networks = mcNetworks();
   if (!networks.length) { document.getElementById('mc-msg').innerHTML='<div class="alert alert-err">Pick at least one network.</div>'; return; }
+  if (!document.getElementById('mc-date').value) { document.getElementById('mc-msg').innerHTML='<div class="alert alert-err">Pick a date to send it.</div>'; return; }
   var dateTime = document.getElementById('mc-date').value + 'T' + (document.getElementById('mc-time').value||'09:00') + ':00';
   var tz = (window._mcDefaults && _mcDefaults.tz) || 'America/New_York';
   var publish = mcPublishMode();

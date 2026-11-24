@@ -167,12 +167,20 @@ export function parseContentInput(raw: unknown, mode: "create" | "patch"): Resul
   if ("title" in out && !out.title) return fail("Give the post a title.");
   if (mode === "create") {
     if (!out.title) return fail("Give the post a title.");
-    if (!out.publishDate) return fail("Pick a publish date.");
+    // A post may be undated ("not sure when yet"), but not Scheduled/Published.
+    const needs = datelessStatusError(out.status as string | undefined, out.publishDate as string | null | undefined);
+    if (needs) return fail(needs);
   }
   return { ok: true, value: out as ContentInput };
 }
 
 // ── Media assets ─────────────────────────────────────────────────────────────
+
+/** Scheduled and Published mean "going out on a day", so an undated post can't be either. */
+export function datelessStatusError(status: string | undefined, publishDate: string | null | undefined): string | null {
+  if (publishDate || (status !== "scheduled" && status !== "published")) return null;
+  return `Pick a publish date before marking it ${status === "scheduled" ? "Scheduled" : "Published"}.`;
+}
 
 export interface MediaInput {
   description?: string; type?: string; gatherDate?: string | null; gatherLocation?: string;

@@ -15,9 +15,19 @@ test("isIsoDate accepts real calendar dates only", () => {
   assert.equal(isIsoDate(null), false);
 });
 
-test("content create needs a title and a publish date; patches need neither", () => {
+test("content create needs a title; a publish date is optional", () => {
   assert.deepEqual(parseContentInput({ publishDate: "2026-11-01" }, "create"), { ok: false, error: "Give the post a title." });
-  assert.deepEqual(parseContentInput({ title: "Camp" }, "create"), { ok: false, error: "Pick a publish date." });
+  const undated = parseContentInput({ title: "Someday" }, "create");
+  assert.ok(undated.ok);
+  assert.ok(!undated.value.publishDate);
+  const cleared = parseContentInput({ publishDate: "" }, "patch");
+  assert.ok(cleared.ok);
+  assert.equal(cleared.value.publishDate, null);
+  // Scheduled and Published mean "going out on a day", so they need one.
+  for (const status of ["scheduled", "published"]) {
+    assert.deepEqual(parseContentInput({ title: "Someday", status }, "create"),
+      { ok: false, error: `Pick a publish date before marking it ${status === "scheduled" ? "Scheduled" : "Published"}.` });
+  }
   const ok = parseContentInput({ title: " Camp ", publishDate: "2026-11-01", platforms: ["instagram", "instagram"] }, "create");
   assert.ok(ok.ok);
   assert.equal(ok.value.title, "Camp");
