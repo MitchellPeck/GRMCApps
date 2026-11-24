@@ -143,7 +143,7 @@ IF NOT EXISTS` in `schema.ts`, as the rest of the schema is):
 Per instance pulled:
 
 1. Upsert its series in `breeze_series`. A new series gets its mode from the
-   first matching rule that sets one, otherwise: `series` if the series has
+   last matching rule that sets one, otherwise: `series` if the series has
    more than one instance in the window, else `single` (a one-off: an
    ordinary event, one checklist), both with `mode_source 'auto'`.
 2. `ignore` → skip. `single` and `each` → one Social Posts event per instance,
