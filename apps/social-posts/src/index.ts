@@ -106,18 +106,35 @@ async function start() {
   graceNotesClock();
   setInterval(graceNotesClock, 15 * 60 * 1000).unref();
   // Breeze: pull events and apply checklists every 3 hours. Not awaited, so a slow Breeze never delays listen.
+  // Each clock is fully wrapped (nothing can escape as an unhandled rejection) and skips a run while one is still going.
+  let breezeBusy = false;
   const breezeClock = async () => {
-    await syncBreeze(pool, await referenceDate(pool))
-      .then((r) => { if (r.created || r.updated || r.shifted || r.flaggedMissing || r.becameSeries || r.failedCalendars.length) app.log.info(r, "breeze sync"); })
-      .catch((e) => app.log.warn(e, "breeze sync failed"));
+    if (breezeBusy) return;
+    breezeBusy = true;
+    try {
+      const r = await syncBreeze(pool, await referenceDate(pool));
+      if (r.created || r.updated || r.shifted || r.flaggedMissing || r.becameSeries || r.failedCalendars.length) app.log.info(r, "breeze sync");
+    } catch (e) {
+      app.log.warn(e, "breeze sync failed");
+    } finally {
+      breezeBusy = false;
+    }
   };
   breezeClock();
   setInterval(breezeClock, 3 * 60 * 60 * 1000).unref();
   // The Monday/Thursday reminder email: checks whether a send is due every 15 minutes.
+  let digestBusy = false;
   const digestClock = async () => {
-    await digestTick(pool)
-      .then((r) => { if (r.sent || r.failed) app.log.info(r, "digest"); })
-      .catch((e) => app.log.warn(e, "digest failed"));
+    if (digestBusy) return;
+    digestBusy = true;
+    try {
+      const r = await digestTick(pool);
+      if (r.sent || r.failed) app.log.info(r, "digest");
+    } catch (e) {
+      app.log.warn(e, "digest failed");
+    } finally {
+      digestBusy = false;
+    }
   };
   digestClock();
   setInterval(digestClock, 15 * 60 * 1000).unref();
