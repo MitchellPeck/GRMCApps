@@ -183,7 +183,7 @@ function render() {
   $('pl-filters').hidden = r.view !== 'calendar';
   document.querySelector('.pl-toolbar').hidden = r.view === 'settings' || r.view === 'gracenotes';
   var main = $('pl-main');
-  if (r.view !== 'gracenotes') main.onclick = main.onsubmit = null; // GraceNotes sets these on the shared container
+  if (r.view !== 'gracenotes') main.onclick = main.onsubmit = main.onkeydown = null; // GraceNotes sets these on the shared container
   var views = { dashboard: renderDashboard, calendar: renderCalendar, board: renderBoard, events: renderEvents, event: renderEvent,
     gap: renderGapList, recurring: renderRecurring, mine: renderMine, settings: renderSettings,
     gracenotes: function(m, a){ return window.GraceNotes.render(m, a); } };
@@ -1005,7 +1005,9 @@ function postSourceSelect(i) {
   var cur = i.drafting && i.drafting.source ? i.drafting.source.kind : '';
   var known = SOURCE_CHOICES.some(function(c){ return c[0] === cur; });
   return '<select id="pf-src" name="draftSource" data-act="src-toggle">'
-    + SOURCE_CHOICES.map(function(c){ return '<option value="'+c[0]+'"'+(c[0] === cur ? ' selected' : '')+'>'+(c[0] === 'none' ? 'None for this post' : c[1])+'</option>'; }).join('')
+    + SOURCE_CHOICES.map(function(c){
+        var label = c[0] === 'none' ? 'None for this post' : c[0] === '' && i.recurrenceId ? 'The series’ (or event’s) source' : c[1];
+        return '<option value="'+c[0]+'"'+(c[0] === cur ? ' selected' : '')+'>'+label+'</option>'; }).join('')
     + (known ? '' : '<option value="keep" selected>Keep its current source</option>') + '</select>';
 }
 
@@ -1531,9 +1533,12 @@ function sourcePanelHtml(res) {
   // Any post can draft from a video, whatever its event's source.
   var video = '<button class="btn-sm" type="button" data-act="video-start">Draft from a video</button>';
   if (kind === 'none') return '<div class="pl-label-row"><span class="lbl">Drafts from</span><span>'+video+'</span></div>';
-  var head = '<div class="pl-label-row"><span class="lbl">Drafts from</span>'
+  // Say when a series' own source is the one in force: it outranks the event's, which surprises people.
+  var fromSeries = !ref && eff && eff.sourceFrom === 'recurrence'
+    ? '<p class="hint">This source is set on the series, so it wins over the event’s. Change it under Edit the series → Drafting.</p>' : '';
+  var head = fromSeries + '<div class="pl-label-row"><span class="lbl">Drafts from</span>'
     + '<span>'+(kind !== 'manual' ? '<button class="btn-sm" type="button" data-act="src-change" data-kind="'+kind+'">Change</button> ' : '')+video+' '+paste+'</span></div>';
-  if (kind === 'sermon' && !s) return sermonUploadHtml();
+  if (kind === 'sermon' && !s) return fromSeries + sermonUploadHtml();
   if (kind === 'buzzsprout' && !s) return head + '<p class="pl-gaptext">Pick the episode this post is about.</p><div id="pf-src-list"></div>';
   if (kind === 'youtube' && !s) return head + '<p class="pl-gaptext">Pick the YouTube video this post is about.</p><div id="pf-src-list"></div>';
   if (!s) return head + '<p class="hint">Nothing found to draft from.</p>' + reset;
@@ -1852,7 +1857,8 @@ function recFilesHtml() {
   }).join('') + '</div>' : '<p class="hint">No files. Add one if every post in the series uses the same image.</p>';
 }
 // The series' source: the event's, none, or (kept as-is) one set elsewhere.
-var SOURCE_CHOICES = [['', 'The event’s source'], ['none', 'None for these posts'], ['sermon', 'A video (uploaded to each post)']];
+var SOURCE_CHOICES = [['', 'The event’s source'], ['none', 'None for these posts'], ['sermon', 'A video (uploaded to each post)'],
+  ['youtube', 'A YouTube video’s captions (picked for each post)']];
 function recSourceSelect(r) {
   var cur = r && r.drafting && r.drafting.source ? r.drafting.source.kind : '';
   var known = SOURCE_CHOICES.some(function(c){ return c[0] === cur; });

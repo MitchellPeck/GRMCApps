@@ -204,7 +204,7 @@ export async function pipelineRoutes(app: FastifyInstance): Promise<void> {
     try {
       const { effective, source } = await resolveForDraft(pool, input.value);
       const { content, transcript, ...rest } = source || ({} as Record<string, string>);
-      return { ok: true, effective: { source: effective.source, instructions: effective.instructions, from: effective.from },
+      return { ok: true, effective: { source: effective.source, sourceFrom: effective.sourceFrom, instructions: effective.instructions, from: effective.from },
                source: source ? { ...rest, excerpt: (content || "").slice(0, 400) } : null };
     } catch (e) {
       return { ok: true, effective: null, source: null, error: (e as Error).message };
