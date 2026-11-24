@@ -30,6 +30,7 @@ import { pool } from "../db";
 import { getIdentity } from "../identity";
 import { referenceDate } from "../schedule";
 import { GAP_THRESHOLDS, PLATFORMS, UPCOMING_DAYS } from "../pipeline/config";
+import { GRAPHIC_TYPES } from "../pipeline/graphic-types";
 import {
   CONTENT_STATUSES, EVENT_KINDS, GATED_STATUSES, MEDIA_STATUSES, MEDIA_TYPES, READY_STATUSES,
   isIsoDate, parseContentInput, parseEventInput, parseMediaInput,
@@ -104,6 +105,7 @@ export async function pipelineRoutes(app: FastifyInstance): Promise<void> {
     eventKinds: EVENT_KINDS, platforms: PLATFORMS, gatedStatuses: GATED_STATUSES,
     readyStatuses: READY_STATUSES, thresholds: GAP_THRESHOLDS, upcomingDays: UPCOMING_DAYS,
     recurrenceHorizonDays: HORIZON_DAYS,
+    graphicTypes: GRAPHIC_TYPES,
   })));
 
   // ── Events ──
