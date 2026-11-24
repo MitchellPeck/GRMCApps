@@ -57,6 +57,7 @@ async function twoWeeks() {
   ok(await editPiece(pool, tp.id, { bodyHtml: "<p>Hello</p>" }, admin));
   const a = ok(await addItem(pool, i1, e, { title: "Supper" }, admin));
   const b = ok(await addItem(pool, i1, e, { title: "Choir" }, admin));
+  ok(await markIssueSent(pool, i1)); // "same as last week" compares with what actually went out
   const i2 = await issue("2026-11-11");
   return { t, e, i1, i2, a, b };
 }
@@ -131,6 +132,7 @@ test("glance compares with previous issue", async () => {
   await sec("Glance", "glance");
   await pool.query("INSERT INTO events (id, name, start_date) VALUES ('gntest-g1','Picnic','2026-11-20')");
   const i1 = await issue("2026-11-04");
+  ok(await markIssueSent(pool, i1));
   const i2 = await issue("2026-11-11");
   const s = await buildSheet(pool, i2);
   assert.equal(s[0].unchanged, true);
@@ -267,4 +269,19 @@ test("sheet parts: the letter offers its headline and both versions once made", 
   assert.equal(parts[1].note, undefined);
   ok(await editPiece(pool, tp.id, { bodyHtml: "<p>Changed</p>" }, admin));
   assert.match(by(await buildSheet(pool, i), t).parts[1].note || "", /changed after/);
+});
+
+test("a skipped (never sent) week is not what 'same as last week' compares with", async () => {
+  const t = await sec("Notes", "text");
+  const i1 = await issue("2026-11-04");
+  const p1 = (await listPieces(pool, i1)).find((p) => p.sectionId === t)!;
+  ok(await editPiece(pool, p1.id, { bodyHtml: "<p>Sent text</p>" }, admin));
+  ok(await markIssueSent(pool, i1));
+  const i2 = await issue("2026-11-11"); // skipped: never sent
+  const p2 = (await listPieces(pool, i2)).find((p) => p.sectionId === t)!;
+  ok(await editPiece(pool, p2.id, { bodyHtml: "<p>New text</p>" }, admin));
+  const i3 = await issue("2026-11-18"); // carries "New text" forward from the skipped week
+  assert.equal(by(await buildSheet(pool, i3), t).unchanged, false, "Mailchimp still holds the Nov 4 text");
+  ok(await unmarkIssueSent(pool, i1));
+  assert.equal(by(await buildSheet(pool, i3), t).unchanged, false, "nothing sent at all: everything is new");
 });

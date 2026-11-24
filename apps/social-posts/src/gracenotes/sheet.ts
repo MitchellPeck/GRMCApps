@@ -1,6 +1,6 @@
 // Grace Notes paste sheet: the issue as email-ready blocks, in section order, with unchanged ones flagged.
 import { Pool, PoolClient } from "pg";
-import { Issue, getIssue, glanceHtml, label as dayLabel, listIssues } from "./issues";
+import { Issue, getIssue, glanceHtml, label as dayLabel } from "./issues";
 import { Result } from "../pipeline/rules";
 import { effectiveImage, listPieces } from "./pieces";
 import { htmlToText } from "./html";
@@ -105,15 +105,20 @@ async function partsOf(db: Db, s: { id: string; title: string; kind: SectionKind
 
 type Snap = Array<{ sectionId: string; html: string; images: Array<{ url: string; alt: string }> }>;
 
-/** `unchanged` means the block is identical to the previous email's block at the same position. */
+/**
+ * `unchanged` means the block is identical to the same block in the last email that actually went out
+ * (the newest earlier issue marked sent), so Mailchimp already holds it. With no such snapshot, nothing is unchanged:
+ * a skipped or un-marked issue never reached Mailchimp, so comparing against it could hide new text.
+ */
 export async function buildSheet(db: Db, issueId: string): Promise<SheetBlock[]> {
   const issue = await getIssue(db, issueId);
   if (!issue) return [];
   const blocks = await renderSheet(db, issueId);
-  const prevIssue = (await listIssues(db)).find((i) => i.issueDate < issue.issueDate) ?? null; // newest first
-  if (!prevIssue) return blocks;
-  const snap = (await db.query("SELECT sheet_snapshot FROM gn_issues WHERE id = $1", [prevIssue.id])).rows[0]?.sheet_snapshot as Snap | null;
-  const prev: Snap = snap ?? (await renderSheet(db, prevIssue.id));
+  const { rows } = await db.query(
+    `SELECT sheet_snapshot FROM gn_issues WHERE issue_date < $1::date AND status = 'sent' AND sheet_snapshot IS NOT NULL
+      ORDER BY issue_date DESC LIMIT 1`, [issue.issueDate]);
+  const prev = rows[0]?.sheet_snapshot as Snap | undefined;
+  if (!prev) return blocks;
   const urls = (im: Array<{ url: string }>) => JSON.stringify(im.map((i) => i.url));
   blocks.forEach((b, i) => {
     const q = prev[i];
