@@ -14,6 +14,7 @@ import { decideSuggestion, reviewLetter } from "../gracenotes/letter";
 import { LetterVersions, makeVersions, updateVersions, viewOf } from "../gracenotes/letter-versions";
 import { buildSheet, markIssueSent, unmarkIssueSent } from "../gracenotes/sheet";
 import { remind } from "../gracenotes/mail";
+import { openNextIssue } from "../gracenotes/clock";
 import { Contributor } from "../gracenotes/types";
 
 export interface GnRouteOpts { db?: Pool }
@@ -37,6 +38,7 @@ export function pieceInput(raw: Record<string, unknown>): PieceInput {
   if (typeof raw.imageUrl === "string") out.imageUrl = raw.imageUrl;
   if (typeof raw.startDate === "string") out.startDate = raw.startDate;
   if ("endDate" in raw && (raw.endDate === null || typeof raw.endDate === "string")) out.endDate = raw.endDate as string | null;
+  if (typeof raw.expectedUpdatedAt === "string" && !isNaN(Date.parse(raw.expectedUpdatedAt))) out.expectedUpdatedAt = raw.expectedUpdatedAt;
   return out;
 }
 
@@ -70,7 +72,8 @@ export async function gracenotesRoutes(app: FastifyInstance, opts: GnRouteOpts =
     return r.ok ? { ok: true, contributor: withLink(await linkBase(req), r.value) } : r;
   }));
   app.post("/api/gracenotes/contributors/:id/retire", async (req) => guard(async () => {
-    const r = await retireContributor(db, params(req).id);
+    const t = body(req).takeOverId;
+    const r = await retireContributor(db, params(req).id, t === null ? null : typeof t === "string" && t ? t : undefined);
     return r.ok ? { ok: true, contributor: withLink(await linkBase(req), r.value) } : r;
   }));
 
@@ -127,7 +130,8 @@ export async function gracenotesRoutes(app: FastifyInstance, opts: GnRouteOpts =
   // The sheet is what gets pasted into Mailchimp; marking it sent stores a snapshot (markIssueSent).
   app.post("/api/gracenotes/issues/:id/sent", async (req) => guard(async () => {
     const r = await markIssueSent(db, params(req).id);
-    return r.ok ? { ok: true, issue: r.value } : r;
+    if (!r.ok) return r;
+    return { ok: true, issue: r.value, nextIssueId: await openNextIssue(db, r.value.issueDate) };
   }));
   app.delete("/api/gracenotes/issues/:id/sent", async (req) => guard(async () => {
     const r = await unmarkIssueSent(db, params(req).id);

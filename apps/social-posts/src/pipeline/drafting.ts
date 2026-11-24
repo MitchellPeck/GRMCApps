@@ -20,6 +20,8 @@ export interface SourceRef {
 export interface Effective {
   source: SourceConfig; instructions: string; context: string; angles: Angle[];
   from: "post" | "recurrence" | "event" | "default";
+  /** Which layer the source came from (a series' own source beats the event's). */
+  sourceFrom: "post" | "recurrence" | "event" | "default";
 }
 
 export const GENERIC_INSTRUCTIONS = "Write one post that serves the brief. Make someone want to act on it.";
@@ -114,6 +116,7 @@ export function effectiveProfile(
     instructions: withInstructions ? withInstructions[1]!.instructions! : GENERIC_INSTRUCTIONS,
     from: withInstructions ? withInstructions[0] : "default",
     source: withSource ? withSource[1]!.source! : { kind: "none" },
+    sourceFrom: withSource ? withSource[0] : "default",
     context: event?.notes || "",
     angles: event?.drafting?.angles || [],
   };

@@ -439,6 +439,32 @@ header a.btn-hdr{text-decoration:none}
 .gnx-version .gnx-blockhead .btn-sm{margin-left:0}
 .gnx-version .gnx-blockhead .btn-sm:first-of-type{margin-left:auto}
 .gnx-vpreview{background:#fff;border:1px solid var(--rule);border-radius:var(--r);padding:18px 20px;max-height:560px;overflow:auto}
+.gnx-progress{display:flex;align-items:center;gap:10px;margin:8px 0 14px}
+.gnx-bar{flex:1;max-width:260px;height:6px;border-radius:3px;background:var(--rule);overflow:hidden}
+.gnx-bar span{display:block;height:100%;background:var(--ok-fg);transition:width .3s}
+.gnx-sec{margin-bottom:18px}
+.gnx-sechead{font-family:var(--font-display);color:var(--navy);font-size:17px;margin-bottom:6px;padding-bottom:4px;border-bottom:1px solid var(--rule)}
+.gnx-sec.same{border:1px dashed var(--rule);border-radius:var(--r);padding:6px 10px;opacity:.8}
+.gnx-sec.same summary{cursor:pointer;color:var(--muted)}
+.gnx-part{margin:0 0 8px}
+.gnx-part.body + .gnx-part.heading{margin-top:14px}
+.gnx-field{display:block;width:100%;text-align:left;font:inherit;color:inherit;background:#fff;border:1px solid var(--rule);border-left:4px solid var(--rule);
+  border-radius:var(--r);padding:8px 12px;cursor:pointer;transition:border-color .15s,background .15s}
+.gnx-field[data-act]:hover,.gnx-field:focus-visible{border-color:var(--navy);outline:none}
+.gnx-field[aria-disabled]{cursor:default;opacity:.6}
+.gnx-fbody a{pointer-events:none}
+.gnx-field.copied{border-left-color:var(--ok-fg);background:var(--ok-bg)}
+.gnx-field.flash{animation:gnx-flash .6s}
+@keyframes gnx-flash{from{box-shadow:0 0 0 4px var(--gold-ring)}to{box-shadow:none}}
+.gnx-flabel{display:flex;gap:8px;align-items:center;font-size:var(--t-small);text-transform:uppercase;letter-spacing:.08em;color:var(--hint);margin-bottom:4px}
+.gnx-cta{margin-left:auto;text-transform:none;letter-spacing:0;color:var(--navy);opacity:0;transition:opacity .15s}
+.gnx-field:hover .gnx-cta,.gnx-field:focus-visible .gnx-cta{opacity:1}
+.gnx-tick{display:none;color:var(--ok-fg);font-weight:700;text-transform:none;letter-spacing:0}
+.gnx-field.copied .gnx-tick{display:inline}
+.gnx-ftext{display:block;font-family:var(--font-display);font-size:18px;color:var(--navy)}
+.gnx-fbody{display:block;max-height:320px;overflow:auto}
+.gnx-fbody p{margin:0 0 8px}
+.gnx-part .alert{margin-top:4px}
 .gnx-block{border:1px solid var(--rule);border-radius:var(--r);padding:10px 12px;margin-bottom:10px}
 .gnx-blockhead{display:flex;gap:10px;align-items:center;margin-bottom:6px}
 .gnx-blockhead .btn-sm{margin-left:auto}

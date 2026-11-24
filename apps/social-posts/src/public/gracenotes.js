@@ -53,8 +53,8 @@ function copyText(text) {
 }
 function copyLink(url) { copyText(url).then(function () { toast('Link copied.', 'ok'); }, function () { toast('Couldn’t copy. Select the link and copy it by hand.', 'err'); }); }
 function plain(html) { var d = document.createElement('div'); d.innerHTML = html; return d.textContent; }
-function copyBlock(html, text) {
-  var done = function () { toast('Copied.', 'ok'); };
+function copyBlock(html, text, after) {
+  var done = function () { if (after) after(); else toast('Copied.', 'ok'); };
   var fail = function () { toast('Couldn’t copy. Select the text and copy it by hand.', 'err'); };
   // Built inside the promise chain so a throw from ClipboardItem falls back to plain text.
   var rich = window.ClipboardItem && navigator.clipboard && navigator.clipboard.write
@@ -141,7 +141,7 @@ function fail(e) { toast(e.message || 'Something went wrong.', 'err'); }
 
 function render(main, arg) {
   current = { main: main, arg: arg || '' };
-  main.onclick = main.onsubmit = null;
+  main.onclick = main.onsubmit = main.onkeydown = null;
   var a = arg || '';
   if (a === 'people') return renderPeople(main);
   if (a === 'sections') return renderSections(main);
@@ -247,16 +247,26 @@ function drawIssue(main, data, blocks, people, sections, settings, histHtml, eve
     return '<div class="gnx-section" data-sid="' + esc(s.id) + '"><h4>' + esc(s.title) + '</h4>' + body + '</div>';
   }).join('') + '</section>';
 
-  html += '<section class="card">' + cardTitle('Paste sheet') + '<p class="hint">Copy each block and paste it into the matching Mailchimp block. Bold and links come along.</p>'
-    + blocks.map(function (b, i) {
-      return '<div class="gnx-block"><div class="gnx-blockhead"><strong>' + esc(b.title) + '</strong>'
-        + (b.unchanged ? '<span class="pill">Same as last week · skip</span>' : '')
-        + '<button class="btn-sm" type="button" data-act="copy-block" data-i="' + i + '">Copy</button></div>'
-        + '<div class="gnx-preview">' + (b.html || '<span class="hint">Empty</span>') + '</div>' // sanitized on the server
-        + (b.images.length ? '<div class="gnx-imgs">' + b.images.map(function (im) {
-          var ok = /^https?:/i.test(im.url || '');
-          return '<figure>' + (ok ? '<img src="' + esc(im.url) + '" alt="' + esc(im.alt) + '"><a class="btn-sm" href="' + esc(im.url) + '" download target="_blank" rel="noopener">Download</a>' : '') + '</figure>';
-        }).join('') + '</div>' : '') + '</div>';
+  // The paste sheet: every heading and every body as its own field, in the email's order.
+  // Click a field to copy it; it stays ticked (in this browser) until its words change.
+  var parts = {}, total = 0, done = 0;
+  blocks.forEach(function (b) { (b.parts || []).forEach(function (pt) {
+    parts[pt.key] = pt;
+    if (b.unchanged) return;
+    total++; if (wasCopied(issue.id, pt)) done++;
+  }); });
+  html += '<section class="card gnx-sheet">' + cardTitle('Paste into Mailchimp')
+    + '<p class="hint">Click a field to copy it, then paste it into the matching block in Mailchimp. Headings copy as plain text; text keeps its bold and links. '
+    + 'A tick means you’ve copied it.</p>'
+    + '<div class="gnx-progress"><span class="gnx-bar"><span style="width:' + (total ? Math.round(100 * done / total) : 0) + '%"></span></span>'
+    + '<span class="hint">' + done + ' of ' + total + ' copied</span>'
+    + (done ? ' <button class="pl-link" type="button" data-act="clear-copied">Clear ticks</button>' : '') + '</div>'
+    + blocks.map(function (b) {
+      var fields = (b.parts || []).map(function (pt) { return partHtml(issue.id, pt); }).join('');
+      if (b.unchanged) {
+        return '<details class="gnx-sec same"><summary><strong>' + esc(b.title) + '</strong> <span class="pill">Same as last week · leave it</span></summary>' + fields + '</details>';
+      }
+      return '<div class="gnx-sec"><div class="gnx-sechead"><strong>' + esc(b.title) + '</strong></div>' + fields + '</div>';
     }).join('')
     + '<div class="btn-row">' + (sent ? '<button class="btn" type="button" data-act="unmark-sent">Unmark sent</button>'
       : '<button class="btn btn-primary" type="button" data-act="mark-sent">Mark sent</button>') + '</div></section>' + histHtml;
@@ -267,7 +277,14 @@ function drawIssue(main, data, blocks, people, sections, settings, histHtml, eve
   var h = {
     'copy-link': function (b) { copyLink(b.getAttribute('data-url')); },
     nudge: function (b) { run(b, function () { return call('POST', '/api/gracenotes/issues/' + encodeURIComponent(issue.id) + '/remind/' + encodeURIComponent(b.getAttribute('data-id'))); }, 'Reminder sent.'); },
-    'copy-block': function (b) { var bl = blocks[+b.getAttribute('data-i')]; copyBlock(bl.html, bl.text || plain(bl.html)); },
+    'copy-part': function (b) {
+      var pt = parts[b.getAttribute('data-key')];
+      if (!pt) return;
+      var ok = function () { markCopied(issue.id, pt); b.classList.add('copied'); flash(b); refreshProgress(main, issue.id, parts, blocks); };
+      if (pt.kind === 'heading') copyText(pt.text).then(ok, function () { toast('Couldn’t copy. Select the text and copy it by hand.', 'err'); });
+      else copyBlock(pt.html, pt.text || plain(pt.html), ok);
+    },
+    'clear-copied': function () { clearCopied(issue.id); reload(); },
     'make-versions': function (b) {
       b.textContent = 'Making the email versions…';
       run(b, function () { return call('POST', '/api/gracenotes/pieces/' + encodeURIComponent(b.getAttribute('data-id')) + '/versions', {}); }, null)
@@ -282,8 +299,12 @@ function drawIssue(main, data, blocks, people, sections, settings, histHtml, eve
       if (v) copyText(v[b.getAttribute('data-which') + 'Html']).then(function () { toast('HTML copied. Paste it into a Code block.', 'ok'); }, function () { toast('Couldn’t copy.', 'err'); });
     },
     'mark-sent': function (b) {
-      if (!window.confirm('Mark this issue as sent? It moves into history and the next one copies from it.')) return;
-      run(b, function () { return call('POST', '/api/gracenotes/issues/' + encodeURIComponent(issue.id) + '/sent'); }, 'Marked sent.');
+      if (!window.confirm('Mark this issue as sent? It moves into history, and next week’s issue opens straight away (copied from this one) so people can send things in.')) return;
+      run(b, function () { return call('POST', '/api/gracenotes/issues/' + encodeURIComponent(issue.id) + '/sent'); }, null, function (d) {
+        toast(d.nextIssueId ? 'Marked sent. Next week’s issue is open.' : 'Marked sent.', 'ok');
+        if (d.nextIssueId) { location.hash = '#gracenotes/issue/' + d.nextIssueId; return; }
+        return reload();
+      });
     },
     'unmark-sent': function (b) {
       if (!window.confirm('Unmark this issue as sent? It opens for editing again; mark it sent again when it goes out.')) return;
@@ -297,6 +318,8 @@ function drawIssue(main, data, blocks, people, sections, settings, histHtml, eve
     edit: function (b) { openEditor(b.closest('.gnx-piece'), byId[b.getAttribute('data-id')], sectionById); },
     'add-item': function (b) { openEditor(b.parentNode.insertBefore(document.createElement('div'), b), null, sectionById, issue.id, b.getAttribute('data-sid')); b.hidden = true; },
     review: function (b) {
+      if (b.getAttribute('data-again') && !window.confirm('Review the letter again? Your accept/reject choices on the current suggestions are cleared and the email versions are made again afterwards (headline and closing edits are kept).')) return;
+      delete autoVersions[b.getAttribute('data-id')]; // let the versions be made again once this review is decided
       var label = b.textContent;
       b.textContent = 'Reviewing…';
       // On success the page redraws; on failure run() re-enables the button and the label comes back here.
@@ -326,6 +349,11 @@ function drawIssue(main, data, blocks, people, sections, settings, histHtml, eve
     },
   };
   wire(main, h);
+  // The paste fields are divs (they hold links and paragraphs), so Enter and Space copy too.
+  main.onkeydown = function (e) {
+    var f = e.target.closest && e.target.closest('.gnx-field[data-act]');
+    if (f && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); h['copy-part'](f); }
+  };
   // Headline / closing / signer edits save on change and redraw both versions.
   Array.prototype.forEach.call(main.querySelectorAll('[data-vfield]'), function (el) {
     el.addEventListener('change', function () {
@@ -344,6 +372,41 @@ function drawIssue(main, data, blocks, people, sections, settings, histHtml, eve
   });
 }
 
+// ── paste sheet fields ──
+function hashOf(s) { var h = 0; for (var i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return String(h); }
+function copiedStore(issueId) {
+  try { return JSON.parse(localStorage.getItem('gn-copied-' + issueId) || '{}'); } catch (e) { return {}; }
+}
+function wasCopied(issueId, pt) { return copiedStore(issueId)[pt.key] === hashOf(pt.html); }
+function markCopied(issueId, pt) {
+  var s = copiedStore(issueId); s[pt.key] = hashOf(pt.html);
+  try { localStorage.setItem('gn-copied-' + issueId, JSON.stringify(s)); } catch (e) { /* ticks just won't stick */ }
+}
+function clearCopied(issueId) { try { localStorage.removeItem('gn-copied-' + issueId); } catch (e) { /* nothing to clear */ } }
+function flash(el) { el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash'); }
+function refreshProgress(main, issueId, parts, blocks) {
+  var total = 0, done = 0;
+  blocks.forEach(function (b) { if (!b.unchanged) (b.parts || []).forEach(function (pt) { total++; if (wasCopied(issueId, pt)) done++; }); });
+  var bar = main.querySelector('.gnx-progress');
+  if (!bar) return;
+  bar.querySelector('.gnx-bar span').style.width = (total ? Math.round(100 * done / total) : 0) + '%';
+  bar.querySelector('.hint').textContent = done + ' of ' + total + ' copied';
+}
+function partHtml(issueId, pt) {
+  var empty = !String(pt.text || '').trim();
+  var img = pt.image && /^https?:/i.test(pt.image.url || '') ? pt.image : null;
+  return '<div class="gnx-part ' + pt.kind + '">'
+    + '<div class="gnx-field' + (wasCopied(issueId, pt) ? ' copied' : '') + '"' + (empty ? ' aria-disabled="true"'
+      : ' role="button" tabindex="0" data-act="copy-part" data-key="' + esc(pt.key) + '" aria-label="Copy ' + esc(pt.label) + '"') + '>'
+    + '<span class="gnx-flabel">' + esc(pt.label) + '<span class="gnx-tick" aria-hidden="true">✓ Copied</span><span class="gnx-cta">Click to copy</span></span>'
+    + (empty ? '<span class="hint">Empty</span>' : pt.kind === 'heading' ? '<span class="gnx-ftext">' + esc(pt.text) + '</span>'
+      : '<div class="gnx-fbody">' + pt.html + '</div>') // built and sanitized on the server
+    + '</div>'
+    + (pt.note ? '<div class="alert alert-warn">' + esc(pt.note) + '</div>' : '')
+    + (img ? '<div class="gnx-imgs"><figure><img src="' + esc(img.url) + '" alt="' + esc(img.alt) + '"><a class="btn-sm" href="' + esc(img.url) + '" download target="_blank" rel="noopener">Download picture</a></figure></div>' : '')
+    + '</div>';
+}
+
 function pieceHtml(p, section, review, sent, canLink, versions) {
   var chip = { carried: ['Not checked', 'pill-pending'], confirmed: ['Confirmed', 'pill-ok'], changed: ['Changed', 'pill-info'], 'new': ['Added', 'pill-info'] }[p.status] || ['', ''];
   var title = p.title || p.eventName || '';
@@ -360,7 +423,7 @@ function pieceHtml(p, section, review, sent, canLink, versions) {
       + '<button class="btn-sm" type="button" data-act="edit" data-id="' + esc(p.id) + '">Edit</button>'
       + (section.kind === 'events' ? '<button class="btn-sm" type="button" data-act="drop" data-id="' + esc(p.id) + '">Drop</button>' : '')
       + (section.kind === 'events' && !p.eventId && canLink ? '<button class="btn-sm" type="button" data-act="show-link" data-id="' + esc(p.id) + '">Link to event</button>' : '')
-      + (isLetter ? '<button class="btn-sm" type="button" data-act="review" data-id="' + esc(p.id) + '">Review letter</button>' : '') + '</div>';
+      + (isLetter ? '<button class="btn-sm" type="button" data-act="review" data-id="' + esc(p.id) + '"' + (review ? ' data-again="1">Review again' : '>Review letter') + '</button>' : '') + '</div>';
   }
   if (isLetter && review && review.length) h += reviewHtml(p.id, review, sent);
   var decided = isLetter && Array.isArray(review) && !review.some(function (s) { return s.state === 'open'; });
@@ -418,7 +481,8 @@ function openEditor(box, p, sectionById, issueId, sid) {
   box.className = 'gnx-piece editing';
   // R20: text sections have no heading field; the Mailchimp block has its own.
   box.innerHTML = (isEvents ? '<div class="field"><label>Name</label><input type="text" class="gnx-title"></div>' : '')
-    + (isEvents ? '<div class="field"><label>Date</label><input type="date" class="gnx-date"></div>' : '') + '<div class="field gnx-edwrap"><label>Text</label></div>'
+    + (isEvents ? '<div class="row2"><div class="field"><label>Date</label><input type="date" class="gnx-date"></div>'
+      + '<div class="field"><label>Last day (if it runs several days)</label><input type="date" class="gnx-end"></div></div>' : '') + '<div class="field gnx-edwrap"><label>Text</label></div>'
     + (isEvents ? '<div class="row2">' + [['when', 'Time'], ['place', 'Place'], ['cost', 'Cost'], ['contact', 'Contact'], ['link', 'Web link'], ['linkLabel', 'Link words']].map(function (x) {
       return '<div class="field"><label>' + x[1] + '</label><input type="text" data-d="' + x[0] + '"></div>';
     }).join('') + '</div>' : '')
@@ -427,6 +491,7 @@ function openEditor(box, p, sectionById, issueId, sid) {
   box.querySelector('.gnx-edwrap').appendChild(ed.node);
   if (isEvents) box.querySelector('.gnx-title').value = p ? p.title || p.eventName || '' : '';
   if (isEvents) box.querySelector('.gnx-date').value = p && p.eventStartDate ? p.eventStartDate.slice(0, 10) : '';
+  if (isEvents) box.querySelector('.gnx-end').value = p ? String(p.eventEndDate || d.endDate || '').slice(0, 10) : '';
   box.querySelectorAll('[data-d]').forEach(function (i) { i.value = d[i.getAttribute('data-d')] || ''; });
   var startImg = p ? shownImage(p) : '';
   box.querySelector('.gnx-img').value = startImg;
@@ -434,6 +499,7 @@ function openEditor(box, p, sectionById, issueId, sid) {
   box.querySelector('[data-x=save]').onclick = function (e) {
     e.stopPropagation();
     var payload = { bodyHtml: ed.html() };
+    if (p) payload.expectedUpdatedAt = p.updatedAt; // refused if someone saved this piece meanwhile
     // Only a changed picture is sent, so saving never wipes the event's picture (as in contributor.js).
     var img = box.querySelector('.gnx-img').value.trim();
     if (img !== startImg) payload.imageUrl = img;
@@ -441,6 +507,7 @@ function openEditor(box, p, sectionById, issueId, sid) {
       payload.title = box.querySelector('.gnx-title').value.trim();
       var date = box.querySelector('.gnx-date').value;
       if (date) payload.startDate = date;
+      payload.endDate = box.querySelector('.gnx-end').value || null;
       box.querySelectorAll('[data-d]').forEach(function (i) { var v = i.value.trim(); if (v) d[i.getAttribute('data-d')] = v; else delete d[i.getAttribute('data-d')]; });
       payload.details = d;
       if (!p && !payload.title) return toast('Give the item a name first.', 'err');
@@ -489,11 +556,22 @@ function renderPeople(main) {
         if (email == null) return;
         run(b, function () { return call('PATCH', '/api/gracenotes/contributors/' + encodeURIComponent(p.id), { name: name.trim(), email: email.trim() }); }, 'Saved.');
       },
+      // Retiring asks who takes over their sections and items, so nothing carries on unwatched.
       'retire-person': function (b) {
-        var p = byId[b.getAttribute('data-id')];
-        if (!window.confirm('Retire ' + p.name + '? Their old link will stop working.')) return;
-        run(b, function () { return call('POST', '/api/gracenotes/contributors/' + encodeURIComponent(p.id) + '/retire', {}); }, 'Retired.');
+        var p = byId[b.getAttribute('data-id')], box = b.closest('.gnx-person');
+        if (box.querySelector('.gnx-retire')) return;
+        var others = live.filter(function (x) { return x.id !== p.id; });
+        box.insertAdjacentHTML('beforeend', '<div class="gnx-retire alert alert-warn"><div class="field"><label>Who takes over ' + esc(p.name) + '’s sections and items?</label>'
+          + '<select>' + others.map(function (x) { return '<option value="' + esc(x.id) + '">' + esc(x.name) + '</option>'; }).join('')
+          + '<option value="">No one — I’ll look after them</option></select></div>'
+          + '<p class="hint">Their old link stops working.</p><div class="gnx-acts"><button class="btn-sm" type="button" data-act="retire-go" data-id="' + esc(p.id) + '">Retire ' + esc(p.name) + '</button>'
+          + '<button class="btn-sm" type="button" data-act="retire-cancel">Cancel</button></div></div>');
       },
+      'retire-go': function (b) {
+        var v = b.closest('.gnx-retire').querySelector('select').value;
+        run(b, function () { return call('POST', '/api/gracenotes/contributors/' + encodeURIComponent(b.getAttribute('data-id')) + '/retire', { takeOverId: v || null }); }, 'Retired.');
+      },
+      'retire-cancel': function (b) { b.closest('.gnx-retire').remove(); },
       own: function (cb) {
         var s = secById[cb.getAttribute('data-sid')], id = cb.getAttribute('data-id');
         var ids = s.ownerIds.filter(function (x) { return x !== id; });

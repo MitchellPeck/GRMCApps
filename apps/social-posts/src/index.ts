@@ -8,6 +8,7 @@ import { settingsRoutes } from "./routes/settings";
 import { metricoolRoutes } from "./routes/metricool";
 import { podcastRoutes } from "./routes/podcast";
 import { youtubeRoutes } from "./routes/youtube";
+import { redactUrl } from "./redact";
 import { pipelineRoutes } from "./routes/pipeline";
 import { mcpRoutes } from "./routes/mcp";
 import { gracenotesRoutes } from "./routes/gracenotes";
@@ -26,7 +27,11 @@ import {
   HORIZON_DAYS, IMAGE_RULE_SETTING, RUN_RECURRENCES_SETTING, applyImageRule, materialize, seedRunRecurrences,
 } from "./pipeline/recurring";
 
-const app = Fastify({ logger: true, trustProxy: true });
+// Request logs never carry a contributor's link token or a Google sign-in code: either one is a way in.
+const app = Fastify({
+  trustProxy: true,
+  logger: { serializers: { req: (req) => ({ method: req.method, url: redactUrl(req.url), host: req.host, remoteAddress: req.ip }) } },
+});
 
 // /gn/* (the token-only contributor pages) is registered first so the static handler never claims it.
 app.register(contributorRoutes);

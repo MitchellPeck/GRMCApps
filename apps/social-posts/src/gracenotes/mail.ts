@@ -62,9 +62,14 @@ export async function remind(
     }
     return { status: "skipped", error: missing };
   }
+  // The row starts as 'failed' and becomes 'sent' on success. An automatic one that failed is tried again on a later
+  // tick (at most 4 tries, 15+ minutes apart); Resend's idempotency key stops a double send if two ticks overlap.
   const ins = await db.query(
     `INSERT INTO gn_reminders (issue_id, contributor_id, kind, status) VALUES ($1,$2,$3,'failed')
-     ON CONFLICT DO NOTHING RETURNING id`, [issueId, contributorId, kind]);
+     ON CONFLICT (issue_id, contributor_id, kind) WHERE kind <> 'manual' DO UPDATE
+       SET attempts = gn_reminders.attempts + 1, error = '', created_at = now()
+       WHERE gn_reminders.status = 'failed' AND gn_reminders.attempts < 4 AND gn_reminders.created_at < now() - interval '15 minutes'
+     RETURNING id`, [issueId, contributorId, kind]);
   if (!ins.rows[0]) return { status: "skipped", error: "Already sent." };
 
   const sendDay = DAYS[new Date(`${issue.issueDate}T12:00:00Z`).getUTCDay()];

@@ -57,6 +57,7 @@ async function twoWeeks() {
   ok(await editPiece(pool, tp.id, { bodyHtml: "<p>Hello</p>" }, admin));
   const a = ok(await addItem(pool, i1, e, { title: "Supper" }, admin));
   const b = ok(await addItem(pool, i1, e, { title: "Choir" }, admin));
+  ok(await markIssueSent(pool, i1)); // "same as last week" compares with what actually went out
   const i2 = await issue("2026-11-11");
   return { t, e, i1, i2, a, b };
 }
@@ -131,6 +132,7 @@ test("glance compares with previous issue", async () => {
   await sec("Glance", "glance");
   await pool.query("INSERT INTO events (id, name, start_date) VALUES ('gntest-g1','Picnic','2026-11-20')");
   const i1 = await issue("2026-11-04");
+  ok(await markIssueSent(pool, i1));
   const i2 = await issue("2026-11-11");
   const s = await buildSheet(pool, i2);
   assert.equal(s[0].unchanged, true);
@@ -225,4 +227,61 @@ test("sheet shows a dated item's date before the details", async () => {
   await pool.query("DELETE FROM events WHERE id IN (SELECT event_id FROM gn_pieces WHERE issue_id = $1)", [i]);
   assert.ok(html.includes("<p>Wed Nov 18 · 6pm · Hall</p>"), html);
   assert.ok(html.includes("<p>Wed Nov 18 – Fri Nov 20</p>"), html);
+});
+
+test("sheet parts: a heading then the text, events split per item", async () => {
+  const t = await sec("Sermon Notes", "text");
+  const e = await sec("Events", "events");
+  const i = await issue("2026-11-11");
+  const tp = (await listPieces(pool, i)).find((p) => p.sectionId === t)!;
+  ok(await editPiece(pool, tp.id, { bodyHtml: "<p>Grace <strong>upon</strong> grace</p>" }, admin));
+  ok(await addItem(pool, i, e, { title: "Supper & Song", details: { when: "6pm", place: "Hall", link: "https://x.org/s", linkLabel: "Sign up" }, bodyHtml: "<p>Bring a dish</p>" }, admin));
+  const s = await buildSheet(pool, i);
+  const text = by(s, t).parts;
+  assert.deepEqual(text.map((p) => [p.kind, p.label]), [["heading", "Heading"], ["body", "Text"]]);
+  assert.equal(text[0].text, "Sermon Notes");
+  assert.equal(text[1].html, "<p>Grace <strong>upon</strong> grace</p>");
+  const ev = by(s, e).parts;
+  assert.deepEqual(ev.map((p) => p.label), ["Section heading", "Item 1 title", "Item 1 text"]);
+  assert.equal(ev[1].text, "Supper & Song");
+  assert.equal(ev[1].html, "Supper &amp; Song");
+  assert.ok(!ev[2].html.includes("Supper"), ev[2].html); // the name is its own field
+  assert.ok(ev[2].html.startsWith("<p>6pm · Hall</p><p>Bring a dish</p>"), ev[2].html);
+  assert.ok(ev[2].html.includes('<a href="https://x.org/s">Sign up</a>'));
+  assert.equal(new Set(s.flatMap((b) => b.parts.map((p) => p.key))).size, s.reduce((n, b) => n + b.parts.length, 0));
+});
+
+test("sheet parts: the letter offers its headline and both versions once made", async () => {
+  const t = await sec("Pastor's Message", "text");
+  const i = await issue("2026-11-11");
+  const tp = (await listPieces(pool, i)).find((p) => p.sectionId === t)!;
+  ok(await editPiece(pool, tp.id, { bodyHtml: "<p>Family of Grace,</p><p>Hello.</p>" }, admin));
+  assert.deepEqual(by(await buildSheet(pool, i), t).parts.map((p) => p.label), ["Heading", "Text"]);
+  const body = (await listPieces(pool, i)).find((p) => p.id === tp.id)!.bodyHtml;
+  const v = { sourceHtml: body, title: "A good word", signoff: "In Christ, James", signer: "Rev. J",
+    full: [{ kind: "greeting", html: "Family of Grace," }, { kind: "p", html: "Hello." }], short: [{ kind: "p", html: "Hello." }] };
+  await pool.query("INSERT INTO gn_letter_reviews (piece_id, suggestions, versions) VALUES ($1,'[]',$2)", [tp.id, JSON.stringify(v)]);
+  const parts = by(await buildSheet(pool, i), t).parts;
+  assert.deepEqual(parts.map((p) => p.label), ["Headline", "Short email cut", "Full letter"]);
+  assert.equal(parts[0].text, "A good word");
+  assert.ok(!parts[1].html.includes("<h1"), "bodies leave the headline to its own block");
+  assert.match(parts[2].html, /Family of Grace,[\s\S]*In Christ, James/);
+  assert.equal(parts[1].note, undefined);
+  ok(await editPiece(pool, tp.id, { bodyHtml: "<p>Changed</p>" }, admin));
+  assert.match(by(await buildSheet(pool, i), t).parts[1].note || "", /changed after/);
+});
+
+test("a skipped (never sent) week is not what 'same as last week' compares with", async () => {
+  const t = await sec("Notes", "text");
+  const i1 = await issue("2026-11-04");
+  const p1 = (await listPieces(pool, i1)).find((p) => p.sectionId === t)!;
+  ok(await editPiece(pool, p1.id, { bodyHtml: "<p>Sent text</p>" }, admin));
+  ok(await markIssueSent(pool, i1));
+  const i2 = await issue("2026-11-11"); // skipped: never sent
+  const p2 = (await listPieces(pool, i2)).find((p) => p.sectionId === t)!;
+  ok(await editPiece(pool, p2.id, { bodyHtml: "<p>New text</p>" }, admin));
+  const i3 = await issue("2026-11-18"); // carries "New text" forward from the skipped week
+  assert.equal(by(await buildSheet(pool, i3), t).unchanged, false, "Mailchimp still holds the Nov 4 text");
+  ok(await unmarkIssueSent(pool, i1));
+  assert.equal(by(await buildSheet(pool, i3), t).unchanged, false, "nothing sent at all: everything is new");
 });

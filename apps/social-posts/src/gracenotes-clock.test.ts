@@ -131,6 +131,27 @@ test("failed send is recorded", async () => {
   assert.equal((await pool.query("SELECT status FROM gn_reminders")).rows[0].status, "failed");
 });
 
+test("a failed automatic reminder is retried later, a few times at most", async () => {
+  await mailOn();
+  const { issueId, ids } = await setup({ Ann: "carried" });
+  const bad = (async () => new Response("nope", { status: 500 })) as unknown as typeof fetch;
+  assert.equal((await remind(pool, issueId, ids.Ann, "monday", bad)).status, "failed");
+  // Straight away: too soon to try again.
+  const { fn, calls } = stub();
+  assert.equal((await remind(pool, issueId, ids.Ann, "monday", fn)).status, "skipped");
+  assert.equal(calls.length, 0);
+  // 20 minutes on: tried again, and it goes.
+  await pool.query("UPDATE gn_reminders SET created_at = now() - interval '20 minutes'");
+  assert.equal((await remind(pool, issueId, ids.Ann, "monday", fn)).status, "sent");
+  assert.equal(calls.length, 1);
+  // Sent: never again.
+  await pool.query("UPDATE gn_reminders SET created_at = now() - interval '20 minutes'");
+  assert.equal((await remind(pool, issueId, ids.Ann, "monday", fn)).status, "skipped");
+  // A reminder that keeps failing stops after 4 tries.
+  await pool.query("UPDATE gn_reminders SET status = 'failed', attempts = 4, created_at = now() - interval '1 hour'");
+  assert.equal((await remind(pool, issueId, ids.Ann, "monday", fn)).status, "skipped");
+});
+
 test("reminder body has link and copy", async () => {
   await mailOn();
   const { issueId, ids } = await setup({ Ann: "carried" });

@@ -84,13 +84,18 @@ export async function createIssue(db: Db, issueDate: string): Promise<Result<Iss
 /** Gives the issue an empty piece for every live text section it lacks. Returns how many were added. */
 async function fillTextSections(db: Db, issueId: string): Promise<number> {
   const empty = pieceHash({ title: "", bodyHtml: "", details: {}, imageUrl: "", eventId: null });
-  const r = await db.query(
+  // Page loads and the clock all call this; a per-issue lock (held to the end of the transaction)
+  // stops two of them from both seeing a section as missing and adding it twice.
+  return withTx(db, async (c) => {
+  await c.query("SELECT pg_advisory_xact_lock(hashtext('gn_fill:' || $1))", [issueId]);
+  const r = await c.query(
     `INSERT INTO gn_pieces (issue_id, section_id, status, content_hash)
      SELECT $1, s.id, 'carried', $2 FROM gn_sections s
       WHERE s.kind = 'text' AND NOT s.retired
         AND NOT EXISTS (SELECT 1 FROM gn_pieces p WHERE p.issue_id = $1 AND p.section_id = s.id)`,
     [issueId, empty]);
   return r.rowCount ?? 0;
+  });
 }
 
 /**

@@ -37,13 +37,43 @@ export async function updateContributor(db: Db, id: string, patch: { name?: stri
 }
 
 /** Retire and replace the token, so the old link stops working at once. */
-export async function retireContributor(db: Db, id: string): Promise<Result<Contributor>> {
-  const { rows } = await db.query(
+/**
+ * Retire someone. What they look after (section ownership, and their items in issues still being collected)
+ * goes to `takeOverId`; `null` hands it to the admin (no owner). Left undefined while they still own
+ * something, it refuses, so nothing is silently orphaned.
+ */
+export async function retireContributor(db: Db, id: string, takeOverId?: string | null): Promise<Result<Contributor>> {
+  const owns = (await db.query(
+    `SELECT s.title FROM gn_section_owners o JOIN gn_sections s ON s.id = o.section_id WHERE o.contributor_id = $1 AND NOT s.retired`, [id])).rows;
+  const items = Number((await db.query(
+    `SELECT count(*) n FROM gn_pieces p JOIN gn_issues i ON i.id = p.issue_id
+      WHERE p.contributor_id = $1 AND i.status = 'collecting' AND p.status <> 'dropped'`, [id])).rows[0].n);
+  if (takeOverId === undefined && (owns.length || items)) {
+    const what = [owns.length ? owns.map((r) => r.title).join(", ") : "", items ? `${items} item${items === 1 ? "" : "s"}` : ""].filter(Boolean).join(" and ");
+    return fail(`Pick who takes over ${what} first.`);
+  }
+  if (takeOverId) {
+    if (takeOverId === id) return fail("Pick someone else to take over.");
+    const t = (await db.query("SELECT 1 FROM gn_contributors WHERE id = $1 AND retired_at IS NULL", [takeOverId])).rows[0];
+    if (!t) return fail("The person taking over isn't on the list.");
+  }
+  return withTx(db, async (c) => {
+  if (takeOverId) {
+    await c.query(
+      `INSERT INTO gn_section_owners (section_id, contributor_id) SELECT section_id, $2 FROM gn_section_owners WHERE contributor_id = $1
+       ON CONFLICT DO NOTHING`, [id, takeOverId]);
+  }
+  await c.query("DELETE FROM gn_section_owners WHERE contributor_id = $1", [id]);
+  await c.query(
+    `UPDATE gn_pieces SET contributor_id = $2 WHERE contributor_id = $1
+        AND issue_id IN (SELECT id FROM gn_issues WHERE status = 'collecting')`, [id, takeOverId ?? null]);
+  const { rows } = await c.query(
     `UPDATE gn_contributors SET retired_at = COALESCE(retired_at, now()), token = $2
       WHERE id = $1 RETURNING ${CONTRIBUTOR_COLS}`,
     [id, newToken()],
   );
-  return rows[0] ? { ok: true, value: contributorRow(rows[0]) } : fail("Contributor not found.");
+  return rows[0] ? { ok: true as const, value: contributorRow(rows[0]) } : fail("Contributor not found.");
+  });
 }
 
 export async function listContributors(db: Db): Promise<Contributor[]> {

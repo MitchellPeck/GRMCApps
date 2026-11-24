@@ -47,3 +47,11 @@ test("the post's override wins, then the recurrence's, then the event's", () => 
   assert.equal(bare.source.kind, "none");
   assert.equal(bare.from, "default");
 });
+
+test("a series' own source beats the event's, and says so", () => {
+  const e = effectiveProfile({ notes: "", drafting: { source: { kind: "youtube" } } }, { drafting: { source: { kind: "sermon" } } }, { drafting: {} });
+  assert.equal(e.source.kind, "sermon");
+  assert.equal(e.sourceFrom, "recurrence");
+  const e2 = effectiveProfile({ notes: "", drafting: { source: { kind: "youtube" } } }, { drafting: {} }, { drafting: {} });
+  assert.deepEqual([e2.source.kind, e2.sourceFrom], ["youtube", "event"]);
+});
