@@ -259,6 +259,8 @@ export interface EventInput {
   name?: string; kind?: string; color?: string; startDate?: string | null; endDate?: string | null;
   ownerEmail?: string; notes?: string; archived?: boolean;
   drafting?: Profile;
+  /** Only ever cleared from the page ("Keep"); the Breeze sync is what sets it. */
+  breezeMissingSince?: null;
 }
 
 export function parseEventInput(raw: unknown, mode: "create" | "patch"): Result<EventInput> {
@@ -279,6 +281,9 @@ export function parseEventInput(raw: unknown, mode: "create" | "patch"): Result<
     ["notes", optText(body, "notes", "Notes")],
     ["archived", optBool(body, "archived", "Archived")],
     ["drafting", "drafting" in body ? parseProfile(body.drafting) : undefined],
+    ["breezeMissingSince", "breezeMissingSince" in body
+      ? (body.breezeMissingSince === null ? { ok: true, value: null } : fail("Removed-from-Breeze can only be cleared."))
+      : undefined],
   ]);
   if (err) return fail(err);
   if (("name" in out || mode === "create") && !out.name) return fail("Give the event a name.");

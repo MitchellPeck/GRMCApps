@@ -4,9 +4,9 @@ import { Pool } from "pg";
 import { SCHEMA_SQL } from "./schema";
 import {
   createContent, createEvent, createEventMedia, createMedia, dashboardGaps, deleteEvent, getEvent, listMedia,
-  updateContent, updateMedia,
+  updateContent, updateEvent, updateMedia,
 } from "./pipeline/repo";
-import { parseMediaInput } from "./pipeline/rules";
+import { parseEventInput, parseMediaInput } from "./pipeline/rules";
 
 const pool = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
 
@@ -160,4 +160,17 @@ test("dashboardGaps lists an overdue event-level graphic, and drops it once the 
   assert.ok(key(await dashboardGaps(pool, "2026-11-10"), "overdue-media").includes(r.value.media.id));
   await pool.query("UPDATE events SET archived = true WHERE id = $1", [ev.id]);
   assert.ok(!key(await dashboardGaps(pool, "2026-11-10"), "overdue-media").includes(r.value.media.id));
+});
+
+test("Keep clears the removed-from-Breeze flag, and nothing else can set it", async () => {
+  const ev = await createEvent(pool, { name: "Kept", startDate: "2026-12-10" });
+  await pool.query("UPDATE events SET source = 'breeze', breeze_missing_since = now() WHERE id = $1", [ev.id]);
+  const keep = parseEventInput({ breezeMissingSince: null }, "patch");
+  assert.ok(keep.ok, !keep.ok ? keep.error : "");
+  const r = await updateEvent(pool, ev.id, keep.value);
+  assert.ok(r.ok);
+  assert.equal(r.value.breezeMissingSince, null);
+  // Only the sync flags an event; the page can only clear it.
+  assert.equal(parseEventInput({ breezeMissingSince: "2026-11-01" }, "patch").ok, false);
+  assert.equal(parseEventInput({ breezeMissingSince: true }, "patch").ok, false);
 });

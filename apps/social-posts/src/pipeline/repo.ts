@@ -182,6 +182,7 @@ function setClause(patch: Record<string, unknown>, columns: Record<string, strin
 const EVENT_COLUMNS: Record<string, string> = {
   name: "name", kind: "kind", color: "color", startDate: "start_date", endDate: "end_date",
   ownerEmail: "owner_email", notes: "notes", archived: "archived", drafting: "drafting",
+  breezeMissingSince: "breeze_missing_since",
 };
 
 export async function nextEventColor(db: Db): Promise<string> {

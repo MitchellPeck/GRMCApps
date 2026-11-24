@@ -43,6 +43,9 @@ export interface SettingsView {
   breezeSubdomain: string;
   breezeCalendars: string[];
   breezeDefaultOwner: string;
+  /** ISO time of the last sync ("" if never), and the calendar ids it couldn't read. */
+  breezeLastSync: string;
+  breezeLastSyncFailed: string[];
 }
 
 // Mirrors Code.gs getSettings(): never returns full keys, only a hint + flags.
@@ -63,6 +66,11 @@ export async function getSettingsView(pool: Pool): Promise<SettingsView> {
     const v = JSON.parse((await getSetting(pool, "breeze_calendars")) || "[]");
     if (Array.isArray(v)) breezeCalendars = v.filter((x) => typeof x === "string");
   } catch { /* bad JSON reads as none ticked */ }
+  let breezeLastSyncFailed: string[] = [];
+  try {
+    const v = JSON.parse((await getSetting(pool, "breeze_last_sync_failed")) || "[]");
+    if (Array.isArray(v)) breezeLastSyncFailed = v.filter((x) => typeof x === "string");
+  } catch { /* unreadable reads as none failed */ }
   return {
     anthropicKeyHint: ak ? ak.substring(0, 10) + "..." : "",
     hasAnthropicKey: ak.length > 0,
@@ -93,5 +101,7 @@ export async function getSettingsView(pool: Pool): Promise<SettingsView> {
     breezeSubdomain: breezeSub,
     breezeCalendars,
     breezeDefaultOwner: await getSetting(pool, "breeze_default_owner"),
+    breezeLastSync: await getSetting(pool, "breeze_last_sync"),
+    breezeLastSyncFailed,
   };
 }

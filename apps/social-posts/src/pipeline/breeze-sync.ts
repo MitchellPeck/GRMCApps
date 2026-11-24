@@ -111,6 +111,8 @@ export async function syncBreeze(pool: Pool, today: string, fetchFn: FetchFn = f
     report.cleared = m.cleared;
   }
   await setSetting(pool, "breeze_last_sync", new Date().toISOString());
+  // Kept beside the time so Settings never shows an outage as a clean sync.
+  await setSetting(pool, "breeze_last_sync_failed", JSON.stringify(report.failedCalendars));
   return report;
 }
 

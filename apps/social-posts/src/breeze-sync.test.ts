@@ -5,7 +5,7 @@ import { SCHEMA_SQL } from "./schema";
 import { createEvent, updateContent } from "./pipeline/repo";
 import { createRule } from "./pipeline/checklist-repo";
 import { applyRulesToEvent, listSeries, setSeriesMode, syncBreeze } from "./pipeline/breeze-sync";
-import { getSetting, setSetting } from "./settings";
+import { getSetting, getSettingsView, setSetting } from "./settings";
 
 const pool = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
 const TODAY = "2026-12-01";
@@ -309,6 +309,18 @@ test("fetch failure flags nothing", async () => {
   const r2 = await sync();
   assert.deepEqual(r2.failedCalendars, ["10"]);
   assert.equal((await events("breeze_missing_since IS NOT NULL")).length, 0);
+});
+
+test("the settings page sees the last sync time and which calendars failed", async () => {
+  feed["10"] = 500;
+  await sync();
+  let view = await getSettingsView(pool);
+  assert.ok(view.breezeLastSync);
+  assert.deepEqual(view.breezeLastSyncFailed, ["10"]);
+  feed["10"] = [];
+  await sync();
+  view = await getSettingsView(pool);
+  assert.deepEqual(view.breezeLastSyncFailed, []);
 });
 
 test("unticked calendar flags nothing", async () => {

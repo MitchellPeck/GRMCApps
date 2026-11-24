@@ -71,8 +71,11 @@ var S = {
   cal: storeGet('pipeline.cal') || { lens: 'publish', view: 'month', anchor: '' },
   // What the current view rendered from, so drag-and-drop can update in place.
   rows: { content: {}, media: {} },
+  // The open event page's own graphics, by id: their rows edit straight to the server.
+  eventGraphics: {},
 };
 
+function plural(n, word){ return n + ' ' + word + (n === 1 ? '' : 's'); }
 function label(s){ return s ? s.charAt(0).toUpperCase() + s.slice(1) : ''; }
 function eventById(id){ for (var i = 0; i < S.events.length; i++) if (S.events[i].id === id) return S.events[i]; return null; }
 function personName(email){
@@ -112,6 +115,8 @@ function recMark(i){ return i.recurrenceId ? '<span class="pl-rec" title="Repeat
 // "edited" as Final file (the finished file is attached).
 var MEDIA_LABELS = { needed: 'Needed', scheduled: 'Scheduled', captured: 'Collected', edited: 'Final file' };
 function mediaLabel(s){ return MEDIA_LABELS[s] || label(s); }
+function graphicTypeOf(key){ return ((S.meta && S.meta.graphicTypes) || []).filter(function(g){ return g.key === key; })[0]; }
+function graphicLabel(key){ var g = graphicTypeOf(key); return g ? g.label : 'Graphic'; }
 function statusBadge(s, kind){ return '<span class="pl-status pl-s-'+esc(s)+(kind === 'media' ? ' pl-media-s' : '')+'">'+esc(kind === 'media' ? mediaLabel(s) : label(s))+'</span>'; }
 function mediaProgress(item){
   if (item.noMediaNeeded) return '<span class="pl-prog pl-prog-none">No media needed</span>';
@@ -184,6 +189,7 @@ function render() {
   document.querySelector('.pl-toolbar').hidden = r.view === 'settings' || r.view === 'gracenotes';
   var main = $('pl-main');
   if (r.view !== 'gracenotes') main.onclick = main.onsubmit = main.onkeydown = null; // GraceNotes sets these on the shared container
+  if (r.view !== 'event') S.eventGraphics = {};
   var views = { dashboard: renderDashboard, calendar: renderCalendar, board: renderBoard, events: renderEvents, event: renderEvent,
     gap: renderGapList, recurring: renderRecurring, mine: renderMine, settings: renderSettings,
     gracenotes: function(m, a){ return window.GraceNotes.render(m, a); } };
@@ -284,11 +290,18 @@ function agendaPost(i) {
     + '<span class="pl-what"><span class="pl-title">'+esc(i.title)+'</span><span class="pl-sub">'+esc(i.eventName || 'No event')+' '+platformChips(i.platforms)+linkMarks(i)+'</span></span>'
     + statusBadge(i.status)+'</button></li>';
 }
+// A graphic that belongs to the event itself has no post to open, so it opens its event.
+function openMediaAttrs(m) {
+  return m.contentItemId ? 'data-act="open" data-id="'+esc(m.contentItemId)+'"' : 'data-act="goto-event" data-event="'+esc(m.eventId)+'"';
+}
+function mediaFor(m) {
+  return m.contentItemId ? label(m.type)+' for “'+m.itemTitle+'”' : graphicLabel(m.graphicType)+' for the event “'+m.eventName+'”';
+}
 function agendaMedia(m) {
   S.rows.media[m.id] = m;
-  return '<li><button class="pl-row" data-act="open" data-id="'+esc(m.contentItemId)+'" style="--ev:'+esc(m.eventColor || 'var(--rule)')+'">'
+  return '<li><button class="pl-row" '+openMediaAttrs(m)+' style="--ev:'+esc(m.eventColor || 'var(--rule)')+'">'
     + '<span class="pl-when">'+esc(shortDate(m.gatherDate))+'</span>'
-    + '<span class="pl-what"><span class="pl-title">'+esc(m.description)+'</span><span class="pl-sub">'+esc(label(m.type))+' for “'+esc(m.itemTitle)+'”'
+    + '<span class="pl-what"><span class="pl-title">'+esc(m.description)+'</span><span class="pl-sub">'+esc(mediaFor(m))
     + (m.assigneeEmail ? ' · '+esc(personName(m.assigneeEmail)) : ' · <em>nobody assigned</em>')+'</span></span>'
     + statusBadge(m.status, 'media')+'</button></li>';
 }
@@ -300,6 +313,17 @@ function renderGapList(main, key) {
     if (!gap) { main.innerHTML = '<div class="alert alert-err">That alert doesn’t exist. <a href="#dashboard">Back to the dashboard</a></div>'; return; }
     var head = '<p class="pl-back"><a href="#dashboard">Dashboard</a></p><h2 class="pl-h2">'+esc(gap.label)+'</h2>';
     if (!gap.count) { main.innerHTML = head + '<p class="empty">Nothing here right now.</p>'; return; }
+    if (gap.kind === 'event') {
+      return refreshEvents().then(function(){
+        var hint = gap.key === 'missing-from-breeze' ? 'Open each one to archive it, or keep it if it’s still happening.'
+          : 'Open each one to add its posts and graphics, or use Apply checklist rules.';
+        main.innerHTML = head + '<p class="hint pl-under">'+hint+'</p><section class="card"><ul class="pl-events-mini">'
+          + gap.ids.map(eventById).filter(Boolean).map(function(e){
+              return '<li><a href="#event/'+encodeURIComponent(e.id)+'"><span class="pl-swatch" style="background:'+esc(e.color)+'"></span>'
+                + '<span class="pl-ev-name">'+esc(e.name)+'</span><span class="muted">'+esc(rangeLabel(e.startDate, e.endDate))+'</span></a></li>';
+            }).join('') + '</ul></section>';
+      });
+    }
     var ids = gap.ids.join(',');
     var req = gap.kind === 'content'
       ? api('GET', '/api/pipeline/content' + qs({ ids: ids }))
@@ -467,13 +491,15 @@ function mediaCard(m) {
   S.rows.media[m.id] = m;
   var dim = m.status === 'captured' || m.status === 'edited' ? ' done' : '';
   var late = m.gatherDate && m.itemPublishDate && m.gatherDate > m.itemPublishDate;
-  return '<div class="pl-card'+dim+(late ? ' late' : '')+'" role="button" tabindex="0" draggable="true" data-kind="media" data-id="'+esc(m.id)+'" data-act="open" data-item="'+esc(m.contentItemId)+'" style="--ev:'+esc(m.eventColor || 'var(--rule)')+'"'
-    + ' title="'+esc(m.description+' for '+m.itemTitle+(late ? ' — gathered after the post publishes' : ''))+'">'
+  var open = m.contentItemId ? 'data-act="open" data-item="'+esc(m.contentItemId)+'"' : 'data-act="goto-event" data-event="'+esc(m.eventId)+'"';
+  return '<div class="pl-card'+dim+(late ? ' late' : '')+'" role="button" tabindex="0" draggable="true" data-kind="media" data-id="'+esc(m.id)+'" '+open+' style="--ev:'+esc(m.eventColor || 'var(--rule)')+'"'
+    + ' title="'+esc(m.description+' — '+mediaFor(m)+(late ? ' — gathered after the post publishes' : ''))+'">'
     + '<span class="pl-card-title">'+esc(m.description)+'</span>'
     + '<span class="pl-card-meta"><span class="pl-type">'+esc(label(m.type))+'</span>'
     + (m.assigneeEmail ? '<span class="pl-who" title="'+esc(personName(m.assigneeEmail))+'">'+esc(initials(m.assigneeEmail))+'</span>' : '<span class="pl-who none" title="Nobody assigned">?</span>')
     + statusBadge(m.status, 'media')+'</span>'
-    + '<span class="pl-card-for">For “'+esc(m.itemTitle)+'”'+(m.itemPublishDate ? ', '+esc(shortDate(m.itemPublishDate)) : '')+'</span></div>';
+    + '<span class="pl-card-for">'+(m.contentItemId ? 'For “'+esc(m.itemTitle)+'”'+(m.itemPublishDate ? ', '+esc(shortDate(m.itemPublishDate)) : '')
+        : 'For the event “'+esc(m.eventName)+'”')+'</span></div>';
 }
 
 // Drag a card to a day: move it on screen immediately, save, and put it back
@@ -680,14 +706,28 @@ function eventForm(e) {
 
 function renderEvent(main, id) {
   return Promise.all([api('GET', '/api/pipeline/events/' + encodeURIComponent(id)), refreshEvents()]).then(function(res){
-    var d = res[0], e = d.event;
+    var d = res[0];
+    // The calendar's name for the "From Breeze" badge; if Breeze can't be reached the page still shows.
+    return d.event.source === 'breeze' ? loadBreezeCalendars().then(function(){ return d; }, function(){ return d; }) : d;
+  }).then(function(d){
+    var e = d.event;
     d.items.forEach(function(i){ S.rows.content[i.id] = i; });
     var live = d.items.filter(function(i){ return i.status !== 'cancelled'; });
-    var done = d.media.filter(function(m){ return m.status === 'captured' || m.status === 'edited'; }).length;
+    // The event's own graphics have their own section; the table below is the posts' media.
+    var postMedia = d.media.filter(function(m){ return !m.onEvent; });
+    var graphics = d.media.filter(function(m){ return m.onEvent; });
+    S.eventGraphics = {};
+    graphics.forEach(function(m){ S.eventGraphics[m.id] = m; });
+    var done = postMedia.filter(isCollected).length;
     var html = '<p class="pl-back"><a href="#events">Events</a></p>'
+      + (e.breezeMissingSince && !e.archived ? '<div class="alert alert-warn pl-missing"><div><strong>Removed from Breeze.</strong> '
+          + 'This event wasn’t in Breeze when it synced on '+esc(whenLabel(e.breezeMissingSince))+'. If it was cancelled, archive it. If it’s still happening, keep it.</div>'
+          + '<div class="btn-row"><button class="btn-sm" type="button" data-act="archive-event" data-id="'+esc(e.id)+'" data-archived="">Archive</button>'
+          + '<button class="btn-sm" type="button" data-act="keep-event" data-id="'+esc(e.id)+'">Keep</button></div></div>' : '')
       + '<section class="pl-evhead" style="--ev:'+esc(e.color)+'"><div><h2 class="pl-h2">'+esc(e.name)+(e.archived ? ' <span class="muted">(archived)</span>' : '')+'</h2>'
       + '<p class="muted">'+esc(label(e.kind))+(e.startDate || e.endDate ? ' · '+esc(rangeLabel(e.startDate, e.endDate)) : '')
-      + (e.ownerEmail ? ' · Owner: '+esc(personName(e.ownerEmail)) : '')+'</p>'
+      + (e.ownerEmail ? ' · Owner: '+esc(personName(e.ownerEmail)) : '')
+      + (e.source === 'breeze' ? ' <span class="pl-breeze">From Breeze'+(e.breezeCalendarId ? ' · '+esc(calendarName(e.breezeCalendarId)) : '')+'</span>' : '')+'</p>'
       + (eventBadges(e) ? '<p class="pl-gnrow">'+eventBadges(e)
           + (e.reviewNote ? ' <button class="btn-sm" type="button" data-act="mark-reviewed" data-id="'+esc(e.id)+'">Mark reviewed</button>' : '')+'</p>' : '')
       + (e.notes ? '<p class="pl-notes">'+esc(e.notes)+'</p>' : '')
@@ -701,9 +741,11 @@ function renderEvent(main, id) {
           ? '<button class="btn-sm btn-sm-gold" type="button" data-act="plan-episode" data-id="'+esc(e.id)+'">Plan posts from an episode</button>' : '')
       + (e.kind === 'series' ? '<button class="btn-sm btn-sm-gold" type="button" data-act="plan-series" data-id="'+esc(e.id)+'">Plan posts with Claude</button>' : '')
       + '<button class="btn-sm" type="button" data-act="archive-event" data-id="'+esc(e.id)+'" data-archived="'+(e.archived ? '1' : '')+'">'+(e.archived ? 'Restore' : 'Archive')+'</button>'
+      + (!d.items.length && !graphics.length ? '<button class="btn-sm" type="button" data-act="apply-rules" data-id="'+esc(e.id)+'">Apply checklist rules</button>' : '')
       + '<button class="btn-sm btn-sm-gold" type="button" data-act="new-post" data-event="'+esc(e.id)+'">New post for this event</button></div></section>'
       + '<div id="pl-event-form"></div>'
-      + '<div class="pl-stats"><span><strong>'+live.length+'</strong> posts</span><span><strong>'+done+' of '+d.media.length+'</strong> media collected</span></div>'
+      + '<div class="pl-stats"><span><strong>'+live.length+'</strong> posts</span><span><strong>'+done+' of '+postMedia.length+'</strong> media collected</span>'
+      + (graphics.length ? '<span><strong>'+graphics.filter(isCollected).length+' of '+graphics.length+'</strong> graphics done</span>' : '')+'</div>'
       + draftingCardHtml(e);
 
     html += '<section class="card"><h3 class="ct">Posts</h3>'
@@ -716,9 +758,11 @@ function renderEvent(main, id) {
         : '<p class="empty">No posts yet. <button class="btn-sm" data-act="new-post" data-event="'+esc(e.id)+'">Plan the first one</button></p>')
       + '</section>';
 
+    html += eventGraphicsHtml(e, graphics);
+
     html += '<section class="card"><h3 class="ct">Media to gather</h3>'
-      + (d.media.length ? '<table class="pl-table"><thead><tr><th>Gather</th><th>What</th><th>Who</th><th>For post</th><th>Status</th></tr></thead><tbody>'
-          + d.media.map(function(m){
+      + (postMedia.length ? '<table class="pl-table"><thead><tr><th>Gather</th><th>What</th><th>Who</th><th>For post</th><th>Status</th></tr></thead><tbody>'
+          + postMedia.map(function(m){
               var late = m.gatherDate && m.itemPublishDate && m.gatherDate > m.itemPublishDate;
               return '<tr><td>'+(m.gatherDate ? esc(shortDate(m.gatherDate)) : '<span class="pl-gaptext">Not scheduled</span>')+(late ? ' <span class="pl-gaptext" title="After the post publishes">late</span>' : '')+'</td>'
                 + '<td>'+esc(m.description)+' <span class="muted">('+esc(m.type)+')</span></td>'
@@ -732,6 +776,56 @@ function renderEvent(main, id) {
     var dform = main.querySelector('form[data-form=drafting]');
     if (dform) showDraftingFields(dform);
   });
+}
+
+// ── An event's own graphics ─────────────────────────────────────────────────
+// Graphics that belong to the event rather than one post (a Facebook cover, a
+// slide). Rows use the post editor's media row markup and handlers; mediaChange
+// sends these straight to the server and redraws the event page.
+function graphicTypeOptions(sel) {
+  return ((S.meta && S.meta.graphicTypes) || []).map(function(g){
+    return '<option value="'+esc(g.key)+'"'+(g.key === sel ? ' selected' : '')+'>'+esc(g.label)+' ('+g.width+'×'+g.height+')</option>';
+  }).join('');
+}
+function eventGraphicRowHtml(x) {
+  var g = graphicTypeOf(x.graphicType), late = x.gatherDate && !isCollected(x) && x.gatherDate < S.meta.today;
+  return '<div class="pl-mrow'+(isCollected(x) ? ' is-done' : '')+'" data-media="'+esc(x.id)+'">'
+    + '<div class="pl-mline"><label class="pl-collect" title="Done"><input type="checkbox" data-mcollect'+(isCollected(x) ? ' checked' : '')+'><span>Done</span></label>'
+    + '<input type="text" data-mfield="description" value="'+esc(x.description)+'" aria-label="What the graphic is">'
+    + '<button class="pl-x" type="button" data-act="delete-media" aria-label="Remove '+esc(x.description)+'">×</button></div>'
+    + '<div class="pl-mline pl-mline-sm"><select data-mfield="graphicType" aria-label="Kind of graphic">'
+    +   (x.graphicType ? '' : '<option value="" selected>Pick a kind</option>') + graphicTypeOptions(x.graphicType)+'</select>'
+    + '<label class="pl-inline">Due <input type="date" data-mfield="gatherDate" value="'+esc(x.gatherDate || '')+'" aria-label="Due"></label>'
+    + '<input type="email" data-mfield="assigneeEmail" list="pl-people" value="'+esc(x.assigneeEmail)+'" placeholder="Who makes it" aria-label="Who makes it"></div>'
+    + (g ? '<p class="hint pl-gsize">'+esc(g.usedFor)+'.</p>' : '')
+    + mediaFileHtml(x)
+    + '<div class="pl-picker" hidden></div>'
+    // A ticked graphic is "Done"; one with its file attached is "Final file", as everywhere else.
+    + '<p class="pl-mstatus">'+(x.status === 'captured' ? '<span class="pl-status pl-s-captured pl-media-s">Done</span>' : statusBadge(x.status, 'media'))
+    + (late ? ' <span class="pl-gaptext">Past its due date.</span>' : '')+'</p>'
+    + '</div>';
+}
+function eventGraphicsHtml(e, graphics) {
+  return '<section class="card pl-evgraphics"><h3 class="ct">Graphics</h3>'
+    + '<p class="hint pl-under">Graphics for the event itself rather than one post, such as a Facebook cover or an announcement slide. A graphic is done once its final file is attached or it’s ticked Done.</p>'
+    + (graphics.length ? graphics.map(eventGraphicRowHtml).join('') : '<p class="empty">No graphics for this event yet.</p>')
+    + '<form class="pl-madd pl-gadd" data-form="event-graphic" data-id="'+esc(e.id)+'">'
+    + '<select name="graphicType" aria-label="Kind of graphic">'+graphicTypeOptions('')+'</select>'
+    + '<label class="pl-inline">Due <input type="date" name="gatherDate" aria-label="Due"></label>'
+    + '<button class="btn-sm btn-sm-gold" type="submit">Add graphic</button></form></section>';
+}
+function addEventGraphic(form) {
+  var fd = new FormData(form), type = fd.get('graphicType');
+  api('POST', '/api/pipeline/events/' + encodeURIComponent(form.getAttribute('data-id')) + '/media',
+    { description: graphicLabel(type), type: 'graphic', graphicType: type, gatherDate: fd.get('gatherDate') || null })
+    .then(function(){ toast('Graphic added.', 'ok'); render(); })
+    .catch(function(err){ toast(err.message, 'err'); });
+}
+// A date-and-time stamp in the viewer's own clock, e.g. "Tue Nov 24, 3:05pm".
+function whenLabel(iso) {
+  var d = new Date(iso);
+  if (isNaN(d)) return '';
+  return shortDate(isoOf(d)) + ', ' + timeLabel(String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0'));
 }
 
 // ── Planning several posts at once ───────────────────────────────────────────
@@ -1129,20 +1223,7 @@ function collectSectionHtml(item) {
     + '<span class="pl-prog">'+(media.length ? done+' of '+media.length+' collected' : item.noMediaNeeded ? 'Not needed' : 'None listed yet')+'</span></div>';
   html += media.map(function(x){
     var late = x.gatherDate && item.publishDate && x.gatherDate > item.publishDate;
-    var file = x.approvalId
-      ? '<div class="pl-file"><img src="/api/pipeline/approved/'+encodeURIComponent(x.approvalId)+'/image" alt="" loading="lazy">'
-        + '<span><strong>'+esc(x.approvalTitle || 'Approved file')+'</strong><br><span class="muted">From Approvals</span></span>'
-        + '<button class="btn-sm" type="button" data-act="clear-approval">Remove</button></div>'
-      : x.fileType
-      ? '<div class="pl-file">'+(x.fileType === 'image'
-          ? '<img src="'+esc(x.fileLink)+'" alt="" loading="lazy">'
-          : '<span class="pl-file-video" aria-hidden="true">▶</span>')
-        + '<span><strong><a href="'+esc(x.fileLink)+'" target="_blank" rel="noopener">'+esc(x.fileName || 'Uploaded file')+'</a></strong><br><span class="muted">Uploaded '+(x.fileType === 'video' ? 'video' : 'photo')+'</span></span>'
-        + '<button class="btn-sm" type="button" data-act="clear-file">Remove</button></div>'
-      : '<div class="pl-mline pl-mline-sm pl-attach"><button class="btn-sm" type="button" data-act="pick-approval">Choose from Approvals</button>'
-        + '<button class="btn-sm" type="button" data-act="upload-file">Upload a file</button>'
-        + '<input type="file" data-upload hidden accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/quicktime">'
-        + '<input type="url" data-mfield="fileLink" value="'+esc(x.fileLink)+'" placeholder="or paste a link (optional)" aria-label="Link to the file"></div>';
+    var file = mediaFileHtml(x);
     return '<div class="pl-mrow'+(isCollected(x) ? ' is-done' : '')+'" data-media="'+esc(x.id)+'">'
       + '<div class="pl-mline"><label class="pl-collect" title="Collected"><input type="checkbox" data-mcollect'+(isCollected(x) ? ' checked' : '')+'><span>Collected</span></label>'
       + '<input type="text" data-mfield="description" value="'+esc(x.description)+'" aria-label="What to collect">'
@@ -1162,6 +1243,24 @@ function collectSectionHtml(item) {
     + '<input type="date" name="gatherDate" aria-label="Gather date">'
     + '<button class="btn-sm btn-sm-gold" type="submit">Add</button></form></section>';
   return html;
+}
+
+// The finished file of a thing to collect: the approved or uploaded file, or the ways to add one.
+function mediaFileHtml(x) {
+  return x.approvalId
+    ? '<div class="pl-file"><img src="/api/pipeline/approved/'+encodeURIComponent(x.approvalId)+'/image" alt="" loading="lazy">'
+      + '<span><strong>'+esc(x.approvalTitle || 'Approved file')+'</strong><br><span class="muted">From Approvals</span></span>'
+      + '<button class="btn-sm" type="button" data-act="clear-approval">Remove</button></div>'
+    : x.fileType
+    ? '<div class="pl-file">'+(x.fileType === 'image'
+        ? '<img src="'+esc(x.fileLink)+'" alt="" loading="lazy">'
+        : '<span class="pl-file-video" aria-hidden="true">▶</span>')
+      + '<span><strong><a href="'+esc(x.fileLink)+'" target="_blank" rel="noopener">'+esc(x.fileName || 'Uploaded file')+'</a></strong><br><span class="muted">Uploaded '+(x.fileType === 'video' ? 'video' : 'photo')+'</span></span>'
+      + '<button class="btn-sm" type="button" data-act="clear-file">Remove</button></div>'
+    : '<div class="pl-mline pl-mline-sm pl-attach"><button class="btn-sm" type="button" data-act="pick-approval">Choose from Approvals</button>'
+      + '<button class="btn-sm" type="button" data-act="upload-file">Upload a file</button>'
+      + '<input type="file" data-upload hidden accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/quicktime">'
+      + '<input type="url" data-mfield="fileLink" value="'+esc(x.fileLink)+'" placeholder="or paste a link (optional)" aria-label="Link to the file"></div>';
 }
 
 function redrawMedia() {
@@ -1186,6 +1285,10 @@ function localMediaStatus(x) {
 }
 
 function mediaChange(id, body) {
+  if (S.eventGraphics[id]) {
+    return api('PATCH', '/api/pipeline/media/' + encodeURIComponent(id), body).then(function(res){ warnAll(res.warnings); return render(); })
+      .catch(function(e){ toast(e.message, 'err'); render(); });
+  }
   if (!drawer.id) {
     var x = drawer.media.filter(function(m){ return m.id === id; })[0];
     if (!x) return;
@@ -1203,13 +1306,16 @@ function mediaChange(id, body) {
 function saveMediaField(row, input) {
   var field = input.getAttribute('data-mfield'), body = {};
   body[field] = field === 'gatherDate' ? (input.value || null) : input.value;
-  if (field === 'description' && !input.value.trim()) { toast('Describe what needs collecting.', 'err'); return reloadDrawer(); }
+  if (field === 'description' && !input.value.trim()) {
+    toast('Describe what needs collecting.', 'err');
+    return S.eventGraphics[row.getAttribute('data-media')] ? render() : reloadDrawer();
+  }
   mediaChange(row.getAttribute('data-media'), body);
 }
 
 function toggleCollected(row, checked) {
   var id = row.getAttribute('data-media');
-  var x = drawer.media.filter(function(m){ return m.id === id; })[0];
+  var x = S.eventGraphics[id] || drawer.media.filter(function(m){ return m.id === id; })[0];
   if (!x) return;
   var status = checked ? ((x.approvalId || x.fileLink) ? 'edited' : 'captured') : (x.gatherDate ? 'scheduled' : 'needed');
   mediaChange(id, { status: status });
@@ -1241,6 +1347,13 @@ function addMedia(form) {
 
 function deleteMedia(row) { deleteMediaById(row.getAttribute('data-media')); }
 function deleteMediaById(id) {
+  var g = S.eventGraphics[id];
+  if (g) {
+    if (!confirm('Remove “' + g.description + '” from this event?')) return;
+    api('DELETE', '/api/pipeline/media/' + encodeURIComponent(id)).then(function(){ toast('Graphic removed.', 'ok'); render(); })
+      .catch(function(err){ toast(err.message, 'err'); });
+    return;
+  }
   if (!drawer.id) { drawer.media = drawer.media.filter(function(m){ return m.id !== id; }); redrawMedia(); return; }
   api('DELETE', '/api/pipeline/media/' + encodeURIComponent(id)).then(function(){
     return reloadDrawer().then(render);
@@ -2164,8 +2277,308 @@ function renderSettings(main, arg) {
       +   '<div class="field"><label for="st-gl">Deadline at</label><input id="st-gl" type="time" name="gnDeadlineAt" value="'+esc(s.gnDeadlineAt)+'"></div></div>'
       +   '<div class="hint">The issue is created, reminded and closed on the three days before the send day, at these times.</div></section>'
       + '<div class="pl-form-msg" id="st-msg"></div>'
-      + '<div class="btn-row"><button class="btn btn-primary" type="submit">Save settings</button></div></form>';
+      + '<div class="btn-row"><button class="btn btn-primary" type="submit">Save settings</button></div></form>'
+      + breezeSettingsHtml(s);
+    return loadBreezeSections(s);
   });
+}
+
+// ── Settings: Breeze, checklist rules, repeating events ──────────────────────
+// Calendar names come from Breeze itself. Fetched once per page load (Breeze
+// rate-limits), and again whenever Settings opens so new calendars show.
+var breezeCals = null;
+function loadBreezeCalendars(force) {
+  if (breezeCals && !force) return Promise.resolve(breezeCals);
+  return api('GET', '/api/pipeline/breeze/calendars').then(function(d){ breezeCals = { calendars: d.calendars, ticked: d.ticked }; return breezeCals; });
+}
+function calendarName(id) {
+  var c = breezeCals && breezeCals.calendars.filter(function(x){ return String(x.id) === String(id); })[0];
+  return c ? c.name : 'calendar ' + id;
+}
+// One line for a sync's report, in the user's words.
+function syncLine(r) {
+  if (r.skipped === 'not-connected') return 'Breeze isn’t connected yet.';
+  if (r.skipped === 'no-calendars') return 'No calendars are ticked, so nothing came in.';
+  var parts = [['created', 'new'], ['updated', 'updated'], ['shifted', 'moved to a new date'], ['flaggedMissing', 'removed from Breeze'],
+    ['cleared', 'back in Breeze'], ['becameSeries', 'now repeating']]
+    .filter(function(p){ return r[p[0]]; }).map(function(p){ return r[p[0]] + ' ' + p[1]; });
+  return parts.length ? parts.join(', ') + '.' : 'Everything was already up to date.';
+}
+// A calendar Breeze didn't answer for: its events were left alone, and this must never read as a clean sync.
+function failedLine(ids) {
+  return ids && ids.length ? 'Couldn’t read ' + ids.map(calendarName).join(', ') + ' from Breeze, so '
+    + (ids.length === 1 ? 'its events were' : 'their events were') + ' left as they were. The next sync tries again.' : '';
+}
+function syncStatusHtml(when, failed) {
+  return '<p class="hint">' + (when ? 'Last synced ' + esc(whenLabel(when)) + '.' : 'Not synced yet.') + ' Breeze is checked every 3 hours.</p>'
+    + (failed && failed.length ? '<div class="alert alert-warn">' + esc(failedLine(failed)) + '</div>' : '');
+}
+
+function breezeSettingsHtml(s) {
+  var html = '<div class="pl-settings pl-breeze-settings">'
+    + '<form class="card" data-form="breeze"><h3 class="ct">Breeze</h3>'
+    + '<p class="hint pl-under">Brings events from the church’s Breeze calendars in as events here, each with the posts and graphics your checklist rules list. Nothing is ever deleted: an event that disappears from Breeze is flagged for you to archive or keep.</p>'
+    + '<div class="row2"><div class="field"><label for="bz-sub">Breeze address</label><input id="bz-sub" type="text" name="breezeSubdomain" value="'+esc(s.breezeSubdomain)+'" placeholder="grmc" autocomplete="off">'
+    +   '<div class="hint">The first part of your Breeze address: <strong>grmc</strong>.breezechms.com</div></div>'
+    + '<div class="field"><label for="bz-key">API key</label><input id="bz-key" type="text" name="breezeKey" autocomplete="off">'
+    +   '<div class="hint">'+(s.hasBreeze ? 'A key is set. Leave blank to keep it.' : 'Not set yet. In Breeze, find it under your account’s API settings.')+'</div></div></div>'
+    + '<div class="field"><label for="bz-owner">Owner of events from Breeze</label><input id="bz-owner" type="email" name="breezeDefaultOwner" list="pl-people" value="'+esc(s.breezeDefaultOwner)+'" placeholder="name@church.org">'
+    +   '<div class="hint">Owns the events and posts Breeze brings in, and gets their reminder emails.</div></div>'
+    + '<div class="pl-form-msg"></div><div class="btn-row"><button class="btn btn-primary" type="submit">Save Breeze settings</button></div></form>';
+  if (s.hasBreeze) {
+    html += '<section class="card"><h3 class="ct">Breeze calendars</h3>'
+      + '<p class="hint pl-under">Tick the calendars whose events belong here. Unticking one keeps its events here, but they stop updating.</p>'
+      + '<div id="bz-cals"><p class="hint">Loading calendars from Breeze…</p></div>'
+      + '<div id="bz-status"></div>'
+      + '<div class="btn-row"><button class="btn btn-secondary" type="button" data-act="breeze-sync">Sync now</button></div>'
+      + '<div id="bz-result"></div></section>';
+  }
+  html += '<section class="card" id="bz-rules"><h3 class="ct">Checklist rules</h3>'
+    + '<p class="hint pl-under">When an event first comes in from Breeze, these rules decide which posts and graphics it gets. Rules for its calendar go first, then rules that match its name, in the order below. “Add” puts more items on the list; “Replace” starts the list again. Changing a rule never changes checklists already made.</p>'
+    + '<div id="bz-rule-list"><p class="hint">Loading rules…</p></div><div id="bz-rule-form"></div>'
+    + '<div class="btn-row"><button class="btn btn-secondary" type="button" data-act="new-rule">Add a rule</button></div></section>';
+  if (s.hasBreeze) {
+    html += '<section class="card" id="bz-series"><h3 class="ct">Repeating events</h3>'
+      + '<p class="hint pl-under">How each event that repeats in Breeze is brought in. Changing it doesn’t delete events already made; archive any you no longer want. The next sync follows the new choice.</p>'
+      + '<div id="bz-series-list"><p class="hint">Loading…</p></div></section>';
+  }
+  html += '<section class="card"><h3 class="ct">Reminder email</h3>'
+    + '<p class="hint pl-under">Monday and Thursday at 8am, everyone with something coming up gets one email: what’s overdue, what’s due this week, new events from Breeze, and events with nothing planned. It uses the Resend key and From address under Grace Notes email.</p>'
+    + '<div class="btn-row"><button class="btn btn-secondary" type="button" data-act="digest-test">Send me a test reminder</button></div></section>';
+  return html + '</div>';
+}
+
+// Fills in the parts that need Breeze or the database; one failing never blanks the rest.
+var ruleState = { rules: [] };
+function loadBreezeSections(s) {
+  var cals = s.hasBreeze ? loadBreezeCalendars(true).then(function(c){
+      $('bz-cals').innerHTML = calendarTicksHtml(c);
+    }, function(e){
+      $('bz-cals').innerHTML = '<div class="alert alert-err">Couldn’t reach Breeze: '+esc(e.message)+' Check the address and API key.</div>';
+    }).then(function(){ $('bz-status').innerHTML = syncStatusHtml(s.breezeLastSync, s.breezeLastSyncFailed); })
+    : Promise.resolve();
+  // Rules name calendars, so they're drawn once the names are known (or known to be missing).
+  return cals.then(function(){ return Promise.all([loadRules(), s.hasBreeze ? loadSeries() : null]); });
+}
+function calendarTicksHtml(c) {
+  if (!c.calendars.length) return '<p class="hint">Breeze has no calendars on this account.</p>';
+  return '<div class="pl-calticks">' + c.calendars.map(function(cal){
+    return '<label class="check"><input type="checkbox" data-act="bz-cal" value="'+esc(cal.id)+'"'+(c.ticked.indexOf(String(cal.id)) >= 0 ? ' checked' : '')+'> '+esc(cal.name)+'</label>';
+  }).join('') + '</div>';
+}
+function saveCalendars() {
+  var ids = Array.prototype.map.call(document.querySelectorAll('[data-act=bz-cal]:checked'), function(b){ return b.value; });
+  api('POST', '/api/settings', { breezeCalendars: ids }).then(function(){
+    if (breezeCals) breezeCals.ticked = ids;
+    toast('Calendars saved. Press Sync now to bring their events in.', 'ok');
+  }).catch(function(e){ toast(e.message, 'err'); });
+}
+function runSync(btn) {
+  btn.disabled = true; btn.innerHTML = '<span class="spin pl-spin-dark"></span> Syncing…';
+  api('POST', '/api/pipeline/breeze/sync').then(function(d){
+    var r = d.report, failed = r.failedCalendars || [];
+    btn.disabled = false; btn.textContent = 'Sync now';
+    $('bz-status').innerHTML = syncStatusHtml(new Date().toISOString(), []);
+    $('bz-result').innerHTML = '<div class="alert '+(failed.length ? 'alert-warn' : 'alert-ok')+'">'+esc(syncLine(r))
+      + (failed.length ? ' ' + esc(failedLine(failed)) : '') + '</div>';
+    refreshEvents();
+    loadSeries();
+  }).catch(function(e){ btn.disabled = false; btn.textContent = 'Sync now'; $('bz-result').innerHTML = '<div class="alert alert-err">'+esc(e.message)+'</div>'; });
+}
+function saveBreezeSettings(form) {
+  var fd = new FormData(form), btn = form.querySelector('[type=submit]');
+  var body = { breezeSubdomain: String(fd.get('breezeSubdomain') || '').trim(), breezeKey: String(fd.get('breezeKey') || '').trim(),
+    breezeDefaultOwner: String(fd.get('breezeDefaultOwner') || '').trim() };
+  btn.disabled = true;
+  api('POST', '/api/settings', body).then(function(){ toast('Breeze settings saved.', 'ok'); breezeCals = null; return render(); })
+    .catch(function(e){ btn.disabled = false; form.querySelector('.pl-form-msg').innerHTML = '<div class="alert alert-err">'+esc(e.message)+'</div>'; });
+}
+
+// ── Repeating events ──
+var SERIES_MODES = [['series', 'One checklist for the whole series'], ['each', 'A checklist for every date'], ['ignore', 'Leave it out']];
+function loadSeries() {
+  var box = $('bz-series-list');
+  if (!box) return Promise.resolve();
+  return api('GET', '/api/pipeline/breeze/series').then(function(d){
+    // A one-off isn't repeating; the sync turns it into a series by itself if a second date appears.
+    var rows = d.series.filter(function(x){ return x.mode !== 'single'; });
+    box.innerHTML = rows.length ? '<table class="pl-table"><thead><tr><th>Event</th><th>Calendar</th><th>Bring it in as</th></tr></thead><tbody>'
+      + rows.map(function(x){
+          return '<tr><td>'+esc(x.name)+(x.eventCount ? ' <span class="muted">('+plural(x.eventCount, 'event')+' here)</span>' : '')+'</td>'
+            + '<td>'+esc(calendarName(x.calendarId))+'</td>'
+            + '<td><select data-act="series-mode" data-id="'+esc(x.breezeEventId)+'" aria-label="How to bring in '+esc(x.name)+'">'
+            + SERIES_MODES.map(function(m){ return '<option value="'+m[0]+'"'+(m[0] === x.mode ? ' selected' : '')+'>'+m[1]+'</option>'; }).join('')
+            + '</select></td></tr>';
+        }).join('') + '</tbody></table>'
+      : '<p class="empty">No repeating events have come in from Breeze yet.</p>';
+  }).catch(function(e){ box.innerHTML = '<div class="alert alert-err">'+esc(e.message)+'</div>'; });
+}
+function saveSeriesMode(sel) {
+  api('PATCH', '/api/pipeline/breeze/series/' + encodeURIComponent(sel.getAttribute('data-id')), { mode: sel.value })
+    .then(function(){ toast('Saved. The next sync follows it.', 'ok'); })
+    .catch(function(e){ toast(e.message, 'err'); loadSeries(); });
+}
+
+// ── Checklist rules ──
+var REPEAT_LABELS = { '': 'Decide for me', series: 'One checklist for the whole series', each: 'A checklist for every date', ignore: 'Leave it out' };
+function loadRules() {
+  var box = $('bz-rule-list');
+  if (!box) return Promise.resolve();
+  return api('GET', '/api/pipeline/checklist-rules').then(function(d){
+    ruleState.rules = d.rules;
+    box.innerHTML = d.rules.length ? '<ol class="pl-rules">' + d.rules.map(ruleRowHtml).join('') + '</ol>'
+      : '<p class="empty">No rules yet. Events from Breeze still come in, with nothing planned for them.</p>';
+  }).catch(function(e){ box.innerHTML = '<div class="alert alert-err">'+esc(e.message)+'</div>'; });
+}
+function ruleMatchText(r) {
+  return r.match === 'calendar' ? 'Events on the ' + calendarName(r.calendarId) + ' calendar' : 'Events whose name contains “' + r.namePattern + '”';
+}
+function itemText(it, items) {
+  var when = it.daysBefore ? plural(it.daysBefore, 'day') + ' before' : 'on the day';
+  if (it.kind === 'post') {
+    var plats = it.platforms.map(function(k){ var p = platformMeta(k); return p ? p.label : k; }).join(', ');
+    return 'Post “' + it.title + '” on ' + plats + ', ' + when;
+  }
+  var target = it.forPost != null && items[it.forPost];
+  return graphicLabel(it.graphicType) + ' graphic, due ' + when + (target ? ', for “' + target.title + '”' : ', for the event');
+}
+function ruleRowHtml(r, i) {
+  var n = ruleState.rules.length;
+  return '<li class="pl-rule'+(r.active ? '' : ' off')+'">'
+    + '<div class="pl-rule-main"><strong>'+esc(ruleMatchText(r))+'</strong>'
+    + '<span class="muted">'+(r.effect === 'replace' ? 'Replaces earlier rules’ items' : 'Adds to the list')
+    + (r.repeatMode ? ' · If it repeats: '+esc(REPEAT_LABELS[r.repeatMode].toLowerCase()) : '')+(r.active ? '' : ' · Off')+'</span>'
+    + (r.items.length ? '<ul class="pl-rule-items">' + r.items.map(function(it){ return '<li>'+esc(itemText(it, r.items))+'</li>'; }).join('') + '</ul>'
+        : '<span class="muted">No items</span>')
+    + '</div><div class="pl-rule-acts">'
+    + '<label class="check"><input type="checkbox" data-act="rule-active" data-id="'+esc(r.id)+'"'+(r.active ? ' checked' : '')+'> On</label>'
+    + '<button class="btn-sm" type="button" data-act="rule-move" data-i="'+i+'" data-dir="-1" aria-label="Move up"'+(i === 0 ? ' disabled' : '')+'>↑</button>'
+    + '<button class="btn-sm" type="button" data-act="rule-move" data-i="'+i+'" data-dir="1" aria-label="Move down"'+(i === n - 1 ? ' disabled' : '')+'>↓</button>'
+    + '<button class="btn-sm" type="button" data-act="edit-rule" data-id="'+esc(r.id)+'">Edit</button>'
+    + '<button class="btn-sm" type="button" data-act="delete-rule" data-id="'+esc(r.id)+'">Delete</button></div></li>';
+}
+// Swap two neighbours, then number the whole list so positions are always distinct.
+function moveRule(i, dir) {
+  var list = ruleState.rules.slice(), j = i + dir;
+  if (j < 0 || j >= list.length) return;
+  var t = list[i]; list[i] = list[j]; list[j] = t;
+  list.reduce(function(chain, r, pos){
+    return chain.then(function(){ return r.position === pos ? null : api('PATCH', '/api/pipeline/checklist-rules/' + encodeURIComponent(r.id), { position: pos }); });
+  }, Promise.resolve()).then(loadRules).catch(function(e){ toast(e.message, 'err'); loadRules(); });
+}
+function ruleById(id){ return ruleState.rules.filter(function(r){ return r.id === id; })[0]; }
+
+function ruleItemHtml(it, i, items) {
+  var del = '<button class="pl-x" type="button" data-act="rule-item-remove" data-i="'+i+'" aria-label="Remove this item">×</button>';
+  var days = '<label class="pl-inline"><input type="number" data-ri="daysBefore" min="0" max="365" value="'+esc(it.daysBefore)+'" aria-label="Days before the event"> days before</label>';
+  if (it.kind === 'post') {
+    var postNo = items.slice(0, i + 1).filter(function(x){ return x.kind === 'post'; }).length;
+    return '<div class="pl-ritem" data-kind="post"><span class="pl-ritem-tag">Post '+postNo+'</span>'
+      + '<input type="text" data-ri="title" value="'+esc(it.title)+'" placeholder="{event} — save the date" aria-label="Post title">' + del
+      + '<div class="pl-ritem-sub"><span class="pl-ritem-plats">' + S.meta.platforms.map(function(p){
+          return '<label class="check"><input type="checkbox" data-ri="platform" value="'+esc(p.key)+'"'+(it.platforms.indexOf(p.key) >= 0 ? ' checked' : '')+'> '+esc(p.label)+'</label>';
+        }).join('') + '</span>' + days + '</div></div>';
+  }
+  var posts = items.map(function(x, k){ return { x: x, k: k }; }).filter(function(p){ return p.x.kind === 'post'; });
+  return '<div class="pl-ritem" data-kind="graphic"><span class="pl-ritem-tag">Graphic</span>'
+    + '<select data-ri="graphicType" aria-label="Kind of graphic">'+graphicTypeOptions(it.graphicType)+'</select>' + del
+    + '<div class="pl-ritem-sub">' + days
+    + '<label class="pl-inline">Goes with <select data-ri="forPost" aria-label="Goes with">'
+    + '<option value="">The event</option>' + posts.map(function(p, n){
+        return '<option value="'+p.k+'"'+(it.forPost === p.k ? ' selected' : '')+'>Post '+(n + 1)+(p.x.title ? ': '+esc(p.x.title) : '')+'</option>';
+      }).join('') + '</select></label></div></div>';
+}
+function ruleItemsHtml(items) {
+  return items.length ? items.map(function(it, i){ return ruleItemHtml(it, i, items); }).join('')
+    : '<p class="hint">No items yet. Add the posts and graphics an event like this needs.</p>';
+}
+function readRuleItems(form) {
+  return Array.prototype.map.call(form.querySelectorAll('.pl-ritem'), function(row){
+    var days = Number(row.querySelector('[data-ri=daysBefore]').value || 0);
+    if (row.getAttribute('data-kind') === 'post') {
+      return { kind: 'post', title: row.querySelector('[data-ri=title]').value.trim(), daysBefore: days,
+        platforms: Array.prototype.map.call(row.querySelectorAll('[data-ri=platform]:checked'), function(b){ return b.value; }) };
+    }
+    var fp = row.querySelector('[data-ri=forPost]').value;
+    var g = { kind: 'graphic', graphicType: row.querySelector('[data-ri=graphicType]').value, daysBefore: days };
+    if (fp !== '') g.forPost = Number(fp);
+    return g;
+  });
+}
+// Adding or removing an item redraws the list from what's typed, keeping each graphic on its post.
+function changeRuleItems(form, fn) {
+  var items = fn(readRuleItems(form));
+  $('rf-items').innerHTML = ruleItemsHtml(items);
+}
+function removeRuleItem(items, i) {
+  items.splice(i, 1);
+  items.forEach(function(it){
+    if (it.kind !== 'graphic' || it.forPost == null) return;
+    if (it.forPost === i) delete it.forPost; else if (it.forPost > i) it.forPost -= 1;
+  });
+  return items;
+}
+// A post's title shows in the graphics' "Goes with" lists; keep those in step while typing.
+function refreshForPostLabels(form) {
+  var items = readRuleItems(form);
+  form.querySelectorAll('[data-ri=forPost]').forEach(function(sel){
+    var n = 0;
+    Array.prototype.forEach.call(sel.options, function(o){
+      if (o.value === '') return;
+      n += 1;
+      var t = items[Number(o.value)] && items[Number(o.value)].title;
+      o.textContent = 'Post ' + n + (t ? ': ' + t : '');
+    });
+  });
+}
+function ruleFormHtml(r) {
+  r = r || { match: 'calendar', calendarId: '', namePattern: '', effect: 'add', repeatMode: null, items: [], active: true };
+  var ticked = (breezeCals && breezeCals.ticked) || [];
+  var calIds = ticked.slice();
+  if (r.calendarId && calIds.indexOf(r.calendarId) < 0) calIds.push(r.calendarId);
+  return '<form class="card pl-form pl-ruleform" data-form="rule" data-id="'+esc(r.id || '')+'">'
+    + '<h3 class="ct">'+(r.id ? 'Edit rule' : 'New rule')+'</h3>'
+    + '<fieldset class="field"><legend class="lbl">Which events</legend>'
+    + '<div class="pl-rf-match"><label class="check"><input type="radio" name="match" value="calendar"'+(r.match === 'calendar' ? ' checked' : '')+' data-act="rule-match"> Everything on a calendar</label>'
+    + '<select name="calendarId" aria-label="Calendar">'+(calIds.length ? '' : '<option value="">Tick a calendar above first</option>')
+    +   calIds.map(function(id){ return '<option value="'+esc(id)+'"'+(id === r.calendarId ? ' selected' : '')+'>'+esc(calendarName(id))+'</option>'; }).join('')+'</select></div>'
+    + '<div class="pl-rf-match"><label class="check"><input type="radio" name="match" value="name"'+(r.match === 'name' ? ' checked' : '')+' data-act="rule-match"> Events whose name contains</label>'
+    + '<input type="text" name="namePattern" value="'+esc(r.namePattern)+'" placeholder="VBS" aria-label="Name contains"></div>'
+    + '<div class="hint">Capitals don’t matter. A name rule works on any event, wherever it came from.</div></fieldset>'
+    + '<div class="row2"><div class="field"><label for="rf-effect">Its items</label><select id="rf-effect" name="effect">'
+    +   '<option value="add"'+(r.effect === 'add' ? ' selected' : '')+'>Add to what earlier rules give</option>'
+    +   '<option value="replace"'+(r.effect === 'replace' ? ' selected' : '')+'>Replace what earlier rules give</option></select></div>'
+    + '<div class="field"><label for="rf-repeat">If the event repeats</label><select id="rf-repeat" name="repeatMode">'
+    +   Object.keys(REPEAT_LABELS).map(function(k){ return '<option value="'+k+'"'+(k === (r.repeatMode || '') ? ' selected' : '')+'>'+REPEAT_LABELS[k]+'</option>'; }).join('')
+    +   '</select><div class="hint">Used the first time a repeating event is seen. “Decide for me” makes one checklist for the series.</div></div></div>'
+    + '<div class="field"><span class="lbl">Checklist</span><div id="rf-items">'+ruleItemsHtml(r.items)+'</div>'
+    +   '<div class="btn-row"><button class="btn-sm" type="button" data-act="rule-add-post">Add a post</button>'
+    +   '<button class="btn-sm" type="button" data-act="rule-add-graphic">Add a graphic</button></div>'
+    +   '<div class="hint">In a post title, {event} becomes the event’s name and {date} its date. Days before counts back from the event.</div></div>'
+    + '<label class="check"><input type="checkbox" name="active"'+(r.active ? ' checked' : '')+'> Rule is on</label>'
+    + '<div class="pl-form-msg"></div>'
+    + '<div class="btn-row"><button class="btn btn-primary" type="submit">Save rule</button>'
+    + '<button class="btn btn-secondary" type="button" data-act="cancel-rule">Cancel</button></div></form>';
+}
+function openRuleForm(r) {
+  $('bz-rule-form').innerHTML = ruleFormHtml(r);
+  showRuleMatch($('bz-rule-form').querySelector('form'));
+  $('bz-rule-form').scrollIntoView({ block: 'nearest' });
+}
+function showRuleMatch(form) {
+  var byCal = form.querySelector('[name=match]:checked').value === 'calendar';
+  form.querySelector('[name=calendarId]').disabled = !byCal;
+  form.querySelector('[name=namePattern]').disabled = byCal;
+}
+function saveRule(form) {
+  var fd = new FormData(form), id = form.getAttribute('data-id'), match = fd.get('match');
+  var body = { match: match, effect: fd.get('effect'), repeatMode: fd.get('repeatMode') || null,
+    items: readRuleItems(form), active: !!fd.get('active') };
+  if (match === 'calendar') body.calendarId = fd.get('calendarId') || ''; else body.namePattern = String(fd.get('namePattern') || '').trim();
+  var msg = form.querySelector('.pl-form-msg');
+  (id ? api('PATCH', '/api/pipeline/checklist-rules/' + encodeURIComponent(id), body) : api('POST', '/api/pipeline/checklist-rules', body))
+    .then(function(){ toast('Rule saved. It applies to events that come in from now on.', 'ok'); $('bz-rule-form').innerHTML = ''; return loadRules(); })
+    .catch(function(e){ msg.innerHTML = '<div class="alert alert-err">'+esc(e.message)+'</div>'; });
 }
 
 function saveSettings(form) {
@@ -2207,6 +2620,10 @@ document.addEventListener('click', function(e){
     case 'open':
       e.preventDefault();
       openPost(el.getAttribute('data-item') || el.getAttribute('data-id'));
+      break;
+    case 'goto-event':
+      e.preventDefault();
+      location.hash = '#event/' + encodeURIComponent(el.getAttribute('data-event'));
       break;
     case 'new-post':
       e.preventDefault();
@@ -2388,6 +2805,42 @@ document.addEventListener('click', function(e){
     case 'edit-event':
       $('pl-event-form').innerHTML = eventForm(eventById(el.getAttribute('data-id'))); $('ef-name').focus(); break;
     case 'cancel-event-form': $('pl-event-form').innerHTML = ''; render(); break;
+    case 'breeze-sync': runSync(el); break;
+    case 'digest-test':
+      el.disabled = true;
+      api('POST', '/api/pipeline/digest/test').then(function(d){ el.disabled = false; toast(d.message || 'Sent.', 'ok'); })
+        .catch(function(err){ el.disabled = false; toast(err.message, 'err'); });
+      break;
+    case 'new-rule': openRuleForm(null); break;
+    case 'edit-rule': openRuleForm(ruleById(el.getAttribute('data-id'))); break;
+    case 'cancel-rule': $('bz-rule-form').innerHTML = ''; break;
+    case 'delete-rule':
+      var dr = ruleById(el.getAttribute('data-id'));
+      if (!confirm('Delete the rule for ' + ruleMatchText(dr).replace(/^Events /, 'events ') + '? Checklists it already made stay as they are.')) return;
+      api('DELETE', '/api/pipeline/checklist-rules/' + encodeURIComponent(dr.id)).then(function(){ toast('Rule deleted.', 'ok'); loadRules(); })
+        .catch(function(err){ toast(err.message, 'err'); });
+      break;
+    case 'rule-move': moveRule(Number(el.getAttribute('data-i')), Number(el.getAttribute('data-dir'))); break;
+    case 'rule-add-post':
+      changeRuleItems(el.closest('form'), function(items){ return items.concat([{ kind: 'post', title: '', platforms: ['instagram', 'facebook'], daysBefore: 7 }]); });
+      break;
+    case 'rule-add-graphic':
+      changeRuleItems(el.closest('form'), function(items){ return items.concat([{ kind: 'graphic', graphicType: (S.meta.graphicTypes[0] || {}).key, daysBefore: 10 }]); });
+      break;
+    case 'rule-item-remove':
+      var ri = Number(el.getAttribute('data-i'));
+      changeRuleItems(el.closest('form'), function(items){ return removeRuleItem(items, ri); });
+      break;
+    case 'keep-event':
+      api('PATCH', '/api/pipeline/events/' + encodeURIComponent(el.getAttribute('data-id')), { breezeMissingSince: null })
+        .then(function(){ toast('Kept. It stays as it is.', 'ok'); render(); }).catch(function(err){ toast(err.message, 'err'); });
+      break;
+    case 'apply-rules':
+      el.disabled = true;
+      api('POST', '/api/pipeline/events/' + encodeURIComponent(el.getAttribute('data-id')) + '/apply-rules')
+        .then(function(d){ toast('Added ' + plural(d.posts, 'post') + ' and ' + plural(d.graphics, 'graphic') + '.', 'ok'); render(); })
+        .catch(function(err){ el.disabled = false; toast(err.message, 'err'); });
+      break;
     case 'archive-event':
       var archived = !el.getAttribute('data-archived');
       api('PATCH', '/api/pipeline/events/' + encodeURIComponent(el.getAttribute('data-id')), { archived: archived }).then(function(){
@@ -2410,6 +2863,14 @@ document.addEventListener('change', function(e){
   if (act === 'toggle-cancelled') { storeSet('pipeline.boardCancelled', el.checked); return render(); }
   if (act === 'toggle-archived') { storeSet('pipeline.eventsArchived', el.checked); return render(); }
   if (act === 'dr-kind') return showDraftingFields(el.closest('form'));
+  if (act === 'bz-cal') return saveCalendars();
+  if (act === 'series-mode') return saveSeriesMode(el);
+  if (act === 'rule-match') return showRuleMatch(el.closest('form'));
+  if (act === 'rule-active') {
+    return api('PATCH', '/api/pipeline/checklist-rules/' + encodeURIComponent(el.getAttribute('data-id')), { active: el.checked })
+      .then(function(){ toast(el.checked ? 'Rule is on.' : 'Rule is off. It won’t apply to new events.', 'ok'); loadRules(); })
+      .catch(function(err){ toast(err.message, 'err'); loadRules(); });
+  }
   if (act === 'src-toggle' || ((el.name === 'publishDate' || el.name === 'eventId') && el.closest('form[data-form=content]'))) loadSourcePanel();
   if (el.hasAttribute('data-mfield')) return saveMediaField(el.closest('[data-media]'), el);
   if (el.hasAttribute('data-mcollect')) return toggleCollected(el.closest('[data-media]'), el.checked);
@@ -2434,6 +2895,7 @@ document.addEventListener('change', function(e){
   }
 });
 document.addEventListener('input', function(e){
+  if (e.target.getAttribute && e.target.getAttribute('data-ri') === 'title') refreshForPostLabels(e.target.closest('form'));
   if (e.target.classList && e.target.classList.contains('pl-caption')) refreshCaptionUi();
   if (e.target.closest && e.target.closest('form[data-form=recurrence]') && e.target.closest('[data-rule]')) previewRule();
 });
@@ -2444,8 +2906,11 @@ document.addEventListener('submit', function(e){
   e.preventDefault();
   if (kind === 'content') return saveContent(form);
   if (kind === 'media') return addMedia(form);
+  if (kind === 'event-graphic') return addEventGraphic(form);
   if (kind === 'recurrence') return saveRecurrence(form);
   if (kind === 'settings') return saveSettings(form);
+  if (kind === 'breeze') return saveBreezeSettings(form);
+  if (kind === 'rule') return saveRule(form);
   if (kind === 'plan-episode') {
     var pfd = new FormData(form);
     api('POST', '/api/pipeline/events/' + encodeURIComponent(form.getAttribute('data-id')) + '/plan-episode',
