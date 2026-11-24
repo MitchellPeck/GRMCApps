@@ -20,6 +20,8 @@ import { backfillLinks } from "./pipeline/metricool-links";
 import { checkPublished } from "./pipeline/publish-check";
 import { syncMetricool } from "./pipeline/metricool-sync";
 import { tick as graceNotesTick } from "./gracenotes/clock";
+import { syncBreeze } from "./pipeline/breeze-sync";
+import { digestTick } from "./pipeline/digest";
 import { referenceDate } from "./schedule";
 import { addDays, DEFAULT_TZ } from "./dates";
 import { getSetting, setSetting } from "./settings";
@@ -103,6 +105,22 @@ async function start() {
   };
   graceNotesClock();
   setInterval(graceNotesClock, 15 * 60 * 1000).unref();
+  // Breeze: pull events and apply checklists every 3 hours. Not awaited, so a slow Breeze never delays listen.
+  const breezeClock = async () => {
+    await syncBreeze(pool, await referenceDate(pool))
+      .then((r) => { if (r.created || r.updated || r.shifted || r.flaggedMissing || r.becameSeries || r.failedCalendars.length) app.log.info(r, "breeze sync"); })
+      .catch((e) => app.log.warn(e, "breeze sync failed"));
+  };
+  breezeClock();
+  setInterval(breezeClock, 3 * 60 * 60 * 1000).unref();
+  // The Monday/Thursday reminder email: checks whether a send is due every 15 minutes.
+  const digestClock = async () => {
+    await digestTick(pool)
+      .then((r) => { if (r.sent || r.failed) app.log.info(r, "digest"); })
+      .catch((e) => app.log.warn(e, "digest failed"));
+  };
+  digestClock();
+  setInterval(digestClock, 15 * 60 * 1000).unref();
   await app.listen({ host: "0.0.0.0", port: config.port });
   app.log.info(`social-posts listening on ${config.port}`);
 }

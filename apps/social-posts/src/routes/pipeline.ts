@@ -27,6 +27,13 @@ import {
   HORIZON_DAYS, createRecurrence, deleteRecurrence, getRecurrence, listRecurrences, materialize, updateRecurrence,
 } from "../pipeline/recurring";
 import { pool } from "../db";
+import { Pool } from "pg";
+import { FetchFn, sendMail } from "../gracenotes/mail";
+import { listCalendars, loadBreezeConfig, tickedCalendars } from "../breeze";
+import { applyRulesToEvent, listSeries, setSeriesMode, syncBreeze } from "../pipeline/breeze-sync";
+import { createRule, deleteRule, listRules, updateRule } from "../pipeline/checklist-repo";
+import { buildDigests, digestText } from "../pipeline/digest";
+import { createEventMedia } from "../pipeline/repo";
 import { getIdentity } from "../identity";
 import { referenceDate } from "../schedule";
 import { GAP_THRESHOLDS, PLATFORMS, UPCOMING_DAYS } from "../pipeline/config";
@@ -94,7 +101,10 @@ async function guard<T>(fn: () => Promise<T>): Promise<T | { ok: false; error: s
   catch (e) { return { ok: false, error: (e as Error).message }; }
 }
 
-export async function pipelineRoutes(app: FastifyInstance): Promise<void> {
+export interface PipelineRouteOpts { db?: Pool; fetchFn?: FetchFn }
+
+export async function pipelineRoutes(app: FastifyInstance, opts: PipelineRouteOpts = {}): Promise<void> {
+  await app.register(breezeRoutes, opts);
   // The page's dropdowns and thresholds come from here, so they can never
   // drift from what the server accepts.
   app.get("/api/pipeline/meta", async () => guard(async () => ({
@@ -473,4 +483,71 @@ export async function pipelineRoutes(app: FastifyInstance): Promise<void> {
   app.get("/api/pipeline/dashboard/gaps", async () => guard(async () =>
     ({ ok: true, ...(await dashboardGaps(pool, await referenceDate(pool))) })));
 
+}
+
+// ── Breeze sync, checklist rules, event media, digest test ──
+async function breezeRoutes(app: FastifyInstance, opts: PipelineRouteOpts): Promise<void> {
+  const db = opts.db ?? pool;
+  const fetchFn = opts.fetchFn ?? fetch;
+  const id = (req: FastifyRequest) => (req.params as { id: string }).id;
+
+  app.get("/api/pipeline/breeze/calendars", async () => guard(async () => {
+    const cfg = await loadBreezeConfig(db);
+    if (!cfg) return { ok: false, error: "Connect Breeze in Settings first." };
+    return { ok: true, calendars: await listCalendars(cfg, fetchFn), ticked: await tickedCalendars(db) };
+  }));
+
+  app.post("/api/pipeline/breeze/sync", async () => guard(async () =>
+    ({ ok: true, report: await syncBreeze(db, await referenceDate(db), fetchFn) })));
+
+  app.get("/api/pipeline/breeze/series", async () => guard(async () => ({ ok: true, series: await listSeries(db) })));
+
+  app.patch("/api/pipeline/breeze/series/:id", async (req) => guard(async () => {
+    const mode = (req.body as { mode?: unknown } | null)?.mode;
+    if (mode !== "series" && mode !== "each" && mode !== "ignore") return { ok: false, error: "Mode must be series, each or ignore." };
+    const r = await setSeriesMode(db, id(req), mode);
+    return r.ok ? { ok: true } : r;
+  }));
+
+  app.get("/api/pipeline/checklist-rules", async () => guard(async () => ({ ok: true, rules: await listRules(db) })));
+  app.post("/api/pipeline/checklist-rules", async (req) => guard(async () => {
+    const r = await createRule(db, req.body);
+    return r.ok ? { ok: true, rule: r.value } : r;
+  }));
+  app.patch("/api/pipeline/checklist-rules/:id", async (req) => guard(async () => {
+    const r = await updateRule(db, id(req), req.body);
+    return r.ok ? { ok: true, rule: r.value } : r;
+  }));
+  app.delete("/api/pipeline/checklist-rules/:id", async (req) => guard(async () => {
+    const r = await deleteRule(db, id(req));
+    return r.ok ? { ok: true } : r;
+  }));
+
+  app.post("/api/pipeline/events/:id/apply-rules", async (req) => guard(async () => {
+    const r = await applyRulesToEvent(db, id(req));
+    return r.ok ? { ok: true, ...r.value } : r;
+  }));
+
+  app.post("/api/pipeline/events/:id/media", async (req) => guard(async () => {
+    const input = parseMediaInput(req.body, "create");
+    if (!input.ok) return input;
+    const r = await createEventMedia(db, id(req), input.value);
+    return r.ok ? { ok: true, ...r.value } : r;
+  }));
+
+  // The signed-in user's own digest, sent now. It never touches digest_last_slot / digest_last_sent_at,
+  // so the real Monday/Thursday send is unaffected.
+  app.post("/api/pipeline/digest/test", async (req) => guard(async () => {
+    const email = getIdentity(req).email.trim();
+    if (!email) return { ok: false, error: "Sign in through the hub to send yourself a test." };
+    const [key, from, base, owner, lastSent] = await Promise.all(
+      ["resend_api_key", "mail_from", "public_base_url", "breeze_default_owner", "digest_last_sent_at"].map((k) => getSetting(db, k)));
+    if (!key.trim() || !from.trim() || !base.trim()) return { ok: false, error: "Email isn't set up: add the Resend key, From address and public address in Settings." };
+    const digests = await buildDigests(db, await referenceDate(db), lastSent.trim() || null, base, owner);
+    const mine = digests.find((d) => d.to.toLowerCase() === email.toLowerCase());
+    const mail = mine && digestText(mine);
+    if (!mine || !mail) return { ok: true, message: "You have nothing to report right now, so no email was sent." };
+    const r = await sendMail(fetchFn, { key: key.trim(), from: from.trim() }, { to: mine.to, ...mail });
+    return r.ok ? { ok: true, message: `Sent to ${mine.to}.` } : { ok: false, error: r.error };
+  }));
 }

@@ -1,7 +1,9 @@
 import { FastifyInstance } from "fastify";
-import { pool } from "../db";
+import { Pool } from "pg";
+import { pool as appPool } from "../db";
+import { getIdentity } from "../identity";
 import { cleanSubdomain } from "../breeze";
-import { getSettingsView, setSetting } from "../settings";
+import { getSetting, getSettingsView, setSetting } from "../settings";
 
 interface SaveBody {
   anthropicKey?: string;
@@ -54,7 +56,8 @@ function parseSchedule(s: SaveBody): string | { dow?: string; times: Record<stri
   return { dow, times };
 }
 
-export async function settingsRoutes(app: FastifyInstance): Promise<void> {
+export async function settingsRoutes(app: FastifyInstance, opts: { db?: Pool } = {}): Promise<void> {
+  const pool = opts.db ?? appPool;
   app.get("/api/settings", async () => {
     try {
       return { ok: true, ...(await getSettingsView(pool)) };
@@ -131,6 +134,11 @@ export async function settingsRoutes(app: FastifyInstance): Promise<void> {
         await setSetting(pool, "breeze_api_key", s.breezeKey.trim());
       if (s.breezeDefaultOwner && s.breezeDefaultOwner.trim())
         await setSetting(pool, "breeze_default_owner", s.breezeDefaultOwner.trim());
+      // The user who connects Breeze is the default owner of what it brings in, unless one is already set.
+      if ((breezeSub || s.breezeKey?.trim() || calendars) && !(await getSetting(pool, "breeze_default_owner")).trim()) {
+        const me = getIdentity(req).email.trim();
+        if (me) await setSetting(pool, "breeze_default_owner", me);
+      }
       if (calendars) await setSetting(pool, "breeze_calendars", JSON.stringify(calendars));
       if (schedule.dow !== undefined) await setSetting(pool, "gn_send_dow", schedule.dow);
       return { ok: true };

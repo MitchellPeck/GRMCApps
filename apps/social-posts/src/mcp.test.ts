@@ -30,3 +30,30 @@ test("tools are listed with schemas, and only the writers aren't read-only", asy
   for (const t of tools) assert.equal(t.inputSchema.type, "object", t.name);
   assert.ok(!tools.some((t: any) => /delete/.test(t.name)), "nothing deletes");
 });
+
+test("list_media includes event-level graphics, and list_events carries Breeze fields", async () => {
+  const { SCHEMA_SQL } = await import("./schema");
+  const { createEvent, createEventMedia } = await import("./pipeline/repo");
+  const { addDays } = await import("./dates");
+  const { referenceDate } = await import("./schedule");
+  const db = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
+  try {
+    await db.query(SCHEMA_SQL);
+    const today = await referenceDate(db);
+    const ev = await createEvent(db, { name: "MCP graphic event", startDate: addDays(today, 20) });
+    const m = await createEventMedia(db, ev.id, { description: "Cover", type: "graphic", graphicType: "fb-event-cover", gatherDate: addDays(today, 10) });
+    assert.ok(m.ok);
+    const c = { db, email: "a@x.org" };
+    const call = (name: string, args = {}) => handleMessage({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }, c) as Promise<any>;
+    const media = JSON.parse((await call("list_media")).result.content[0].text).media;
+    const g = media.find((x: any) => x.eventId === ev.id);
+    assert.ok(g, "event-level graphic listed");
+    assert.equal(g.onEvent, true);
+    assert.equal(g.graphicType, "fb-event-cover");
+    const events = JSON.parse((await call("list_events")).result.content[0].text).events;
+    const e = events.find((x: any) => x.id === ev.id);
+    assert.equal(e.source, "manual");
+    assert.equal(e.breezeMissingSince, null);
+    await db.query("DELETE FROM events WHERE id = $1", [ev.id]);
+  } finally { await db.end(); }
+});

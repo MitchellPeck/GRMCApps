@@ -101,13 +101,13 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "list_events", readOnly: true,
-    description: "The events posts are grouped under (a series, a campaign, a one-off event), with their ids, dates, owner and notes.",
+    description: "The events posts are grouped under (a series, a campaign, a one-off event), with their ids, dates, owner and notes. Each says where it came from (source: manual or breeze) and, for Breeze events, breezeMissingSince when Breeze no longer lists it.",
     inputSchema: { type: "object", properties: { includeArchived: { type: "boolean" } } },
     run: async (a, { db }) => ({ events: await listEvents(db, a.includeArchived === true ? {} : { archived: false }) }),
   },
   {
     name: "list_media", readOnly: true,
-    description: "Media to collect for posts (photos, video), with when and where it's being captured and who is on it. With no dates, the next 30 days.",
+    description: "Media and graphics to collect (photos, video, event covers), for posts and for events themselves (event-level graphics have eventId, graphicType and onEvent true, and no post), with when and where it's being captured and who is on it. With no dates, the next 30 days.",
     inputSchema: { type: "object", properties: {
       from: date, to: date,
       status: { type: "array", items: { type: "string", enum: MEDIA_STATUSES } },
