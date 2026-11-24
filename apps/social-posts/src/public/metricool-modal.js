@@ -249,9 +249,19 @@ function submitMetricool(){
     var fate = res.autoPublish
       ? ' It will publish automatically.'
       : ' It’s a draft — schedule it in the Metricool planner to publish.';
-    var extra = fate + (res.note? ' '+mcEsc(res.note):'') + ((res.warnings&&res.warnings.length)? ' '+mcEsc(res.warnings.join(' ')):'');
-    var each = res.sentTo ? ' Sent as separate posts: ' + mcEsc(res.sentTo.join(', ')) + '.' : '';
-    el.innerHTML = '<div class="alert alert-ok">Sent to Metricool '+(res.autoPublish ? '— scheduled ' : 'as a draft for ')+mcEsc(res.scheduledFor)+'.'+each+extra+'</div>';
+    var warned = !!(res.warnings && res.warnings.length);
+    var extra = fate + (res.note ? ' ' + res.note : '') + (warned ? ' ' + res.warnings.join(' ') : '');
+    var each = res.sentTo ? ' Sent as separate posts: ' + res.sentTo.join(', ') + '.' : '';
+    var done = 'Sent to Metricool ' + (res.autoPublish ? '— scheduled ' : 'as a draft for ') + res.scheduledFor + '.' + each + extra;
+    // Close once it's gone: left open, the Send button invites a second, duplicate send.
+    // The page's toast carries the outcome; without one, say it here instead.
+    if (typeof toast === 'function') {
+      el.innerHTML = '';
+      closeMetricool();
+      toast(done, warned ? 'warn' : '');
+    } else {
+      el.innerHTML = '<div class="alert alert-ok">' + mcEsc(done) + '</div>';
+    }
     if (_mcCtx.onSent) _mcCtx.onSent(res);
   }).catch(function(e){ mcSetBtn('mc-send-btn', false); document.getElementById('mc-msg').innerHTML = '<div class="alert alert-err">'+mcEsc(e.message)+'</div>'; });
 }
