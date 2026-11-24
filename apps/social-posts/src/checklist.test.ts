@@ -164,10 +164,29 @@ test("applyChecklist rolls back if anything fails", async () => {
   assert.equal((await pool.query("SELECT 1 FROM content_items WHERE event_id = $1", [ev.id])).rowCount, 0);
 });
 
+test("applyChecklist given a PoolClient runs inside the caller's transaction", async () => {
+  const ev = await createEvent(pool, { name: "Caller tx", startDate: "2026-12-20" });
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const counts = await applyChecklist(client, ev.id, [post("A"), { kind: "graphic", graphicType: "ig-feed", daysBefore: 3, forPost: 0 }],
+      { name: ev.name, date: "2026-12-20", ownerEmail: "" }, "t@x");
+    assert.deepEqual(counts, { posts: 1, graphics: 1 });
+    await client.query("ROLLBACK");
+  } finally { client.release(); }
+  assert.equal((await pool.query("SELECT 1 FROM content_items WHERE event_id = $1", [ev.id])).rowCount, 0);
+  assert.equal((await pool.query("SELECT 1 FROM media_assets WHERE event_id = $1", [ev.id])).rowCount, 0);
+});
+
 test("a rule-made post with its graphic attached is not a no-media gap", async () => {
   const { ev } = await applied();
-  const post = (await pool.query("SELECT id FROM content_items WHERE event_id = $1", [ev.id])).rows[0];
+  const bare = await createEvent(pool, { name: "Bare", startDate: "2026-12-20" });
+  await applyChecklist(pool, bare.id, [post("Lonely")], { name: "Bare", date: "2026-12-20", ownerEmail: "" }, "t@x");
+  const withG = (await pool.query("SELECT id FROM content_items WHERE event_id = $1", [ev.id])).rows[0];
+  const without = (await pool.query("SELECT id FROM content_items WHERE event_id = $1", [bare.id])).rows[0];
   const { gaps } = await dashboardGaps(pool, "2026-12-01");
   const noMedia = gaps.find((g) => g.key === "no-media");
-  assert.ok(!noMedia || !noMedia.ids.includes(post.id));
+  assert.ok(noMedia, "control: the post with no graphic should produce a no-media gap");
+  assert.ok(noMedia.ids.includes(without.id));
+  assert.ok(!noMedia.ids.includes(withG.id));
 });

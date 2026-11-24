@@ -65,7 +65,7 @@ export async function applyChecklist(
   db: Db, eventId: string, items: ChecklistItem[],
   ev: { name: string; date: string; ownerEmail: string }, createdBy: string,
 ): Promise<{ posts: number; graphics: number }> {
-  const owned = "connect" in db ? await (db as Pool).connect() : null;
+  const owned = db instanceof Pool ? await db.connect() : null;
   const c: Db = owned ?? db;
   const tx = !!owned; // an already-open client belongs to the caller's transaction
   let posts = 0, graphics = 0;
