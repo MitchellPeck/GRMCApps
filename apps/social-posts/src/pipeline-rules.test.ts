@@ -107,7 +107,7 @@ test("late media warning", () => {
   assert.equal(lateMediaWarning(null, "2026-11-01"), "");
 });
 
-test("the five gap alerts", () => {
+test("the gap alerts", () => {
   const today = "2026-11-01";
   const item = (id: string, publishDate: string | null, status: GapItem["status"], mediaCount = 1, noMediaNeeded = false): GapItem =>
     ({ id, publishDate, status, mediaCount, noMediaNeeded });
@@ -138,7 +138,7 @@ test("the five gap alerts", () => {
   assert.deepEqual(ids["unscheduled-media"], ["unsched-soon"]);
   assert.deepEqual(ids["late-media"], ["late"]);
   assert.deepEqual(ids["overdue-media"], ["overdue"]);
-  assert.equal(gaps.length, 8);
+  assert.equal(gaps.length, 9);
   assert.equal(gaps[0].count, 1);
 });
 
@@ -175,8 +175,11 @@ test("due-soon lists posts not ready and graphics not done due within 7 days", (
     evMedia("g-today", { gatherDate: today, status: "needed" }),
     evMedia("g-far", { gatherDate: "2026-11-09" }),
   ];
-  const ids = gapIds(computeGaps(items, media, today, T), "due-soon");
-  assert.deepEqual(ids.sort(), ["g-open", "g-today", "p-today"]);
+  const gaps = computeGaps(items, media, today, T);
+  assert.deepEqual(gapIds(gaps, "due-soon"), ["p-today"]);
+  assert.deepEqual(gapIds(gaps, "due-soon-media").sort(), ["g-open", "g-today"]);
+  assert.equal(gaps.find((g) => g.key === "due-soon")!.kind, "content");
+  assert.equal(gaps.find((g) => g.key === "due-soon-media")!.kind, "media");
 });
 
 test("missing-from-breeze lists flagged events", () => {
