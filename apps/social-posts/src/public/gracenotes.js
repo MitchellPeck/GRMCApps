@@ -53,8 +53,8 @@ function copyText(text) {
 }
 function copyLink(url) { copyText(url).then(function () { toast('Link copied.', 'ok'); }, function () { toast('Couldn’t copy. Select the link and copy it by hand.', 'err'); }); }
 function plain(html) { var d = document.createElement('div'); d.innerHTML = html; return d.textContent; }
-function copyBlock(html, text) {
-  var done = function () { toast('Copied.', 'ok'); };
+function copyBlock(html, text, after) {
+  var done = function () { if (after) after(); else toast('Copied.', 'ok'); };
   var fail = function () { toast('Couldn’t copy. Select the text and copy it by hand.', 'err'); };
   // Built inside the promise chain so a throw from ClipboardItem falls back to plain text.
   var rich = window.ClipboardItem && navigator.clipboard && navigator.clipboard.write
@@ -141,7 +141,7 @@ function fail(e) { toast(e.message || 'Something went wrong.', 'err'); }
 
 function render(main, arg) {
   current = { main: main, arg: arg || '' };
-  main.onclick = main.onsubmit = null;
+  main.onclick = main.onsubmit = main.onkeydown = null;
   var a = arg || '';
   if (a === 'people') return renderPeople(main);
   if (a === 'sections') return renderSections(main);
@@ -247,16 +247,26 @@ function drawIssue(main, data, blocks, people, sections, settings, histHtml, eve
     return '<div class="gnx-section" data-sid="' + esc(s.id) + '"><h4>' + esc(s.title) + '</h4>' + body + '</div>';
   }).join('') + '</section>';
 
-  html += '<section class="card">' + cardTitle('Paste sheet') + '<p class="hint">Copy each block and paste it into the matching Mailchimp block. Bold and links come along.</p>'
-    + blocks.map(function (b, i) {
-      return '<div class="gnx-block"><div class="gnx-blockhead"><strong>' + esc(b.title) + '</strong>'
-        + (b.unchanged ? '<span class="pill">Same as last week · skip</span>' : '')
-        + '<button class="btn-sm" type="button" data-act="copy-block" data-i="' + i + '">Copy</button></div>'
-        + '<div class="gnx-preview">' + (b.html || '<span class="hint">Empty</span>') + '</div>' // sanitized on the server
-        + (b.images.length ? '<div class="gnx-imgs">' + b.images.map(function (im) {
-          var ok = /^https?:/i.test(im.url || '');
-          return '<figure>' + (ok ? '<img src="' + esc(im.url) + '" alt="' + esc(im.alt) + '"><a class="btn-sm" href="' + esc(im.url) + '" download target="_blank" rel="noopener">Download</a>' : '') + '</figure>';
-        }).join('') + '</div>' : '') + '</div>';
+  // The paste sheet: every heading and every body as its own field, in the email's order.
+  // Click a field to copy it; it stays ticked (in this browser) until its words change.
+  var parts = {}, total = 0, done = 0;
+  blocks.forEach(function (b) { (b.parts || []).forEach(function (pt) {
+    parts[pt.key] = pt;
+    if (b.unchanged) return;
+    total++; if (wasCopied(issue.id, pt)) done++;
+  }); });
+  html += '<section class="card gnx-sheet">' + cardTitle('Paste into Mailchimp')
+    + '<p class="hint">Click a field to copy it, then paste it into the matching block in Mailchimp. Headings copy as plain text; text keeps its bold and links. '
+    + 'A tick means you’ve copied it.</p>'
+    + '<div class="gnx-progress"><span class="gnx-bar"><span style="width:' + (total ? Math.round(100 * done / total) : 0) + '%"></span></span>'
+    + '<span class="hint">' + done + ' of ' + total + ' copied</span>'
+    + (done ? ' <button class="pl-link" type="button" data-act="clear-copied">Clear ticks</button>' : '') + '</div>'
+    + blocks.map(function (b) {
+      var fields = (b.parts || []).map(function (pt) { return partHtml(issue.id, pt); }).join('');
+      if (b.unchanged) {
+        return '<details class="gnx-sec same"><summary><strong>' + esc(b.title) + '</strong> <span class="pill">Same as last week · leave it</span></summary>' + fields + '</details>';
+      }
+      return '<div class="gnx-sec"><div class="gnx-sechead"><strong>' + esc(b.title) + '</strong></div>' + fields + '</div>';
     }).join('')
     + '<div class="btn-row">' + (sent ? '<button class="btn" type="button" data-act="unmark-sent">Unmark sent</button>'
       : '<button class="btn btn-primary" type="button" data-act="mark-sent">Mark sent</button>') + '</div></section>' + histHtml;
@@ -267,7 +277,14 @@ function drawIssue(main, data, blocks, people, sections, settings, histHtml, eve
   var h = {
     'copy-link': function (b) { copyLink(b.getAttribute('data-url')); },
     nudge: function (b) { run(b, function () { return call('POST', '/api/gracenotes/issues/' + encodeURIComponent(issue.id) + '/remind/' + encodeURIComponent(b.getAttribute('data-id'))); }, 'Reminder sent.'); },
-    'copy-block': function (b) { var bl = blocks[+b.getAttribute('data-i')]; copyBlock(bl.html, bl.text || plain(bl.html)); },
+    'copy-part': function (b) {
+      var pt = parts[b.getAttribute('data-key')];
+      if (!pt) return;
+      var ok = function () { markCopied(issue.id, pt); b.classList.add('copied'); flash(b); refreshProgress(main, issue.id, parts, blocks); };
+      if (pt.kind === 'heading') copyText(pt.text).then(ok, function () { toast('Couldn’t copy. Select the text and copy it by hand.', 'err'); });
+      else copyBlock(pt.html, pt.text || plain(pt.html), ok);
+    },
+    'clear-copied': function () { clearCopied(issue.id); reload(); },
     'make-versions': function (b) {
       b.textContent = 'Making the email versions…';
       run(b, function () { return call('POST', '/api/gracenotes/pieces/' + encodeURIComponent(b.getAttribute('data-id')) + '/versions', {}); }, null)
@@ -326,6 +343,11 @@ function drawIssue(main, data, blocks, people, sections, settings, histHtml, eve
     },
   };
   wire(main, h);
+  // The paste fields are divs (they hold links and paragraphs), so Enter and Space copy too.
+  main.onkeydown = function (e) {
+    var f = e.target.closest && e.target.closest('.gnx-field[data-act]');
+    if (f && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); h['copy-part'](f); }
+  };
   // Headline / closing / signer edits save on change and redraw both versions.
   Array.prototype.forEach.call(main.querySelectorAll('[data-vfield]'), function (el) {
     el.addEventListener('change', function () {
@@ -342,6 +364,41 @@ function drawIssue(main, data, blocks, people, sections, settings, histHtml, eve
     autoVersions[id] = true;
     h['make-versions'](b);
   });
+}
+
+// ── paste sheet fields ──
+function hashOf(s) { var h = 0; for (var i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return String(h); }
+function copiedStore(issueId) {
+  try { return JSON.parse(localStorage.getItem('gn-copied-' + issueId) || '{}'); } catch (e) { return {}; }
+}
+function wasCopied(issueId, pt) { return copiedStore(issueId)[pt.key] === hashOf(pt.html); }
+function markCopied(issueId, pt) {
+  var s = copiedStore(issueId); s[pt.key] = hashOf(pt.html);
+  try { localStorage.setItem('gn-copied-' + issueId, JSON.stringify(s)); } catch (e) { /* ticks just won't stick */ }
+}
+function clearCopied(issueId) { try { localStorage.removeItem('gn-copied-' + issueId); } catch (e) { /* nothing to clear */ } }
+function flash(el) { el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash'); }
+function refreshProgress(main, issueId, parts, blocks) {
+  var total = 0, done = 0;
+  blocks.forEach(function (b) { if (!b.unchanged) (b.parts || []).forEach(function (pt) { total++; if (wasCopied(issueId, pt)) done++; }); });
+  var bar = main.querySelector('.gnx-progress');
+  if (!bar) return;
+  bar.querySelector('.gnx-bar span').style.width = (total ? Math.round(100 * done / total) : 0) + '%';
+  bar.querySelector('.hint').textContent = done + ' of ' + total + ' copied';
+}
+function partHtml(issueId, pt) {
+  var empty = !String(pt.text || '').trim();
+  var img = pt.image && /^https?:/i.test(pt.image.url || '') ? pt.image : null;
+  return '<div class="gnx-part ' + pt.kind + '">'
+    + '<div class="gnx-field' + (wasCopied(issueId, pt) ? ' copied' : '') + '"' + (empty ? ' aria-disabled="true"'
+      : ' role="button" tabindex="0" data-act="copy-part" data-key="' + esc(pt.key) + '" aria-label="Copy ' + esc(pt.label) + '"') + '>'
+    + '<span class="gnx-flabel">' + esc(pt.label) + '<span class="gnx-tick" aria-hidden="true">✓ Copied</span><span class="gnx-cta">Click to copy</span></span>'
+    + (empty ? '<span class="hint">Empty</span>' : pt.kind === 'heading' ? '<span class="gnx-ftext">' + esc(pt.text) + '</span>'
+      : '<div class="gnx-fbody">' + pt.html + '</div>') // built and sanitized on the server
+    + '</div>'
+    + (pt.note ? '<div class="alert alert-warn">' + esc(pt.note) + '</div>' : '')
+    + (img ? '<div class="gnx-imgs"><figure><img src="' + esc(img.url) + '" alt="' + esc(img.alt) + '"><a class="btn-sm" href="' + esc(img.url) + '" download target="_blank" rel="noopener">Download picture</a></figure></div>' : '')
+    + '</div>';
 }
 
 function pieceHtml(p, section, review, sent, canLink, versions) {

@@ -226,3 +226,45 @@ test("sheet shows a dated item's date before the details", async () => {
   assert.ok(html.includes("<p>Wed Nov 18 · 6pm · Hall</p>"), html);
   assert.ok(html.includes("<p>Wed Nov 18 – Fri Nov 20</p>"), html);
 });
+
+test("sheet parts: a heading then the text, events split per item", async () => {
+  const t = await sec("Sermon Notes", "text");
+  const e = await sec("Events", "events");
+  const i = await issue("2026-11-11");
+  const tp = (await listPieces(pool, i)).find((p) => p.sectionId === t)!;
+  ok(await editPiece(pool, tp.id, { bodyHtml: "<p>Grace <strong>upon</strong> grace</p>" }, admin));
+  ok(await addItem(pool, i, e, { title: "Supper & Song", details: { when: "6pm", place: "Hall", link: "https://x.org/s", linkLabel: "Sign up" }, bodyHtml: "<p>Bring a dish</p>" }, admin));
+  const s = await buildSheet(pool, i);
+  const text = by(s, t).parts;
+  assert.deepEqual(text.map((p) => [p.kind, p.label]), [["heading", "Heading"], ["body", "Text"]]);
+  assert.equal(text[0].text, "Sermon Notes");
+  assert.equal(text[1].html, "<p>Grace <strong>upon</strong> grace</p>");
+  const ev = by(s, e).parts;
+  assert.deepEqual(ev.map((p) => p.label), ["Section heading", "Item 1 title", "Item 1 text"]);
+  assert.equal(ev[1].text, "Supper & Song");
+  assert.equal(ev[1].html, "Supper &amp; Song");
+  assert.ok(!ev[2].html.includes("Supper"), ev[2].html); // the name is its own field
+  assert.ok(ev[2].html.startsWith("<p>6pm · Hall</p><p>Bring a dish</p>"), ev[2].html);
+  assert.ok(ev[2].html.includes('<a href="https://x.org/s">Sign up</a>'));
+  assert.equal(new Set(s.flatMap((b) => b.parts.map((p) => p.key))).size, s.reduce((n, b) => n + b.parts.length, 0));
+});
+
+test("sheet parts: the letter offers its headline and both versions once made", async () => {
+  const t = await sec("Pastor's Message", "text");
+  const i = await issue("2026-11-11");
+  const tp = (await listPieces(pool, i)).find((p) => p.sectionId === t)!;
+  ok(await editPiece(pool, tp.id, { bodyHtml: "<p>Family of Grace,</p><p>Hello.</p>" }, admin));
+  assert.deepEqual(by(await buildSheet(pool, i), t).parts.map((p) => p.label), ["Heading", "Text"]);
+  const body = (await listPieces(pool, i)).find((p) => p.id === tp.id)!.bodyHtml;
+  const v = { sourceHtml: body, title: "A good word", signoff: "In Christ, James", signer: "Rev. J",
+    full: [{ kind: "greeting", html: "Family of Grace," }, { kind: "p", html: "Hello." }], short: [{ kind: "p", html: "Hello." }] };
+  await pool.query("INSERT INTO gn_letter_reviews (piece_id, suggestions, versions) VALUES ($1,'[]',$2)", [tp.id, JSON.stringify(v)]);
+  const parts = by(await buildSheet(pool, i), t).parts;
+  assert.deepEqual(parts.map((p) => p.label), ["Headline", "Short email cut", "Full letter"]);
+  assert.equal(parts[0].text, "A good word");
+  assert.ok(!parts[1].html.includes("<h1"), "bodies leave the headline to its own block");
+  assert.match(parts[2].html, /Family of Grace,[\s\S]*In Christ, James/);
+  assert.equal(parts[1].note, undefined);
+  ok(await editPiece(pool, tp.id, { bodyHtml: "<p>Changed</p>" }, admin));
+  assert.match(by(await buildSheet(pool, i), t).parts[1].note || "", /changed after/);
+});

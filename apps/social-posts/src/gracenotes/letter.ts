@@ -18,7 +18,7 @@ export interface Suggestion {
 export interface ReviewFacts { glance: string; sermon: string; events: string[]; previousLetter: string }
 
 const MAX_SUGGESTIONS = 25;
-const LETTER_TITLE = /pastor|message|letter/i;
+export const LETTER_TITLE = /pastor|message|letter/i;
 const STALE = "That sentence has changed since the review. Edit it by hand.";
 
 export function buildReviewPrompt(letterText: string, facts: ReviewFacts): { system: string; user: string } {

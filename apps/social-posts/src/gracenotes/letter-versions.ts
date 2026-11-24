@@ -183,6 +183,12 @@ function renderText(v: LetterVersions, blocks: Block[]): string {
     .filter(Boolean).join("\n\n");
 }
 
+/** The two versions without the headline, for pasting under a separate Mailchimp heading block. */
+export function bodiesOf(v: LetterVersions): { shortHtml: string; fullHtml: string; shortText: string; fullText: string } {
+  const bare = { ...v, title: "" };
+  return { shortHtml: renderVersion(bare, v.short), fullHtml: renderVersion(bare, v.full), shortText: renderText(bare, v.short), fullText: renderText(bare, v.full) };
+}
+
 export function viewOf(v: LetterVersions, currentHtml: string): VersionsView {
   return {
     title: v.title, signoff: v.signoff, signer: v.signer, stale: v.sourceHtml !== currentHtml,

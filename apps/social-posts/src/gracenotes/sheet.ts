@@ -4,14 +4,23 @@ import { Issue, getIssue, glanceHtml, label as dayLabel, listIssues } from "./is
 import { Result } from "../pipeline/rules";
 import { effectiveImage, listPieces } from "./pieces";
 import { htmlToText } from "./html";
+import { LETTER_TITLE } from "./letter";
+import { LetterVersions, bodiesOf } from "./letter-versions";
 import { listSections, withTx } from "./repo";
 import { Piece, SectionKind } from "./types";
 
 type Db = Pool | PoolClient;
 
+/** One thing to paste into one Mailchimp block: a heading (plain text) or a body (rich text). */
+export interface SheetPart {
+  key: string; kind: "heading" | "body"; label: string; html: string; text: string;
+  image?: { url: string; alt: string }; note?: string;
+}
 export interface SheetBlock {
   sectionId: string; title: string; kind: SectionKind; unchanged: boolean;
   html: string; text: string; images: Array<{ url: string; alt: string }>;
+  /** The section in paste order: its heading, then its body (events: each item's title and text). */
+  parts: SheetPart[];
 }
 
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -19,8 +28,13 @@ const safeLink = (s: string) => /^(https?:\/\/|mailto:)\S+$/i.test(s.trim());
 const itemTitle = (p: Piece) => (p.eventId && p.eventName ? p.eventName : p.title);
 
 function itemHtml(p: Piece): string {
-  const d = p.details;
   const title = itemTitle(p);
+  return (title ? `<p><strong>${esc(title)}</strong></p>` : "") + itemBodyHtml(p);
+}
+
+/** An event item without its name: date and details, its text, then the link and contact. */
+function itemBodyHtml(p: Piece): string {
+  const d = p.details;
   // The date lives on the event (the editors' date picker); `when` is only the time.
   const s = p.eventStartDate ?? "", e = p.eventEndDate ?? "";
   const date = s ? (e && e > s ? `${dayLabel(s)} – ${dayLabel(e)}` : dayLabel(s)) : "";
@@ -29,7 +43,6 @@ function itemHtml(p: Piece): string {
   const label = String(d.linkLabel ?? "").trim() || "Register here";
   const contact = String(d.contact ?? "").trim();
   return [
-    title ? `<p><strong>${esc(title)}</strong></p>` : "",
     meta ? `<p>${meta}</p>` : "",
     p.bodyHtml,
     link && safeLink(link) ? `<p><a href="${esc(link)}">${esc(label)}</a></p>` : "",
@@ -53,9 +66,41 @@ async function renderSheet(db: Db, issueId: string): Promise<SheetBlock[]> {
     const images = s.kind === "glance" ? [] : live
       .map((p) => ({ url: effectiveImage(p), alt: itemTitle(p) }))
       .filter((i) => i.url);
-    out.push({ sectionId: s.id, title: s.title, kind: s.kind, unchanged: false, html, text: htmlToText(html), images });
+    out.push({ sectionId: s.id, title: s.title, kind: s.kind, unchanged: false, html, text: htmlToText(html), images,
+      parts: await partsOf(db, s, live, html) });
   }
   return out;
+}
+
+const heading = (key: string, label: string, text: string): SheetPart => ({ key, kind: "heading", label, html: esc(text), text });
+const body = (key: string, label: string, html: string, extra: Partial<SheetPart> = {}): SheetPart =>
+  ({ key, kind: "body", label, html, text: htmlToText(html), ...extra });
+
+async function partsOf(db: Db, s: { id: string; title: string; kind: SectionKind }, live: Piece[], html: string): Promise<SheetPart[]> {
+  const k = (x: string) => `${s.id}:${x}`;
+  if (s.kind === "events") {
+    return [heading(k("h"), "Section heading", s.title), ...live.flatMap((p, i) => {
+      const img = effectiveImage(p);
+      return [
+        heading(k(`${p.id}:h`), `Item ${i + 1} title`, itemTitle(p) || "(untitled)"),
+        body(k(`${p.id}:b`), `Item ${i + 1} text`, itemBodyHtml(p), img ? { image: { url: img, alt: itemTitle(p) } } : {}),
+      ];
+    })];
+  }
+  // The pastor's letter, once its email versions are made: their headline, and both bodies to choose from.
+  if (s.kind === "text" && LETTER_TITLE.test(s.title) && live.length === 1) {
+    const r = await db.query("SELECT versions FROM gn_letter_reviews WHERE piece_id = $1", [live[0].id]);
+    const v = r.rows[0]?.versions as LetterVersions | null | undefined;
+    if (v) {
+      const b = bodiesOf(v);
+      const note = v.sourceHtml !== live[0].bodyHtml ? "The letter changed after these were made. Remake them on the letter above." : undefined;
+      return [heading(k("h"), "Headline", v.title || s.title),
+        { ...body(k("short"), "Short email cut", b.shortHtml), text: b.shortText, note },
+        { ...body(k("full"), "Full letter", b.fullHtml), text: b.fullText, note }];
+    }
+  }
+  const img = s.kind === "text" ? live.map(effectiveImage).find(Boolean) : undefined;
+  return [heading(k("h"), "Heading", s.title), body(k("b"), "Text", html, img ? { image: { url: img, alt: s.title } } : {})];
 }
 
 type Snap = Array<{ sectionId: string; html: string; images: Array<{ url: string; alt: string }> }>;
