@@ -3,7 +3,7 @@ import { test, before, after } from "node:test";
 import { Pool } from "pg";
 import { SCHEMA_SQL } from "./schema";
 import {
-  createContent, createEvent, createEventMedia, createMedia, deleteEvent, getEvent, listMedia,
+  createContent, createEvent, createEventMedia, createMedia, dashboardGaps, deleteEvent, getEvent, listMedia,
   updateContent, updateMedia,
 } from "./pipeline/repo";
 import { parseMediaInput } from "./pipeline/rules";
@@ -150,4 +150,14 @@ test("getEvent returns event-level graphics", async () => {
   assert.equal(r.value.event.source, "manual");
   assert.equal(r.value.event.breezeMissingSince, null);
   assert.equal(r.value.event.anchorDate, null);
+});
+
+test("dashboardGaps lists an overdue event-level graphic, and drops it once the event is archived", async () => {
+  const ev = await createEvent(pool, { name: "Gap test", startDate: "2026-12-10" });
+  const r = await createEventMedia(pool, ev.id, { description: "Late cover", type: "graphic", gatherDate: "2026-11-01" });
+  assert.ok(r.ok);
+  const key = (g: { gaps: { key: string; ids: string[] }[] }, k: string) => g.gaps.find((x) => x.key === k)!.ids;
+  assert.ok(key(await dashboardGaps(pool, "2026-11-10"), "overdue-media").includes(r.value.media.id));
+  await pool.query("UPDATE events SET archived = true WHERE id = $1", [ev.id]);
+  assert.ok(!key(await dashboardGaps(pool, "2026-11-10"), "overdue-media").includes(r.value.media.id));
 });

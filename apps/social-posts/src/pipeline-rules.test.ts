@@ -3,7 +3,7 @@ import { test } from "node:test";
 import {
   checkStatusChange, computeGaps, isIsoDate, lateMediaWarning, parseContentInput, parseEventInput,
   parseMediaInput, readyBlockers, resolveMediaStatus, seriesStatusToPipeline,
-  GapItem, GapMedia,
+  GapEvent, GapItem, GapMedia,
 } from "./pipeline/rules";
 import { captionWarnings, countChars, imageRuleError } from "./pipeline/platforms";
 
@@ -122,7 +122,7 @@ test("the five gap alerts", () => {
     item("no-media-published", "2026-11-20", "published", 0),
   ];
   const media = (id: string, gatherDate: string | null, status: GapMedia["status"], itemPublishDate: string, itemStatus: GapMedia["itemStatus"] = "planned"): GapMedia =>
-    ({ id, contentItemId: "x", gatherDate, status, itemPublishDate, itemStatus });
+    ({ id, contentItemId: "x", gatherDate, status, itemPublishDate, itemStatus, eventLive: true });
   const mediaRows: GapMedia[] = [
     media("unsched-soon", null, "needed", "2026-11-15"),
     media("unsched-far", null, "needed", "2026-12-15"),
@@ -131,15 +131,67 @@ test("the five gap alerts", () => {
     media("overdue", "2026-10-30", "scheduled", "2026-11-08"),
     media("overdue-cancelled", "2026-10-30", "scheduled", "2026-11-08", "cancelled"),
   ];
-  const gaps = computeGaps(items, mediaRows, today, { readinessDays: 7, unscheduledMediaDays: 21 });
+  const gaps = computeGaps(items, mediaRows, today, T);
   const ids = Object.fromEntries(gaps.map((g) => [g.key, g.ids]));
   assert.deepEqual(ids["not-ready"], ["soon-drafted"]);
   assert.deepEqual(ids["no-media"], ["no-media"]);
   assert.deepEqual(ids["unscheduled-media"], ["unsched-soon"]);
   assert.deepEqual(ids["late-media"], ["late"]);
   assert.deepEqual(ids["overdue-media"], ["overdue"]);
-  assert.equal(gaps.length, 5);
+  assert.equal(gaps.length, 8);
   assert.equal(gaps[0].count, 1);
+});
+
+const T = { readinessDays: 7, unscheduledMediaDays: 21, dueSoonDays: 7, noChecklistDays: 30 };
+const evMedia = (id: string, over: Partial<GapMedia> = {}): GapMedia => ({
+  id, contentItemId: null, gatherDate: "2026-10-30", status: "scheduled", itemPublishDate: null, itemStatus: null, eventLive: true, ...over,
+});
+const gapIds = (gaps: ReturnType<typeof computeGaps>, key: string) => gaps.find((g) => g.key === key)!.ids;
+const ev = (id: string, over: Partial<GapEvent> = {}): GapEvent => ({
+  id, source: "breeze", startDate: "2026-11-10", missing: false, archived: false, itemCount: 0, graphicCount: 0, ...over,
+});
+
+test("overdue-media includes an event-level graphic past its gather date", () => {
+  const gaps = computeGaps([], [evMedia("g1")], "2026-11-01", T);
+  assert.deepEqual(gapIds(gaps, "overdue-media"), ["g1"]);
+  assert.deepEqual(gapIds(gaps, "late-media"), []);
+  assert.deepEqual(gapIds(gaps, "unscheduled-media"), []);
+});
+
+test("an event-level graphic on an archived or missing event is not a gap", () => {
+  const gaps = computeGaps([], [evMedia("g1", { eventLive: false })], "2026-11-01", T);
+  assert.deepEqual(gapIds(gaps, "overdue-media"), []);
+  assert.deepEqual(gapIds(gaps, "due-soon"), []);
+});
+
+test("due-soon lists posts not ready and graphics not done due within 7 days", () => {
+  const today = "2026-11-01";
+  const item = (id: string, publishDate: string, status: GapItem["status"]): GapItem =>
+    ({ id, publishDate, status, mediaCount: 1, noMediaNeeded: false });
+  const items = [item("p-today", today, "drafted"), item("p-ready", "2026-11-03", "ready"), item("p-far", "2026-11-09", "drafted")];
+  const media = [
+    evMedia("g-open", { gatherDate: "2026-11-05" }),
+    evMedia("g-captured", { gatherDate: "2026-11-05", status: "captured" }),
+    evMedia("g-today", { gatherDate: today, status: "needed" }),
+    evMedia("g-far", { gatherDate: "2026-11-09" }),
+  ];
+  const ids = gapIds(computeGaps(items, media, today, T), "due-soon");
+  assert.deepEqual(ids.sort(), ["g-open", "g-today", "p-today"]);
+});
+
+test("missing-from-breeze lists flagged events", () => {
+  const gaps = computeGaps([], [], "2026-11-01", T, [ev("e1", { missing: true }), ev("e2"), ev("e3", { missing: true, archived: true })]);
+  assert.deepEqual(gapIds(gaps, "missing-from-breeze"), ["e1"]);
+  assert.equal(gaps.find((g) => g.key === "missing-from-breeze")!.kind, "event");
+});
+
+test("no-checklist lists Breeze events in the next 30 days with no posts and no graphics", () => {
+  const gaps = computeGaps([], [], "2026-11-01", T, [
+    ev("empty"), ev("manual", { source: "manual" }), ev("far", { startDate: "2026-12-02" }),
+    ev("edge", { startDate: "2026-12-01" }), ev("has-post", { itemCount: 1 }), ev("has-graphic", { graphicCount: 1 }),
+    ev("past", { startDate: "2026-10-01" }), ev("undated", { startDate: null }),
+  ]);
+  assert.deepEqual(gapIds(gaps, "no-checklist").sort(), ["edge", "empty"]);
 });
 
 test("characters count the way each platform counts them", () => {

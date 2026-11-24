@@ -7,7 +7,7 @@ import { EVENT_COLORS, GAP_THRESHOLDS, DEFAULT_PLATFORMS, UPCOMING_DAYS } from "
 import { addDays } from "../dates";
 import {
   ContentInput, ContentStatus, EventInput, Gap, MediaInput, MediaStatus, Result,
-  checkStatusChange, computeGaps, lateMediaWarning, resolveMediaStatus,
+  checkStatusChange, computeGaps, GapEvent, lateMediaWarning, resolveMediaStatus,
   CONTENT_STATUSES,
 } from "./rules";
 import { propagate } from "./recurring";
@@ -134,7 +134,7 @@ function mediaOf(r: any): MediaRow {
     approvalId: r.approval_id ?? null, approvalTitle: r.approval_title || "",
     fileName: r.file_name || "", fileType: r.file_type || "", kind: r.kind || "collect", position: Number(r.position || 0),
     itemTitle: r.item_title || "", itemPublishDate: r.item_publish_date ?? null, itemStatus: r.item_status ?? null,
-    eventId: r.event_id ?? null, eventName: r.event_name || "", eventColor: r.event_color || "",
+    eventId: r.owner_event_id ?? null, eventName: r.event_name || "", eventColor: r.event_color || "",
     graphicType: r.graphic_type ?? null,
     ruleDaysBefore: r.rule_days_before == null ? null : Number(r.rule_days_before), dueEdited: !!r.due_edited,
     onEvent: r.content_item_id == null,
@@ -160,7 +160,7 @@ const CONTENT_SELECT = `
 // joins are LEFT; its event is its own or its post's.
 const MEDIA_SELECT = `
   SELECT ma.*, ci.title AS item_title, ci.publish_date AS item_publish_date, ci.status AS item_status,
-         COALESCE(ma.event_id, ci.event_id) AS event_id, e.name AS event_name, e.color AS event_color
+         COALESCE(ma.event_id, ci.event_id) AS owner_event_id, e.name AS event_name, e.color AS event_color
     FROM media_assets ma
     LEFT JOIN content_items ci ON ci.id = ma.content_item_id
     LEFT JOIN events e ON e.id = COALESCE(ma.event_id, ci.event_id)`;
@@ -638,11 +638,24 @@ export async function dashboardGaps(db: Db, today: string): Promise<{ today: str
   const items = (await listContent(db, {})).map((i) => ({
     id: i.id, publishDate: i.publishDate, status: i.status, noMediaNeeded: i.noMediaNeeded, mediaCount: i.mediaTotal + i.attachmentCount,
   }));
+  // One row per event: its post and event-level graphic counts, for the event gaps.
+  const evRows = (await db.query(
+    `SELECT e.id, e.source, e.start_date, e.archived, e.breeze_missing_since,
+            (SELECT count(*) FROM content_items ci WHERE ci.event_id = e.id AND ci.status <> 'cancelled')::int AS items,
+            (SELECT count(*) FROM media_assets ma WHERE ma.event_id = e.id)::int AS graphics
+       FROM events e`,
+  )).rows;
+  const events: GapEvent[] = evRows.map((r) => ({
+    id: r.id, source: r.source, startDate: r.start_date ?? null, missing: !!r.breeze_missing_since,
+    archived: !!r.archived, itemCount: r.items, graphicCount: r.graphics,
+  }));
+  const live = new Map(events.map((e) => [e.id, !e.archived && !e.missing]));
   const media = (await listMedia(db, {})).map((m) => ({
     id: m.id, contentItemId: m.contentItemId, gatherDate: m.gatherDate, status: m.status,
     itemPublishDate: m.itemPublishDate, itemStatus: m.itemStatus,
+    eventLive: m.onEvent ? !!(m.eventId && live.get(m.eventId)) : true,
   }));
-  return { today, gaps: computeGaps(items, media, today, GAP_THRESHOLDS) };
+  return { today, gaps: computeGaps(items, media, today, GAP_THRESHOLDS, events) };
 }
 
 // ── Duplicating an event ─────────────────────────────────────────────────────

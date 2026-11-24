@@ -141,7 +141,7 @@ test("filters and gaps read the same records", async () => {
   assert.ok((await listContent(pool, { includeCancelled: true })).some((i) => i.id === p.value.id));
 
   const { gaps } = await dashboardGaps(pool, REF);
-  assert.equal(gaps.length, 5);
+  assert.equal(gaps.length, 8);
   for (const g of gaps) assert.equal(g.count, g.ids.length);
 });
 

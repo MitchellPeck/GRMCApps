@@ -327,9 +327,15 @@ export interface GapMedia {
   /** Event-level graphics have no post: contentItemId and itemStatus are null. */
   id: string; contentItemId: string | null; gatherDate: string | null; status: MediaStatus;
   itemPublishDate: string | null; itemStatus: ContentStatus | null;
+  /** Event-level graphics only count while their event is neither archived nor missing from Breeze. */
+  eventLive: boolean;
+}
+export interface GapEvent {
+  id: string; source: string; startDate: string | null; missing: boolean; archived: boolean;
+  itemCount: number; graphicCount: number;
 }
 export interface Gap {
-  key: string; label: string; kind: "content" | "media"; count: number; ids: string[];
+  key: string; label: string; kind: "content" | "media" | "event"; count: number; ids: string[];
 }
 
 const CLOSED: ContentStatus[] = ["published", "cancelled"];
@@ -337,23 +343,36 @@ const OPEN_MEDIA: MediaStatus[] = ["needed", "scheduled"];
 
 export function computeGaps(
   items: GapItem[], media: GapMedia[], today: string,
-  t: { readinessDays: number; unscheduledMediaDays: number },
+  t: { readinessDays: number; unscheduledMediaDays: number; dueSoonDays?: number; noChecklistDays?: number },
+  events: GapEvent[] = [],
 ): Gap[] {
+  const dueSoonDays = t.dueSoonDays ?? 7;
+  const noChecklistDays = t.noChecklistDays ?? 30;
   const readyBy = addDays(today, t.readinessDays);
   const mediaBy = addDays(today, t.unscheduledMediaDays);
   const within = (d: string | null, until: string) => !!d && d >= today && d <= until;
-  const live = (s: ContentStatus | null) => s !== "cancelled";
+  // A post's media follow the post; an event-level graphic follows its event.
+  const alive = (m: GapMedia) => (m.contentItemId ? m.itemStatus !== "cancelled" : m.eventLive);
 
-  const notReady = items.filter((i) => live(i.status) && within(i.publishDate, readyBy) && !READY_STATUSES.includes(i.status));
+  const notReady = items.filter((i) => i.status !== "cancelled" && within(i.publishDate, readyBy) && !READY_STATUSES.includes(i.status));
   // Past posts nobody planned media for are history, not a gap.
   const noMedia = items.filter((i) => !CLOSED.includes(i.status) && !i.noMediaNeeded && i.mediaCount === 0
     && (!i.publishDate || i.publishDate >= today));
-  const unscheduled = media.filter((m) => live(m.itemStatus) && !m.gatherDate && m.status === "needed"
+  const unscheduled = media.filter((m) => !!m.contentItemId && alive(m) && !m.gatherDate && m.status === "needed"
     && within(m.itemPublishDate, mediaBy));
-  const late = media.filter((m) => !(m.itemStatus && CLOSED.includes(m.itemStatus)) && OPEN_MEDIA.includes(m.status)
+  const late = media.filter((m) => !!m.contentItemId && !(m.itemStatus && CLOSED.includes(m.itemStatus)) && OPEN_MEDIA.includes(m.status)
     && !!m.gatherDate && !!m.itemPublishDate && m.gatherDate > m.itemPublishDate);
-  const overdue = media.filter((m) => live(m.itemStatus) && OPEN_MEDIA.includes(m.status)
+  const overdue = media.filter((m) => alive(m) && OPEN_MEDIA.includes(m.status)
     && !!m.gatherDate && m.gatherDate < today);
+
+  const dueBy = addDays(today, dueSoonDays);
+  const dueItems = items.filter((i) => i.status !== "cancelled" && within(i.publishDate, dueBy) && !READY_STATUSES.includes(i.status));
+  const dueMedia = media.filter((m) => alive(m) && OPEN_MEDIA.includes(m.status) && within(m.gatherDate, dueBy));
+
+  const missing = events.filter((e) => e.missing && !e.archived);
+  const checklistBy = addDays(today, noChecklistDays);
+  const noChecklist = events.filter((e) => e.source === "breeze" && !e.archived && !e.missing
+    && within(e.startDate, checklistBy) && e.itemCount === 0 && e.graphicCount === 0);
 
   const gap = (key: string, label: string, kind: Gap["kind"], rows: { id: string }[]): Gap =>
     ({ key, label, kind, count: rows.length, ids: rows.map((r) => r.id) });
@@ -363,6 +382,9 @@ export function computeGaps(
     gap("unscheduled-media", `Media with no gather date for posts in the next ${t.unscheduledMediaDays} days`, "media", unscheduled),
     gap("late-media", "Media gathered after its post publishes", "media", late),
     gap("overdue-media", "Media past its gather date and not collected", "media", overdue),
+    gap("due-soon", `Posts and graphics due in the next ${dueSoonDays} days`, "content", [...dueItems, ...dueMedia]),
+    gap("missing-from-breeze", "Events removed from Breeze", "event", missing),
+    gap("no-checklist", "Breeze events with nothing planned", "event", noChecklist),
   ];
 }
 

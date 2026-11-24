@@ -28,6 +28,10 @@ export const GAP_THRESHOLDS = {
   readinessDays: 7,
   /** Alert 3: media with no gather date for posts publishing within this many days. */
   unscheduledMediaDays: 21,
+  /** Posts not ready and graphics not done within this many days. */
+  dueSoonDays: 7,
+  /** Breeze events starting within this many days with no posts or graphics. */
+  noChecklistDays: 30,
 };
 
 // Dashboard "next N days" window for posts and capture days.
