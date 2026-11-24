@@ -47,6 +47,17 @@ export function dueActions(now: { date: string; time: string }, s: Schedule, has
   return out;
 }
 
+/**
+ * Right after an issue is marked sent, open the next one (copied forward from it), so contributors can send
+ * things in straight away instead of waiting for the automatic Sunday create. Nothing happens if a later issue exists.
+ */
+export async function openNextIssue(db: Pool, sentIssueDate: string): Promise<string | null> {
+  const next = nextIssueDate(sentIssueDate, (await loadSchedule(db)).sendDow);
+  if ((await listIssues(db)).some((i) => i.issueDate >= next)) return null;
+  const r = await createIssue(db, next);
+  return r.ok ? r.value.id : null;
+}
+
 export async function tick(db: Pool, now: Date = new Date(), fetchFn: FetchFn = fetch): Promise<{ created?: string; reminded: number }> {
   const tz = (await getSetting(db, "default_timezone")) || DEFAULT_TZ;
   const schedule = await loadSchedule(db);

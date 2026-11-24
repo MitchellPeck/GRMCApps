@@ -15,6 +15,8 @@ export type Actor = { kind: "contributor"; contributor: Contributor } | { kind: 
 export interface PieceInput {
   title?: string; bodyHtml?: string; details?: Details; imageUrl?: string;
   startDate?: string; endDate?: string | null;
+  /** The piece's updatedAt when the editor opened; a save over someone else's newer save is refused. */
+  expectedUpdatedAt?: string;
 }
 
 const NOT_YOURS = "That piece isn't yours.";
@@ -149,6 +151,13 @@ export async function editPiece(db: Db, pieceId: string, input: PieceInput, acto
   }
 
   return withTx(db, async (c): Promise<Result<Piece>> => {
+    if (input.expectedUpdatedAt) {
+      const now = (await c.query("SELECT updated_at, updated_by FROM gn_pieces WHERE id = $1 FOR UPDATE", [pieceId])).rows[0];
+      if (now && new Date(now.updated_at).toISOString() !== new Date(input.expectedUpdatedAt).toISOString()) {
+        return fail(`${actor.kind === "admin" && now.updated_by ? now.updated_by : "Someone else"} saved this while you had it open, so your changes weren't saved. `
+          + "Copy what you wrote, reload the page, and make your change again.");
+      }
+    }
     let eventId = cur.eventId;
     if (eventId) {
       const patch: Record<string, unknown> = {};

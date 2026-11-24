@@ -15,6 +15,8 @@ export interface Block { kind: BlockKind; html: string }
 export interface LetterVersions {
   sourceHtml: string; title: string; signoff: string; signer: string; full: Block[]; short: Block[];
 }
+/** Headline, closing and signer as set by hand. Kept in their own column so a re-review or remake never loses them. */
+type HandEdits = Partial<Record<"title" | "signoff" | "signer", string>>;
 export interface VersionsView {
   title: string; signoff: string; signer: string; stale: boolean;
   fullHtml: string; shortHtml: string; fullText: string; shortText: string;
@@ -200,7 +202,7 @@ export function viewOf(v: LetterVersions, currentHtml: string): VersionsView {
 export async function makeVersions(db: Pool, pieceId: string, call: Call = callClaude): Promise<Result<LetterVersions>> {
   const piece = await getPiece(db, pieceId);
   if (!piece) return { ok: false, error: "Piece not found." };
-  const { rows } = await db.query("SELECT suggestions FROM gn_letter_reviews WHERE piece_id = $1", [pieceId]);
+  const { rows } = await db.query("SELECT suggestions, hand_edits FROM gn_letter_reviews WHERE piece_id = $1", [pieceId]);
   if (!rows[0]) return { ok: false, error: "Review the letter first." };
   if ((rows[0].suggestions as Suggestion[]).some((s) => s.state === "open")) {
     return { ok: false, error: "Accept or reject every suggestion first." };
@@ -212,6 +214,8 @@ export async function makeVersions(db: Pool, pieceId: string, call: Call = callC
   let parsed: any;
   try { parsed = JSON.parse(raw); } catch { return { ok: false, error: "Claude's answer wasn't readable. Try again." }; }
   const v = assemble(piece.bodyHtml, parsed, await getSetting(db, SIGNER_KEY));
+  // Keep whatever was set by hand (a headline you rewrote, say).
+  Object.assign(v, (rows[0].hand_edits || {}) as HandEdits);
   if (v.signer) await setSetting(db, SIGNER_KEY, v.signer);
   await db.query("UPDATE gn_letter_reviews SET versions = $2::jsonb WHERE piece_id = $1", [pieceId, JSON.stringify(v)]);
   return { ok: true, value: v };
@@ -221,13 +225,15 @@ export async function makeVersions(db: Pool, pieceId: string, call: Call = callC
 export async function updateVersions(
   db: Pool, pieceId: string, patch: { title?: string; signoff?: string; signer?: string },
 ): Promise<Result<LetterVersions>> {
-  const { rows } = await db.query("SELECT versions FROM gn_letter_reviews WHERE piece_id = $1", [pieceId]);
+  const { rows } = await db.query("SELECT versions, hand_edits FROM gn_letter_reviews WHERE piece_id = $1", [pieceId]);
   const v = rows[0]?.versions as LetterVersions | null | undefined;
   if (!v) return { ok: false, error: "Make the email versions first." };
+  const edits: HandEdits = { ...(rows[0].hand_edits || {}) };
   for (const k of ["title", "signoff", "signer"] as const) {
-    if (typeof patch[k] === "string") v[k] = squash(patch[k]!).slice(0, 200);
+    if (typeof patch[k] === "string") v[k] = edits[k] = squash(patch[k]!).slice(0, 200);
   }
   if (typeof patch.signer === "string") await setSetting(db, SIGNER_KEY, v.signer);
-  await db.query("UPDATE gn_letter_reviews SET versions = $2::jsonb WHERE piece_id = $1", [pieceId, JSON.stringify(v)]);
+  await db.query("UPDATE gn_letter_reviews SET versions = $2::jsonb, hand_edits = $3::jsonb WHERE piece_id = $1",
+    [pieceId, JSON.stringify(v), JSON.stringify(edits)]);
   return { ok: true, value: v };
 }

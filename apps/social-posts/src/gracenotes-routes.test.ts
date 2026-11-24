@@ -44,7 +44,7 @@ async function world() {
 
 test("gn route rejects retired token", async () => {
   const { ann, pa } = await world();
-  await retireContributor(pool, ann.id);
+  assert.ok((await retireContributor(pool, ann.id, null)).ok); // null: no one takes over
   const page = await app.inject({ url: `/gn/${ann.token}` });
   assert.equal(page.statusCode, 404);
   assert.match(page.body, /This link isn't active\. Ask Mitchell for a new one\./);

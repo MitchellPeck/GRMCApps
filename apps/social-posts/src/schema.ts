@@ -289,6 +289,7 @@ CREATE TABLE IF NOT EXISTS gn_letter_reviews (
   piece_id text PRIMARY KEY REFERENCES gn_pieces(id) ON DELETE CASCADE,
   suggestions jsonb NOT NULL, created_at timestamptz NOT NULL DEFAULT now());
 ALTER TABLE gn_letter_reviews ADD COLUMN IF NOT EXISTS versions jsonb;
+ALTER TABLE gn_letter_reviews ADD COLUMN IF NOT EXISTS hand_edits jsonb; -- headline/closing/signer set by hand, kept across remakes
 CREATE TABLE IF NOT EXISTS youtube_captions (
   video_id text PRIMARY KEY, track_kind text NOT NULL DEFAULT '', language text NOT NULL DEFAULT '',
   text text NOT NULL, fetched_at timestamptz NOT NULL DEFAULT now()); -- the styled email versions, made once every suggestion is decided

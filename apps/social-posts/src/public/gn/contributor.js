@@ -228,6 +228,7 @@
     var d = p ? Object.assign({}, p.details || {}) : {};
     var title = textInput(p ? p.title || p.eventName || "" : "");
     var date = textInput(p && p.eventStartDate ? p.eventStartDate.slice(0, 10) : "", "date");
+    var endDate = textInput(p ? String(p.eventEndDate || (p.details && p.details.endDate) || "").slice(0, 10) : "", "date");
     var editor = makeEditor(p ? p.bodyHtml : "");
     var det = {};
     var imageUrl = p ? shownImage(p) : "";
@@ -261,7 +262,7 @@
     drawPic();
 
     // R20: text sections have no heading; the email block has its own.
-    var parts = isEvents ? [field("Name of the event or item", title), field("Date", date)] : [];
+    var parts = isEvents ? [field("Name of the event or item", title), field("Date", date), field("Last day, if it runs several days", endDate)] : [];
     parts.push(h("div", { class: "field" }, h("label", null, "Your words"), editor.node));
     if (isEvents) {
       var more = h("details", { class: "gn-more" }, h("summary", null, "More details (optional)"));
@@ -278,10 +279,12 @@
     save.addEventListener("click", function () {
       if (uploading) return;
       var payload = { bodyHtml: editor.html() };
+      if (p && p.updatedAt) payload.expectedUpdatedAt = p.updatedAt; // refused if someone saved this meanwhile
       if (isEvents) {
         payload.title = title.value.trim();
         if (!p && !payload.title) { toast("Please give it a name first.", true); title.focus(); return; }
         if (date.value) payload.startDate = date.value;
+        payload.endDate = endDate.value || null;
         Object.keys(det).forEach(function (k) {
           var v = det[k].value.trim();
           if (v) d[k] = v; else delete d[k];

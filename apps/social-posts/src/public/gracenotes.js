@@ -299,8 +299,12 @@ function drawIssue(main, data, blocks, people, sections, settings, histHtml, eve
       if (v) copyText(v[b.getAttribute('data-which') + 'Html']).then(function () { toast('HTML copied. Paste it into a Code block.', 'ok'); }, function () { toast('Couldn’t copy.', 'err'); });
     },
     'mark-sent': function (b) {
-      if (!window.confirm('Mark this issue as sent? It moves into history and the next one copies from it.')) return;
-      run(b, function () { return call('POST', '/api/gracenotes/issues/' + encodeURIComponent(issue.id) + '/sent'); }, 'Marked sent.');
+      if (!window.confirm('Mark this issue as sent? It moves into history, and next week’s issue opens straight away (copied from this one) so people can send things in.')) return;
+      run(b, function () { return call('POST', '/api/gracenotes/issues/' + encodeURIComponent(issue.id) + '/sent'); }, null, function (d) {
+        toast(d.nextIssueId ? 'Marked sent. Next week’s issue is open.' : 'Marked sent.', 'ok');
+        if (d.nextIssueId) { location.hash = '#gracenotes/issue/' + d.nextIssueId; return; }
+        return reload();
+      });
     },
     'unmark-sent': function (b) {
       if (!window.confirm('Unmark this issue as sent? It opens for editing again; mark it sent again when it goes out.')) return;
@@ -314,6 +318,8 @@ function drawIssue(main, data, blocks, people, sections, settings, histHtml, eve
     edit: function (b) { openEditor(b.closest('.gnx-piece'), byId[b.getAttribute('data-id')], sectionById); },
     'add-item': function (b) { openEditor(b.parentNode.insertBefore(document.createElement('div'), b), null, sectionById, issue.id, b.getAttribute('data-sid')); b.hidden = true; },
     review: function (b) {
+      if (b.getAttribute('data-again') && !window.confirm('Review the letter again? Your accept/reject choices on the current suggestions are cleared and the email versions are made again afterwards (headline and closing edits are kept).')) return;
+      delete autoVersions[b.getAttribute('data-id')]; // let the versions be made again once this review is decided
       var label = b.textContent;
       b.textContent = 'Reviewing…';
       // On success the page redraws; on failure run() re-enables the button and the label comes back here.
@@ -417,7 +423,7 @@ function pieceHtml(p, section, review, sent, canLink, versions) {
       + '<button class="btn-sm" type="button" data-act="edit" data-id="' + esc(p.id) + '">Edit</button>'
       + (section.kind === 'events' ? '<button class="btn-sm" type="button" data-act="drop" data-id="' + esc(p.id) + '">Drop</button>' : '')
       + (section.kind === 'events' && !p.eventId && canLink ? '<button class="btn-sm" type="button" data-act="show-link" data-id="' + esc(p.id) + '">Link to event</button>' : '')
-      + (isLetter ? '<button class="btn-sm" type="button" data-act="review" data-id="' + esc(p.id) + '">Review letter</button>' : '') + '</div>';
+      + (isLetter ? '<button class="btn-sm" type="button" data-act="review" data-id="' + esc(p.id) + '"' + (review ? ' data-again="1">Review again' : '>Review letter') + '</button>' : '') + '</div>';
   }
   if (isLetter && review && review.length) h += reviewHtml(p.id, review, sent);
   var decided = isLetter && Array.isArray(review) && !review.some(function (s) { return s.state === 'open'; });
@@ -475,7 +481,8 @@ function openEditor(box, p, sectionById, issueId, sid) {
   box.className = 'gnx-piece editing';
   // R20: text sections have no heading field; the Mailchimp block has its own.
   box.innerHTML = (isEvents ? '<div class="field"><label>Name</label><input type="text" class="gnx-title"></div>' : '')
-    + (isEvents ? '<div class="field"><label>Date</label><input type="date" class="gnx-date"></div>' : '') + '<div class="field gnx-edwrap"><label>Text</label></div>'
+    + (isEvents ? '<div class="row2"><div class="field"><label>Date</label><input type="date" class="gnx-date"></div>'
+      + '<div class="field"><label>Last day (if it runs several days)</label><input type="date" class="gnx-end"></div></div>' : '') + '<div class="field gnx-edwrap"><label>Text</label></div>'
     + (isEvents ? '<div class="row2">' + [['when', 'Time'], ['place', 'Place'], ['cost', 'Cost'], ['contact', 'Contact'], ['link', 'Web link'], ['linkLabel', 'Link words']].map(function (x) {
       return '<div class="field"><label>' + x[1] + '</label><input type="text" data-d="' + x[0] + '"></div>';
     }).join('') + '</div>' : '')
@@ -484,6 +491,7 @@ function openEditor(box, p, sectionById, issueId, sid) {
   box.querySelector('.gnx-edwrap').appendChild(ed.node);
   if (isEvents) box.querySelector('.gnx-title').value = p ? p.title || p.eventName || '' : '';
   if (isEvents) box.querySelector('.gnx-date').value = p && p.eventStartDate ? p.eventStartDate.slice(0, 10) : '';
+  if (isEvents) box.querySelector('.gnx-end').value = p ? String(p.eventEndDate || d.endDate || '').slice(0, 10) : '';
   box.querySelectorAll('[data-d]').forEach(function (i) { i.value = d[i.getAttribute('data-d')] || ''; });
   var startImg = p ? shownImage(p) : '';
   box.querySelector('.gnx-img').value = startImg;
@@ -491,6 +499,7 @@ function openEditor(box, p, sectionById, issueId, sid) {
   box.querySelector('[data-x=save]').onclick = function (e) {
     e.stopPropagation();
     var payload = { bodyHtml: ed.html() };
+    if (p) payload.expectedUpdatedAt = p.updatedAt; // refused if someone saved this piece meanwhile
     // Only a changed picture is sent, so saving never wipes the event's picture (as in contributor.js).
     var img = box.querySelector('.gnx-img').value.trim();
     if (img !== startImg) payload.imageUrl = img;
@@ -498,6 +507,7 @@ function openEditor(box, p, sectionById, issueId, sid) {
       payload.title = box.querySelector('.gnx-title').value.trim();
       var date = box.querySelector('.gnx-date').value;
       if (date) payload.startDate = date;
+      payload.endDate = box.querySelector('.gnx-end').value || null;
       box.querySelectorAll('[data-d]').forEach(function (i) { var v = i.value.trim(); if (v) d[i.getAttribute('data-d')] = v; else delete d[i.getAttribute('data-d')]; });
       payload.details = d;
       if (!p && !payload.title) return toast('Give the item a name first.', 'err');
@@ -546,11 +556,22 @@ function renderPeople(main) {
         if (email == null) return;
         run(b, function () { return call('PATCH', '/api/gracenotes/contributors/' + encodeURIComponent(p.id), { name: name.trim(), email: email.trim() }); }, 'Saved.');
       },
+      // Retiring asks who takes over their sections and items, so nothing carries on unwatched.
       'retire-person': function (b) {
-        var p = byId[b.getAttribute('data-id')];
-        if (!window.confirm('Retire ' + p.name + '? Their old link will stop working.')) return;
-        run(b, function () { return call('POST', '/api/gracenotes/contributors/' + encodeURIComponent(p.id) + '/retire', {}); }, 'Retired.');
+        var p = byId[b.getAttribute('data-id')], box = b.closest('.gnx-person');
+        if (box.querySelector('.gnx-retire')) return;
+        var others = live.filter(function (x) { return x.id !== p.id; });
+        box.insertAdjacentHTML('beforeend', '<div class="gnx-retire alert alert-warn"><div class="field"><label>Who takes over ' + esc(p.name) + '’s sections and items?</label>'
+          + '<select>' + others.map(function (x) { return '<option value="' + esc(x.id) + '">' + esc(x.name) + '</option>'; }).join('')
+          + '<option value="">No one — I’ll look after them</option></select></div>'
+          + '<p class="hint">Their old link stops working.</p><div class="gnx-acts"><button class="btn-sm" type="button" data-act="retire-go" data-id="' + esc(p.id) + '">Retire ' + esc(p.name) + '</button>'
+          + '<button class="btn-sm" type="button" data-act="retire-cancel">Cancel</button></div></div>');
       },
+      'retire-go': function (b) {
+        var v = b.closest('.gnx-retire').querySelector('select').value;
+        run(b, function () { return call('POST', '/api/gracenotes/contributors/' + encodeURIComponent(b.getAttribute('data-id')) + '/retire', { takeOverId: v || null }); }, 'Retired.');
+      },
+      'retire-cancel': function (b) { b.closest('.gnx-retire').remove(); },
       own: function (cb) {
         var s = secById[cb.getAttribute('data-sid')], id = cb.getAttribute('data-id');
         var ids = s.ownerIds.filter(function (x) { return x !== id; });
