@@ -35,6 +35,8 @@ function toast(msg, kind) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(function(){ t.className = 'pl-toast'; }, kind === 'err' ? 7000 : 3500);
 }
+// The Metricool popup (its own script) reports a send here and closes; it can't see inside this wrapper.
+window.toast = toast;
 function warnAll(warnings){ if (warnings && warnings.length) toast(warnings.join(' '), 'warn'); }
 
 function storeGet(k){ try { return JSON.parse(localStorage.getItem(k) || 'null'); } catch (e) { return null; } }
