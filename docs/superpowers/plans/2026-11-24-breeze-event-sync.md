@@ -268,3 +268,19 @@ Per sync, per ticked calendar (instances grouped by `seriesId`):
 
 - [ ] **Step 1:** Add a "Deploy notes" section to the spec: back up the host DB first (nullable `content_item_id`, new tables); after deploy, enter the Breeze subdomain/key, tick calendars, set rules **before** the first sync matters (events synced with no rule get no checklist — use Apply rules); confirm fixture field names against the live API.
 - [ ] **Step 2: Commit** — `docs: Breeze sync deploy notes`.
+
+### Task 11: Posts without a date
+
+Added mid-build at the user's request: "make a post without a date or edit a post to remove date to say idk when it's getting published. functionality exists but clear date is blocked." The data model already allows it (`content_items.publish_date` is nullable, `optDate` turns `""`/`null` into null, `shortDate(null)` shows "No date", MCP `create_post` already documents undated). Three places block it.
+
+**Files:**
+- Modify: `src/pipeline/rules.ts` (`parseContentInput`, ~line 170), `src/public/pipeline.js` (`pf-date` input ~line 946, `savePost` check ~line 1400)
+- Test: `src/pipeline-rules.test.ts`, `src/pipeline.test.ts`
+
+**Interfaces:** none new.
+
+- [ ] **Step 1: Write failing tests** — `parseContentInput({ title: "Someday" }, "create")` → `ok`, `publishDate` absent/null; `parseContentInput({ publishDate: "" }, "patch")` → `ok`, `publishDate === null`; DB: `createContent` with no date then `updateContent(id, { publishDate: null })` on a dated post → row's `publish_date` is null and `publish_time` is cleared too.
+- [ ] **Step 2: Run** — the create test FAILS ("Pick a publish date.").
+- [ ] **Step 3: Implement.** Remove the create-mode date requirement. Clearing the date also clears `publishTime` (a time with no day means nothing). Client: drop `required` from `pf-date`, drop the "Pick a publish date." check in `savePost`, and give the date field a "Not sure yet" hint (e.g. help text "Leave blank if you don't know yet") plus a small "Clear" button next to it when it has a value. Status rule: Scheduled and Published still need a date — `parseContentInput`/`updateContent` refuse `status: 'scheduled'|'published'` on an undated post with "Pick a publish date before marking it Scheduled." (Metricool send already refuses without a date.) Test that too.
+- [ ] **Step 4: Run** — PASS, then the whole suite.
+- [ ] **Step 5: Commit** — `feat(pipeline): posts can be undated`.
