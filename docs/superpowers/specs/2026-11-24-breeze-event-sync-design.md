@@ -314,3 +314,28 @@ send once per due slot, retry a failed send on the next tick).
 - UI layout of the Breeze settings, the rules editor and the event checklist.
 - Whether the mode-change UI warns about existing events.
 - Exact email wording and layout (plain text, like the Grace Notes reminder).
+
+## Deploy notes
+
+- **Before pushing:** back up the host DB with `pg_dump` on the host. This
+  release changes the schema: `media_assets.content_item_id` becomes nullable;
+  new tables `breeze_series` and `checklist_rules`; new columns on `events`
+  (including `breeze_kept`), on `media_assets` and on `content_items`.
+- **Shipping:** `docker compose build && push` from the build Mac. Watchtower
+  restarts the host, and boot runs the schema changes.
+- **Settings → Breeze, after deploy:** enter the subdomain and API key, tick
+  the calendars, and check the default owner.
+- **Write checklist rules before the first sync.** Events synced with no
+  matching rule get no checklist. If that happens, use "Apply rules" on the
+  event afterwards. Then press "Sync now".
+- **Fixtures:** `apps/social-posts/src/fixtures/breeze-*.json` are hand-written
+  to Breeze's documented shapes. On the first sync, confirm the field names
+  (`id`, `event_id`, `category_id`, `start_datetime`) against the live API. If
+  the sync reports errors, record a real reply as a fixture.
+- **Calendar names** are saved when calendars are ticked. Re-save the ticks
+  once so outage messages can name the calendars.
+- **Reminder email** needs Resend (`resend_api_key`, `mail_from`) and
+  `public_base_url` already set. Use "Send me a test reminder" to check it.
+- **Also on this branch, unrelated to Breeze:** the Metricool send popup now
+  closes after a successful send. Posts can now be saved without a publish
+  date; Scheduled and Published still need one.
