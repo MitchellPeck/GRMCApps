@@ -261,6 +261,8 @@ export interface EventInput {
   drafting?: Profile;
   /** Only ever cleared from the page ("Keep"); the Breeze sync is what sets it. */
   breezeMissingSince?: null;
+  /** "Keep" also sets this so the next sync leaves the event alone; never unset from the page. */
+  breezeKept?: true;
 }
 
 export function parseEventInput(raw: unknown, mode: "create" | "patch"): Result<EventInput> {
@@ -283,6 +285,9 @@ export function parseEventInput(raw: unknown, mode: "create" | "patch"): Result<
     ["drafting", "drafting" in body ? parseProfile(body.drafting) : undefined],
     ["breezeMissingSince", "breezeMissingSince" in body
       ? (body.breezeMissingSince === null ? { ok: true, value: null } : fail("Removed-from-Breeze can only be cleared."))
+      : undefined],
+    ["breezeKept", "breezeKept" in body
+      ? (body.breezeKept === true ? { ok: true, value: true } : fail("Keep can only be turned on."))
       : undefined],
   ]);
   if (err) return fail(err);

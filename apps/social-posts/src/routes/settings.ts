@@ -36,6 +36,7 @@ interface SaveBody {
   breezeKey?: string;
   breezeDefaultOwner?: string;
   breezeCalendars?: string[];
+  breezeCalendarNames?: Record<string, string>;
 }
 
 function parseSchedule(s: SaveBody): string | { dow?: string; times: Record<string, string | undefined> } {
@@ -84,6 +85,10 @@ export async function settingsRoutes(app: FastifyInstance, opts: { db?: Pool } =
           return { ok: false, error: "Calendars must be a list of calendar ids." };
         calendars = s.breezeCalendars;
       }
+      const names = s.breezeCalendarNames;
+      if (names !== undefined && (!names || typeof names !== "object" || Array.isArray(names)
+          || Object.values(names).some((n) => typeof n !== "string")))
+        return { ok: false, error: "Calendar names must map calendar ids to names." };
       if (s.anthropicKey && s.anthropicKey.trim())
         await setSetting(pool, "anthropic_api_key", s.anthropicKey.trim());
       if (s.mailchimpKey && s.mailchimpKey.trim())
@@ -140,6 +145,7 @@ export async function settingsRoutes(app: FastifyInstance, opts: { db?: Pool } =
         if (me) await setSetting(pool, "breeze_default_owner", me);
       }
       if (calendars) await setSetting(pool, "breeze_calendars", JSON.stringify(calendars));
+      if (names) await setSetting(pool, "breeze_calendar_names", JSON.stringify(names));
       if (schedule.dow !== undefined) await setSetting(pool, "gn_send_dow", schedule.dow);
       return { ok: true };
     } catch (e) {

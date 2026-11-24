@@ -282,6 +282,26 @@ test("a removed instance flags its event, a returning one clears it", async () =
   assert.deepEqual(await flagged(), []);
 });
 
+test("a kept event stays kept while Breeze still lacks it; an un-kept one is flagged", async () => {
+  const both = [inst("k1", "sk", "Pie Social", "2026-12-10"), inst("k2", "sl", "Hymn Sing", "2026-12-12")];
+  feed["10"] = both;
+  await sync();
+  feed["10"] = [];
+  assert.equal((await sync()).flaggedMissing, 2);
+  // The user keeps Pie Social (what the page's Keep sends).
+  await pool.query("UPDATE events SET breeze_missing_since = NULL, breeze_kept = true WHERE breeze_instance_id = 'k1'");
+  const r = await sync();
+  assert.equal(r.flaggedMissing, 0);
+  assert.equal((await events("breeze_instance_id = 'k1'"))[0].breeze_missing_since, null);
+  assert.ok((await events("breeze_instance_id = 'k2'"))[0].breeze_missing_since, "the un-kept one stays flagged");
+  // If it comes back, it just updates as normal.
+  feed["10"] = [inst("k1", "sk", "Pie Social (moved)", "2026-12-10")];
+  await sync();
+  const k1 = (await events("breeze_instance_id = 'k1'"))[0];
+  assert.equal(k1.name, "Pie Social (moved)");
+  assert.equal(k1.breeze_kept, true);
+});
+
 test("one missing week doesn't flag a series event", async () => {
   feed["10"] = weekly("s11", "Youth Night");
   await sync();
@@ -317,6 +337,7 @@ test("the settings page sees the last sync time and which calendars failed", asy
   let view = await getSettingsView(pool);
   assert.ok(view.breezeLastSync);
   assert.deepEqual(view.breezeLastSyncFailed, ["10"]);
+  assert.deepEqual(view.breezeCalendarNames, {});
   feed["10"] = [];
   await sync();
   view = await getSettingsView(pool);

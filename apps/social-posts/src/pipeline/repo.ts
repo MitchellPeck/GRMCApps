@@ -36,6 +36,8 @@ export interface EventRow {
   drafting: Profile;
   /** "breeze" when the Breeze sync made it; its flag when Breeze no longer lists it. */
   source: "manual" | "breeze"; breezeMissingSince: string | null; breezeCalendarId: string | null;
+  /** The user chose Keep, so the sync no longer flags it as removed. */
+  breezeKept: boolean;
   /** A repeating Breeze event's current date (the series row's own dates are its span). */
   anchorDate: string | null;
   itemCount?: number;
@@ -88,7 +90,7 @@ function eventOf(r: any): EventRow {
     drafting: r.drafting || {},
     source: r.source === "breeze" ? "breeze" : "manual",
     breezeMissingSince: r.breeze_missing_since ? new Date(r.breeze_missing_since).toISOString() : null,
-    breezeCalendarId: r.breeze_calendar_id ?? null, anchorDate: r.anchor_date ?? null,
+    breezeCalendarId: r.breeze_calendar_id ?? null, breezeKept: !!r.breeze_kept, anchorDate: r.anchor_date ?? null,
   };
   if (r.item_count != null) e.itemCount = Number(r.item_count);
   if (r.in_grace_notes != null) e.inGraceNotes = !!r.in_grace_notes;
@@ -182,7 +184,7 @@ function setClause(patch: Record<string, unknown>, columns: Record<string, strin
 const EVENT_COLUMNS: Record<string, string> = {
   name: "name", kind: "kind", color: "color", startDate: "start_date", endDate: "end_date",
   ownerEmail: "owner_email", notes: "notes", archived: "archived", drafting: "drafting",
-  breezeMissingSince: "breeze_missing_since",
+  breezeMissingSince: "breeze_missing_since", breezeKept: "breeze_kept",
 };
 
 export async function nextEventColor(db: Db): Promise<string> {

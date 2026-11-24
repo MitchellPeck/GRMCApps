@@ -46,6 +46,8 @@ export interface SettingsView {
   /** ISO time of the last sync ("" if never), and the calendar ids it couldn't read. */
   breezeLastSync: string;
   breezeLastSyncFailed: string[];
+  /** Calendar names as last seen when ticking, so a warning can name them while Breeze is down. */
+  breezeCalendarNames: Record<string, string>;
 }
 
 // Mirrors Code.gs getSettings(): never returns full keys, only a hint + flags.
@@ -71,6 +73,12 @@ export async function getSettingsView(pool: Pool): Promise<SettingsView> {
     const v = JSON.parse((await getSetting(pool, "breeze_last_sync_failed")) || "[]");
     if (Array.isArray(v)) breezeLastSyncFailed = v.filter((x) => typeof x === "string");
   } catch { /* unreadable reads as none failed */ }
+  const breezeCalendarNames: Record<string, string> = {};
+  try {
+    const v = JSON.parse((await getSetting(pool, "breeze_calendar_names")) || "{}");
+    if (v && typeof v === "object" && !Array.isArray(v))
+      for (const [k, n] of Object.entries(v)) if (typeof n === "string") breezeCalendarNames[k] = n;
+  } catch { /* unreadable reads as no names */ }
   return {
     anthropicKeyHint: ak ? ak.substring(0, 10) + "..." : "",
     hasAnthropicKey: ak.length > 0,
@@ -103,5 +111,6 @@ export async function getSettingsView(pool: Pool): Promise<SettingsView> {
     breezeDefaultOwner: await getSetting(pool, "breeze_default_owner"),
     breezeLastSync: await getSetting(pool, "breeze_last_sync"),
     breezeLastSyncFailed,
+    breezeCalendarNames,
   };
 }

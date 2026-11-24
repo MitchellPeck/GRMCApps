@@ -98,6 +98,12 @@ test("saving Breeze settings defaults the owner to the signed-in user, once", as
   assert.equal(await getSetting(pool, "breeze_default_owner"), "");
 });
 
+test("saving ticked calendars also keeps their names, for when Breeze can't be reached", async () => {
+  assert.ok((await call("POST", "/api/settings", { breezeCalendars: ["10"], breezeCalendarNames: { "10": "Church Events", "20": "Youth" } })).ok);
+  assert.deepEqual((await call("GET", "/api/settings")).breezeCalendarNames, { "10": "Church Events", "20": "Youth" });
+  assert.equal((await call("POST", "/api/settings", { breezeCalendarNames: { "10": 5 } })).ok, false);
+});
+
 test("digest test sends only the signed-in user's digest and leaves the slot alone", async () => {
   await setSetting(pool, "resend_api_key", "k");
   await setSetting(pool, "mail_from", "a@x.org");

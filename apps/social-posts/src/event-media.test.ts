@@ -165,11 +165,15 @@ test("dashboardGaps lists an overdue event-level graphic, and drops it once the 
 test("Keep clears the removed-from-Breeze flag, and nothing else can set it", async () => {
   const ev = await createEvent(pool, { name: "Kept", startDate: "2026-12-10" });
   await pool.query("UPDATE events SET source = 'breeze', breeze_missing_since = now() WHERE id = $1", [ev.id]);
-  const keep = parseEventInput({ breezeMissingSince: null }, "patch");
+  const keep = parseEventInput({ breezeMissingSince: null, breezeKept: true }, "patch");
   assert.ok(keep.ok, !keep.ok ? keep.error : "");
   const r = await updateEvent(pool, ev.id, keep.value);
   assert.ok(r.ok);
   assert.equal(r.value.breezeMissingSince, null);
+  assert.equal(r.value.breezeKept, true);
+  assert.equal((await pool.query("SELECT breeze_kept FROM events WHERE id = $1", [ev.id])).rows[0].breeze_kept, true);
+  // Keep is one-way from the page.
+  assert.equal(parseEventInput({ breezeKept: false }, "patch").ok, false);
   // Only the sync flags an event; the page can only clear it.
   assert.equal(parseEventInput({ breezeMissingSince: "2026-11-01" }, "patch").ok, false);
   assert.equal(parseEventInput({ breezeMissingSince: true }, "patch").ok, false);

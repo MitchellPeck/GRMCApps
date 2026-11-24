@@ -218,7 +218,8 @@ async function shiftChecklist(c: PoolClient, eventId: string, anchor: string) {
  * Flag and un-flag "removed from Breeze". Only events on calendars read in
  * full this run are considered. An occurrence must have been due inside the
  * window; a series is flagged only when none of it is left and its last known
- * date hasn't simply passed (a series that ended is not "removed").
+ * date hasn't simply passed (a series that ended is not "removed"). An event
+ * the user chose to Keep is never flagged again.
  */
 async function markMissing(
   pool: Pool, okCals: string[], instances: string[], series: string[], today: string, to: string,
@@ -232,7 +233,7 @@ async function markMissing(
   );
   const flagged = await pool.query(
     `UPDATE events SET breeze_missing_since = now()
-     WHERE source = 'breeze' AND breeze_missing_since IS NULL AND NOT archived
+     WHERE source = 'breeze' AND breeze_missing_since IS NULL AND NOT archived AND NOT breeze_kept
        AND breeze_calendar_id = ANY($1::text[])
        AND ((breeze_instance_id IS NOT NULL AND NOT (breeze_instance_id = ANY($2::text[]))
               AND start_date BETWEEN $4::date AND $5::date)

@@ -315,10 +315,13 @@ function renderGapList(main, key) {
     if (!gap.count) { main.innerHTML = head + '<p class="empty">Nothing here right now.</p>'; return; }
     if (gap.kind === 'event') {
       return refreshEvents().then(function(){
+        // The gap count can be a moment older than the events list (archived since, say).
+        var evs = gap.ids.map(eventById).filter(Boolean);
+        if (!evs.length) { main.innerHTML = head + '<p class="empty">Nothing here right now.</p>'; return; }
         var hint = gap.key === 'missing-from-breeze' ? 'Open each one to archive it, or keep it if it’s still happening.'
           : 'Open each one to add its posts and graphics, or use Apply checklist rules.';
         main.innerHTML = head + '<p class="hint pl-under">'+hint+'</p><section class="card"><ul class="pl-events-mini">'
-          + gap.ids.map(eventById).filter(Boolean).map(function(e){
+          + evs.map(function(e){
               return '<li><a href="#event/'+encodeURIComponent(e.id)+'"><span class="pl-swatch" style="background:'+esc(e.color)+'"></span>'
                 + '<span class="pl-ev-name">'+esc(e.name)+'</span><span class="muted">'+esc(rangeLabel(e.startDate, e.endDate))+'</span></a></li>';
             }).join('') + '</ul></section>';
@@ -708,7 +711,9 @@ function renderEvent(main, id) {
   return Promise.all([api('GET', '/api/pipeline/events/' + encodeURIComponent(id)), refreshEvents()]).then(function(res){
     var d = res[0];
     // The calendar's name for the "From Breeze" badge; if Breeze can't be reached the page still shows.
-    return d.event.source === 'breeze' ? loadBreezeCalendars().then(function(){ return d; }, function(){ return d; }) : d;
+    return d.event.source === 'breeze' ? loadBreezeCalendars().then(function(){ return d; }, function(){
+      return api('GET', '/api/settings').then(function(s){ savedCalNames = s.breezeCalendarNames || {}; return d; }, function(){ return d; });
+    }) : d;
   }).then(function(d){
     var e = d.event;
     d.items.forEach(function(i){ S.rows.content[i.id] = i; });
@@ -2291,9 +2296,11 @@ function loadBreezeCalendars(force) {
   if (breezeCals && !force) return Promise.resolve(breezeCals);
   return api('GET', '/api/pipeline/breeze/calendars').then(function(d){ breezeCals = { calendars: d.calendars, ticked: d.ticked }; return breezeCals; });
 }
+// Names saved when calendars were ticked, so an outage still names them.
+var savedCalNames = {};
 function calendarName(id) {
   var c = breezeCals && breezeCals.calendars.filter(function(x){ return String(x.id) === String(id); })[0];
-  return c ? c.name : 'calendar ' + id;
+  return c ? c.name : savedCalNames[id] || 'calendar ' + id;
 }
 // One line for a sync's report, in the user's words.
 function syncLine(r) {
@@ -2302,7 +2309,11 @@ function syncLine(r) {
   var parts = [['created', 'new'], ['updated', 'updated'], ['shifted', 'moved to a new date'], ['flaggedMissing', 'removed from Breeze'],
     ['cleared', 'back in Breeze'], ['becameSeries', 'now repeating']]
     .filter(function(p){ return r[p[0]]; }).map(function(p){ return r[p[0]] + ' ' + p[1]; });
-  return parts.length ? parts.join(', ') + '.' : 'Everything was already up to date.';
+  var failed = r.failedCalendars || [];
+  // An outage must never read as a clean sync.
+  if (failed.length && failed.length >= r.calendars) return 'Breeze couldn’t be read.';
+  if (parts.length) return parts.join(', ') + '.';
+  return failed.length ? 'Nothing changed in the calendars Breeze answered for.' : 'Everything was already up to date.';
 }
 // A calendar Breeze didn't answer for: its events were left alone, and this must never read as a clean sync.
 function failedLine(ids) {
@@ -2351,6 +2362,7 @@ function breezeSettingsHtml(s) {
 // Fills in the parts that need Breeze or the database; one failing never blanks the rest.
 var ruleState = { rules: [] };
 function loadBreezeSections(s) {
+  savedCalNames = s.breezeCalendarNames || {};
   var cals = s.hasBreeze ? loadBreezeCalendars(true).then(function(c){
       $('bz-cals').innerHTML = calendarTicksHtml(c);
     }, function(e){
@@ -2368,7 +2380,10 @@ function calendarTicksHtml(c) {
 }
 function saveCalendars() {
   var ids = Array.prototype.map.call(document.querySelectorAll('[data-act=bz-cal]:checked'), function(b){ return b.value; });
-  api('POST', '/api/settings', { breezeCalendars: ids }).then(function(){
+  var names = {};
+  if (breezeCals) breezeCals.calendars.forEach(function(c){ names[String(c.id)] = String(c.name); });
+  api('POST', '/api/settings', { breezeCalendars: ids, breezeCalendarNames: names }).then(function(){
+    savedCalNames = names;
     if (breezeCals) breezeCals.ticked = ids;
     toast('Calendars saved. Press Sync now to bring their events in.', 'ok');
   }).catch(function(e){ toast(e.message, 'err'); });
@@ -2378,6 +2393,8 @@ function runSync(btn) {
   api('POST', '/api/pipeline/breeze/sync').then(function(d){
     var r = d.report, failed = r.failedCalendars || [];
     btn.disabled = false; btn.textContent = 'Sync now';
+    // A skipped run didn't sync anything, so "Last synced" stays as it was.
+    if (r.skipped) { $('bz-result').innerHTML = '<div class="alert alert-warn">'+esc(syncLine(r))+'</div>'; return; }
     $('bz-status').innerHTML = syncStatusHtml(new Date().toISOString(), []);
     $('bz-result').innerHTML = '<div class="alert '+(failed.length ? 'alert-warn' : 'alert-ok')+'">'+esc(syncLine(r))
       + (failed.length ? ' ' + esc(failedLine(failed)) : '') + '</div>';
@@ -2832,8 +2849,8 @@ document.addEventListener('click', function(e){
       changeRuleItems(el.closest('form'), function(items){ return removeRuleItem(items, ri); });
       break;
     case 'keep-event':
-      api('PATCH', '/api/pipeline/events/' + encodeURIComponent(el.getAttribute('data-id')), { breezeMissingSince: null })
-        .then(function(){ toast('Kept. It stays as it is.', 'ok'); render(); }).catch(function(err){ toast(err.message, 'err'); });
+      api('PATCH', '/api/pipeline/events/' + encodeURIComponent(el.getAttribute('data-id')), { breezeMissingSince: null, breezeKept: true })
+        .then(function(){ toast('Kept. Breeze syncs won’t flag it again.', 'ok'); render(); }).catch(function(err){ toast(err.message, 'err'); });
       break;
     case 'apply-rules':
       el.disabled = true;

@@ -305,6 +305,8 @@ ALTER TABLE events ADD COLUMN IF NOT EXISTS breeze_event_id text;
 ALTER TABLE events ADD COLUMN IF NOT EXISTS breeze_instance_id text;
 ALTER TABLE events ADD COLUMN IF NOT EXISTS breeze_calendar_id text;
 ALTER TABLE events ADD COLUMN IF NOT EXISTS breeze_missing_since timestamptz;
+-- Set by "Keep" on a removed-from-Breeze event, so the sync doesn't flag it again.
+ALTER TABLE events ADD COLUMN IF NOT EXISTS breeze_kept boolean NOT NULL DEFAULT false;
 ALTER TABLE events ADD COLUMN IF NOT EXISTS synced_at timestamptz;
 ALTER TABLE events ADD COLUMN IF NOT EXISTS anchor_date date;
 ALTER TABLE events ADD COLUMN IF NOT EXISTS anchor_instance_id text;
