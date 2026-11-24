@@ -256,7 +256,8 @@ function drawIssue(main, data, blocks, people, sections, settings, histHtml, eve
     total++; if (wasCopied(issue.id, pt)) done++;
   }); });
   html += '<section class="card gnx-sheet">' + cardTitle('Paste into Mailchimp')
-    + '<p class="hint">Click a field to copy it, then paste it into the matching block in Mailchimp. Headings copy as plain text; text keeps its bold and links. '
+    + '<p class="hint">Click a field to copy it, then paste it into the matching block in Mailchimp. Headings copy as plain text; text keeps its bold and links; '
+    + 'the pastor’s letter copies as HTML for a Code block, headline and styling included. '
     + 'A tick means you’ve copied it.</p>'
     + '<div class="gnx-progress"><span class="gnx-bar"><span style="width:' + (total ? Math.round(100 * done / total) : 0) + '%"></span></span>'
     + '<span class="hint">' + done + ' of ' + total + ' copied</span>'
@@ -281,7 +282,8 @@ function drawIssue(main, data, blocks, people, sections, settings, histHtml, eve
       var pt = parts[b.getAttribute('data-key')];
       if (!pt) return;
       var ok = function () { markCopied(issue.id, pt); b.classList.add('copied'); flash(b); refreshProgress(main, issue.id, parts, blocks); };
-      if (pt.kind === 'heading') copyText(pt.text).then(ok, function () { toast('Couldn’t copy. Select the text and copy it by hand.', 'err'); });
+      // Headings and Code-block HTML go as plain text; ordinary text keeps its bold and links.
+      if (pt.kind === 'heading' || pt.kind === 'html') copyText(pt.kind === 'html' ? pt.html : pt.text).then(ok, function () { toast('Couldn’t copy. Select the text and copy it by hand.', 'err'); });
       else copyBlock(pt.html, pt.text || plain(pt.html), ok);
     },
     'clear-copied': function () { clearCopied(issue.id); reload(); },
@@ -398,7 +400,7 @@ function partHtml(issueId, pt) {
   return '<div class="gnx-part ' + pt.kind + '">'
     + '<div class="gnx-field' + (wasCopied(issueId, pt) ? ' copied' : '') + '"' + (empty ? ' aria-disabled="true"'
       : ' role="button" tabindex="0" data-act="copy-part" data-key="' + esc(pt.key) + '" aria-label="Copy ' + esc(pt.label) + '"') + '>'
-    + '<span class="gnx-flabel">' + esc(pt.label) + '<span class="gnx-tick" aria-hidden="true">✓ Copied</span><span class="gnx-cta">Click to copy</span></span>'
+    + '<span class="gnx-flabel">' + esc(pt.label) + '<span class="gnx-tick" aria-hidden="true">✓ Copied</span><span class="gnx-cta">' + (pt.kind === 'html' ? 'Click to copy the HTML' : 'Click to copy') + '</span></span>'
     + (empty ? '<span class="hint">Empty</span>' : pt.kind === 'heading' ? '<span class="gnx-ftext">' + esc(pt.text) + '</span>'
       : '<div class="gnx-fbody">' + pt.html + '</div>') // built and sanitized on the server
     + '</div>'

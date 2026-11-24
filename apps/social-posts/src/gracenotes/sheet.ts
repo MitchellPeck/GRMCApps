@@ -5,15 +5,18 @@ import { Result } from "../pipeline/rules";
 import { effectiveImage, listPieces } from "./pieces";
 import { htmlToText } from "./html";
 import { LETTER_TITLE } from "./letter";
-import { LetterVersions, bodiesOf } from "./letter-versions";
+import { LetterVersions, renderVersion } from "./letter-versions";
 import { listSections, withTx } from "./repo";
 import { Piece, SectionKind } from "./types";
 
 type Db = Pool | PoolClient;
 
-/** One thing to paste into one Mailchimp block: a heading (plain text) or a body (rich text). */
+/**
+ * One thing to paste into one Mailchimp block: a heading (plain text), a body (rich text), or
+ * html (the code itself, for a Code block: it keeps every style, headline included).
+ */
 export interface SheetPart {
-  key: string; kind: "heading" | "body"; label: string; html: string; text: string;
+  key: string; kind: "heading" | "body" | "html"; label: string; html: string; text: string;
   image?: { url: string; alt: string }; note?: string;
 }
 export interface SheetBlock {
@@ -87,16 +90,15 @@ async function partsOf(db: Db, s: { id: string; title: string; kind: SectionKind
       ];
     })];
   }
-  // The pastor's letter, once its email versions are made: their headline, and both bodies to choose from.
+  // The pastor's letter, once its email versions are made: each version as one styled Code block, headline and all.
   if (s.kind === "text" && LETTER_TITLE.test(s.title) && live.length === 1) {
     const r = await db.query("SELECT versions FROM gn_letter_reviews WHERE piece_id = $1", [live[0].id]);
     const v = r.rows[0]?.versions as LetterVersions | null | undefined;
     if (v) {
-      const b = bodiesOf(v);
       const note = v.sourceHtml !== live[0].bodyHtml ? "The letter changed after these were made. Remake them on the letter above." : undefined;
-      return [heading(k("h"), "Headline", v.title || s.title),
-        { ...body(k("short"), "Short email cut", b.shortHtml), text: b.shortText, note },
-        { ...body(k("full"), "Full letter", b.fullHtml), text: b.fullText, note }];
+      const code = (key: string, label: string, html: string): SheetPart => ({ key: k(key), kind: "html", label, html, text: html, note });
+      return [code("short", "Short email cut · HTML for a Code block", renderVersion(v, v.short)),
+        code("full", "Full letter · HTML for a Code block", renderVersion(v, v.full))];
     }
   }
   const img = s.kind === "text" ? live.map(effectiveImage).find(Boolean) : undefined;
