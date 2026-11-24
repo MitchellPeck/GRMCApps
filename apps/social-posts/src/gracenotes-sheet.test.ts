@@ -251,7 +251,7 @@ test("sheet parts: a heading then the text, events split per item", async () => 
   assert.equal(new Set(s.flatMap((b) => b.parts.map((p) => p.key))).size, s.reduce((n, b) => n + b.parts.length, 0));
 });
 
-test("sheet parts: the letter offers its headline and both versions once made", async () => {
+test("sheet parts: the letter offers both versions as Code-block HTML once made", async () => {
   const t = await sec("Pastor's Message", "text");
   const i = await issue("2026-11-11");
   const tp = (await listPieces(pool, i)).find((p) => p.sectionId === t)!;
@@ -262,13 +262,15 @@ test("sheet parts: the letter offers its headline and both versions once made", 
     full: [{ kind: "greeting", html: "Family of Grace," }, { kind: "p", html: "Hello." }], short: [{ kind: "p", html: "Hello." }] };
   await pool.query("INSERT INTO gn_letter_reviews (piece_id, suggestions, versions) VALUES ($1,'[]',$2)", [tp.id, JSON.stringify(v)]);
   const parts = by(await buildSheet(pool, i), t).parts;
-  assert.deepEqual(parts.map((p) => p.label), ["Headline", "Short email cut", "Full letter"]);
-  assert.equal(parts[0].text, "A good word");
-  assert.ok(!parts[1].html.includes("<h1"), "bodies leave the headline to its own block");
-  assert.match(parts[2].html, /Family of Grace,[\s\S]*In Christ, James/);
-  assert.equal(parts[1].note, undefined);
+  assert.deepEqual(parts.map((p) => [p.kind, p.label]),
+    [["html", "Short email cut · HTML for a Code block"], ["html", "Full letter · HTML for a Code block"]]);
+  // Each is one Code block: the styled headline, the letter and the sign-off, as code.
+  assert.match(parts[0].html, /^<div style="[^"]*"><h1 style="[^"]*Noto Serif Display[^"]*">A good word<\/h1>/);
+  assert.equal(parts[0].text, parts[0].html);
+  assert.match(parts[1].html, /Family of Grace,[\s\S]*In Christ, James/);
+  assert.equal(parts[0].note, undefined);
   ok(await editPiece(pool, tp.id, { bodyHtml: "<p>Changed</p>" }, admin));
-  assert.match(by(await buildSheet(pool, i), t).parts[1].note || "", /changed after/);
+  assert.match(by(await buildSheet(pool, i), t).parts[0].note || "", /changed after/);
 });
 
 test("a skipped (never sent) week is not what 'same as last week' compares with", async () => {
