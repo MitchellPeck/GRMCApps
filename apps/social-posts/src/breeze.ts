@@ -11,8 +11,14 @@ export interface BreezeInstance {
   startRaw: string;
 }
 
+// The subdomain becomes a hostname, so anything else could send the key elsewhere.
+export function cleanSubdomain(raw: string): string | null {
+  const v = (raw || "").trim().toLowerCase();
+  return /^[a-z0-9-]+$/.test(v) ? v : null;
+}
+
 export async function loadBreezeConfig(pool: Pool): Promise<BreezeConfig | null> {
-  const subdomain = (await getSetting(pool, "breeze_subdomain")).trim();
+  const subdomain = cleanSubdomain(await getSetting(pool, "breeze_subdomain"));
   const apiKey = (await getSetting(pool, "breeze_api_key")).trim();
   return subdomain && apiKey ? { subdomain, apiKey } : null;
 }
@@ -38,7 +44,9 @@ async function get(cfg: BreezeConfig, path: string, fetchFn: FetchFn): Promise<a
 
 export async function listCalendars(cfg: BreezeConfig, fetchFn: FetchFn = fetch): Promise<BreezeCalendar[]> {
   const rows = await get(cfg, "/api/events/calendars/list", fetchFn);
-  return (Array.isArray(rows) ? rows : []).map((r: any) => ({ id: String(r.id), name: String(r.name ?? "") }));
+  // Breeze can answer 200 with an error object; that must not read as "no calendars".
+  if (!Array.isArray(rows)) throw new Error("Breeze returned an unexpected reply");
+  return rows.map((r: any) => ({ id: String(r.id), name: String(r.name ?? "") }));
 }
 
 // Breeze sends local wall-clock text with no zone, so the date is sliced, not parsed.
@@ -59,5 +67,9 @@ export async function listInstances(
 ): Promise<BreezeInstance[]> {
   const q = new URLSearchParams({ start: from, end: to, category_id: calendarId, limit: "500" });
   const rows = await get(cfg, `/api/events?${q}`, fetchFn);
-  return (Array.isArray(rows) ? rows : []).map(parseInstance);
+  if (!Array.isArray(rows)) throw new Error("Breeze returned an unexpected reply");
+  // Hitting the limit means the reply may be cut off, which would look like removals.
+  if (rows.length >= 500)
+    throw new Error("Breeze calendar has too many events in this window to read safely");
+  return rows.map(parseInstance).filter((i) => /^\d{4}-\d{2}-\d{2}$/.test(i.date));
 }

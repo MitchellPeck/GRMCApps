@@ -1,5 +1,6 @@
 import { FastifyInstance } from "fastify";
 import { pool } from "../db";
+import { cleanSubdomain } from "../breeze";
 import { getSettingsView, setSetting } from "../settings";
 
 interface SaveBody {
@@ -68,6 +69,12 @@ export async function settingsRoutes(app: FastifyInstance): Promise<void> {
       // Validate every schedule field before any write, so a bad request saves nothing.
       const schedule = parseSchedule(s);
       if (typeof schedule === "string") return { ok: false, error: schedule };
+      let breezeSub: string | undefined;
+      if (s.breezeSubdomain && s.breezeSubdomain.trim()) {
+        const c = cleanSubdomain(s.breezeSubdomain);
+        if (!c) return { ok: false, error: "Breeze subdomain can only use letters, numbers and hyphens." };
+        breezeSub = c;
+      }
       let calendars: string[] | undefined;
       if (s.breezeCalendars !== undefined) {
         if (!Array.isArray(s.breezeCalendars) || s.breezeCalendars.some((c) => typeof c !== "string"))
@@ -119,8 +126,7 @@ export async function settingsRoutes(app: FastifyInstance): Promise<void> {
       if (s.publicBaseUrl && s.publicBaseUrl.trim())
         await setSetting(pool, "public_base_url", s.publicBaseUrl.trim().replace(/\/+$/, ""));
       for (const [key, v] of Object.entries(schedule.times)) if (v !== undefined) await setSetting(pool, key, v);
-      if (s.breezeSubdomain && s.breezeSubdomain.trim())
-        await setSetting(pool, "breeze_subdomain", s.breezeSubdomain.trim());
+      if (breezeSub) await setSetting(pool, "breeze_subdomain", breezeSub);
       if (s.breezeKey && s.breezeKey.trim())
         await setSetting(pool, "breeze_api_key", s.breezeKey.trim());
       if (s.breezeDefaultOwner && s.breezeDefaultOwner.trim())

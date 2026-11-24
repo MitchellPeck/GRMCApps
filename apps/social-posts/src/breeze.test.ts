@@ -81,3 +81,46 @@ test("settings view never returns the key; config and ticked calendars load", as
     await p.end();
   }
 });
+
+test("a 200 reply that is not a list throws instead of reading as empty", async () => {
+  const body = JSON.stringify({ success: false, errors: ["bad key"] });
+  await assert.rejects(listCalendars(cfg, fakeFetch(body).fn), /unexpected reply/);
+  await assert.rejects(listInstances(cfg, "0", "2026-12-01", "2026-12-31", fakeFetch(body).fn), /unexpected reply/);
+});
+
+test("listInstances refuses a reply that hit the 500 limit", async () => {
+  const rows = Array.from({ length: 500 }, (_, i) => ({ id: String(i), event_id: "1", name: "x", category_id: "0", start_datetime: "2026-12-06 10:00:00" }));
+  await assert.rejects(listInstances(cfg, "0", "2026-12-01", "2026-12-31", fakeFetch(JSON.stringify(rows)).fn), /too many events/);
+});
+
+test("listInstances drops rows without a usable start date", async () => {
+  const rows = [
+    { id: "1", event_id: "1", name: "ok", category_id: "0", start_datetime: "2026-12-06 10:00:00" },
+    { id: "2", event_id: "1", name: "no date", category_id: "0" },
+  ];
+  const out = await listInstances(cfg, "0", "2026-12-01", "2026-12-31", fakeFetch(JSON.stringify(rows)).fn);
+  assert.deepEqual(out.map((i) => i.instanceId), ["1"]);
+});
+
+test("an invalid subdomain is rejected on save and treated as not connected", async () => {
+  const { default: Fastify } = await import("fastify");
+  const { settingsRoutes } = await import("./routes/settings");
+  const { pool: appPool } = await import("./db");
+  const app = Fastify();
+  await app.register(settingsRoutes);
+  const p = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
+  try {
+    await p.query("DELETE FROM settings WHERE key LIKE 'breeze_%'");
+    const res = await app.inject({ method: "POST", url: "/api/settings", payload: { breezeSubdomain: "evil.com/x", breezeKey: "K" } });
+    assert.equal(res.json().ok, false);
+    assert.equal((await p.query("SELECT 1 FROM settings WHERE key LIKE 'breeze_%'")).rowCount, 0, "nothing saved");
+    await setSetting(p, "breeze_subdomain", "evil.com");
+    await setSetting(p, "breeze_api_key", "K");
+    assert.equal(await loadBreezeConfig(p), null);
+  } finally {
+    await p.query("DELETE FROM settings WHERE key LIKE 'breeze_%'");
+    await p.end();
+    await app.close();
+    await appPool.end();
+  }
+});
