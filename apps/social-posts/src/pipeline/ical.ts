@@ -38,7 +38,8 @@ export function buildCaptureIcs(media: MediaRow[], opts: { name: string; pageUrl
     if (!m.gatherDate) continue;
     const done = m.status === "captured" || m.status === "edited";
     const details = [
-      `${m.type} for "${m.itemTitle}"` + (m.itemPublishDate ? ` (publishes ${m.itemPublishDate})` : ""),
+      // An event-level graphic has no post, so it is "for" its event.
+      `${m.type} for "${m.itemTitle || m.eventName}"` + (m.itemPublishDate ? ` (publishes ${m.itemPublishDate})` : ""),
       m.assigneeEmail ? `Capturing: ${m.assigneeEmail}` : "Nobody assigned yet",
       m.notes, `Status: ${m.status}`, opts.pageUrl,
     ].filter(Boolean).join("\n");

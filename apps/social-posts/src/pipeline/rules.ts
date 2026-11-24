@@ -4,6 +4,7 @@
 // status or date the server accepts is exactly what these functions accept.
 import { addDays } from "../dates";
 import { PLATFORMS } from "./config";
+import { graphicType } from "./graphic-types";
 import { Override, Profile, SourceRef, parseOverride, parseProfile, parseSourceRef } from "./drafting";
 
 export const CONTENT_STATUSES = ["idea", "planned", "drafted", "ready", "scheduled", "published", "cancelled"] as const;
@@ -182,6 +183,8 @@ export interface MediaInput {
   fileName?: string; fileType?: string;
   /** "collect" (a thing to gather) or "attachment" (a file added straight to the post). */
   kind?: "collect" | "attachment"; position?: number;
+  /** Which registry graphic this is (graphic-types.ts); null clears it. */
+  graphicType?: string | null;
 }
 
 export function parseMediaInput(raw: unknown, mode: "create" | "patch"): Result<MediaInput> {
@@ -199,6 +202,10 @@ export function parseMediaInput(raw: unknown, mode: "create" | "patch"): Result<
     ["fileName", optText(body, "fileName", "File name", 200)],
     ["kind", optEnum(body, "kind", "Media kind", ["collect", "attachment"] as const)],
     ["position", "position" in body ? (Number.isInteger(body.position) ? { ok: true, value: body.position as number } : fail("Position must be a whole number.")) : undefined],
+    ["graphicType", "graphicType" in body ? (body.graphicType === null || body.graphicType === ""
+      ? { ok: true, value: null }
+      : typeof body.graphicType === "string" && graphicType(body.graphicType)
+        ? { ok: true, value: body.graphicType } : fail("That graphic type isn't one we make.")) : undefined],
     ["fileType", "fileType" in body ? (["", "image", "video"].includes(body.fileType as string)
       ? { ok: true, value: body.fileType as string } : fail("File type must be image or video.")) : undefined],
     ["description", optText(body, "description", "Description", 500)],
@@ -317,8 +324,9 @@ export interface GapItem {
   id: string; publishDate: string | null; status: ContentStatus; noMediaNeeded: boolean; mediaCount: number;
 }
 export interface GapMedia {
-  id: string; contentItemId: string; gatherDate: string | null; status: MediaStatus;
-  itemPublishDate: string | null; itemStatus: ContentStatus;
+  /** Event-level graphics have no post: contentItemId and itemStatus are null. */
+  id: string; contentItemId: string | null; gatherDate: string | null; status: MediaStatus;
+  itemPublishDate: string | null; itemStatus: ContentStatus | null;
 }
 export interface Gap {
   key: string; label: string; kind: "content" | "media"; count: number; ids: string[];
@@ -334,7 +342,7 @@ export function computeGaps(
   const readyBy = addDays(today, t.readinessDays);
   const mediaBy = addDays(today, t.unscheduledMediaDays);
   const within = (d: string | null, until: string) => !!d && d >= today && d <= until;
-  const live = (s: ContentStatus) => s !== "cancelled";
+  const live = (s: ContentStatus | null) => s !== "cancelled";
 
   const notReady = items.filter((i) => live(i.status) && within(i.publishDate, readyBy) && !READY_STATUSES.includes(i.status));
   // Past posts nobody planned media for are history, not a gap.
@@ -342,7 +350,7 @@ export function computeGaps(
     && (!i.publishDate || i.publishDate >= today));
   const unscheduled = media.filter((m) => live(m.itemStatus) && !m.gatherDate && m.status === "needed"
     && within(m.itemPublishDate, mediaBy));
-  const late = media.filter((m) => !CLOSED.includes(m.itemStatus) && OPEN_MEDIA.includes(m.status)
+  const late = media.filter((m) => !(m.itemStatus && CLOSED.includes(m.itemStatus)) && OPEN_MEDIA.includes(m.status)
     && !!m.gatherDate && !!m.itemPublishDate && m.gatherDate > m.itemPublishDate);
   const overdue = media.filter((m) => live(m.itemStatus) && OPEN_MEDIA.includes(m.status)
     && !!m.gatherDate && m.gatherDate < today);

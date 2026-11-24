@@ -34,6 +34,10 @@ export interface EventRow {
   /** Grace Notes: the picture for the email, and the flag asking the admin to look. */
   imageUrl: string; reviewNote: string;
   drafting: Profile;
+  /** "breeze" when the Breeze sync made it; its flag when Breeze no longer lists it. */
+  source: "manual" | "breeze"; breezeMissingSince: string | null; breezeCalendarId: string | null;
+  /** A repeating Breeze event's current date (the series row's own dates are its span). */
+  anchorDate: string | null;
   itemCount?: number;
   /** Grace Notes: the event is in the issue being collected (listEvents only). */
   inGraceNotes?: boolean;
@@ -60,12 +64,19 @@ export interface ContentRow {
 }
 
 export interface MediaRow {
-  id: string; contentItemId: string; description: string; type: string;
+  /** Null for a graphic that belongs to the event itself rather than a post. */
+  id: string; contentItemId: string | null; description: string; type: string;
   gatherDate: string | null; gatherLocation: string; assigneeEmail: string; status: MediaStatus;
   fileLink: string; notes: string; approvalId: number | null; approvalTitle: string;
   fileName: string; fileType: string; kind: "collect" | "attachment"; position: number;
-  itemTitle: string; itemPublishDate: string | null; itemStatus: ContentStatus;
+  /** The post's title, date and status; "" / null / null for event-level media. */
+  itemTitle: string; itemPublishDate: string | null; itemStatus: ContentStatus | null;
   eventId: string | null; eventName: string; eventColor: string;
+  graphicType: string | null;
+  /** The offset a checklist rule made it with, and whether its date was moved by hand since. */
+  ruleDaysBefore: number | null; dueEdited: boolean;
+  /** Belongs to the event directly (no post). */
+  onEvent: boolean;
 }
 
 function eventOf(r: any): EventRow {
@@ -75,6 +86,9 @@ function eventOf(r: any): EventRow {
     ownerEmail: r.owner_email, notes: r.notes, archived: r.archived,
     imageUrl: r.image_url ?? "", reviewNote: r.review_note ?? "",
     drafting: r.drafting || {},
+    source: r.source === "breeze" ? "breeze" : "manual",
+    breezeMissingSince: r.breeze_missing_since ? new Date(r.breeze_missing_since).toISOString() : null,
+    breezeCalendarId: r.breeze_calendar_id ?? null, anchorDate: r.anchor_date ?? null,
   };
   if (r.item_count != null) e.itemCount = Number(r.item_count);
   if (r.in_grace_notes != null) e.inGraceNotes = !!r.in_grace_notes;
@@ -119,8 +133,11 @@ function mediaOf(r: any): MediaRow {
     status: r.status, fileLink: r.file_link, notes: r.notes,
     approvalId: r.approval_id ?? null, approvalTitle: r.approval_title || "",
     fileName: r.file_name || "", fileType: r.file_type || "", kind: r.kind || "collect", position: Number(r.position || 0),
-    itemTitle: r.item_title || "", itemPublishDate: r.item_publish_date ?? null, itemStatus: r.item_status,
+    itemTitle: r.item_title || "", itemPublishDate: r.item_publish_date ?? null, itemStatus: r.item_status ?? null,
     eventId: r.event_id ?? null, eventName: r.event_name || "", eventColor: r.event_color || "",
+    graphicType: r.graphic_type ?? null,
+    ruleDaysBefore: r.rule_days_before == null ? null : Number(r.rule_days_before), dueEdited: !!r.due_edited,
+    onEvent: r.content_item_id == null,
   };
 }
 
@@ -139,12 +156,14 @@ const CONTENT_SELECT = `
         FROM media_assets GROUP BY content_item_id
     ) m ON m.content_item_id = ci.id`;
 
+// A media row belongs to a post or (graphics) straight to an event, so both
+// joins are LEFT; its event is its own or its post's.
 const MEDIA_SELECT = `
   SELECT ma.*, ci.title AS item_title, ci.publish_date AS item_publish_date, ci.status AS item_status,
-         e.id AS event_id, e.name AS event_name, e.color AS event_color
+         COALESCE(ma.event_id, ci.event_id) AS event_id, e.name AS event_name, e.color AS event_color
     FROM media_assets ma
-    JOIN content_items ci ON ci.id = ma.content_item_id
-    LEFT JOIN events e ON e.id = ci.event_id`;
+    LEFT JOIN content_items ci ON ci.id = ma.content_item_id
+    LEFT JOIN events e ON e.id = COALESCE(ma.event_id, ci.event_id)`;
 
 // Builds "SET a = $1, b = $2" from a camelCase patch, skipping unknown keys.
 function setClause(patch: Record<string, unknown>, columns: Record<string, string>, vals: unknown[]): string[] {
@@ -413,7 +432,10 @@ export async function updateContent(
   const sets = setClause(input as Record<string, unknown>, CONTENT_COLUMNS, vals);
   if (sets.length) {
     vals.push(id);
-    await db.query(`UPDATE content_items SET ${sets.join(", ")}, updated_at = now() WHERE id = $${vals.length}`, vals);
+    // A date moved by hand stays put when the event's date moves later. An
+    // unchanged publishDate was dropped above, so only a real move counts.
+    const dueEdited = "publishDate" in input ? ", due_edited = true" : "";
+    await db.query(`UPDATE content_items SET ${sets.join(", ")}${dueEdited}, updated_at = now() WHERE id = $${vals.length}`, vals);
   }
   const touchesTemplate = TEMPLATE_KEYS.some((k) => k in input);
   if (current.recurrenceId && touchesTemplate) {
@@ -485,12 +507,15 @@ export async function listMedia(db: Db, f: MediaFilters): Promise<MediaRow[]> {
   if (f.from) add("ma.gather_date >= ?", f.from);
   if (f.to) add("ma.gather_date <= ?", f.to);
   if (f.unscheduled) where.push("ma.gather_date IS NULL");
-  if (f.eventId) add("ci.event_id = ?", f.eventId);
+  if (f.eventId) add("COALESCE(ma.event_id, ci.event_id) = ?", f.eventId);
   if (f.assigneeEmail) add("lower(ma.assignee_email) = lower(?)", f.assigneeEmail);
   if (f.statuses && f.statuses.length) add("ma.status = ANY(?)", f.statuses);
   if (f.contentItemId) add("ma.content_item_id = ?", f.contentItemId);
   if (f.ids) add("ma.id = ANY(?)", f.ids);
-  if (!f.includeCancelled && !f.contentItemId && !f.eventId) where.push("ci.status <> 'cancelled'");
+  // Event-level graphics have no post to be cancelled; an archived event's drop out instead.
+  if (!f.includeCancelled && !f.contentItemId && !f.eventId) {
+    where.push("(ci.id IS NULL OR ci.status <> 'cancelled')", "(ma.event_id IS NULL OR NOT e.archived)");
+  }
   // Attachments aren't things to gather: capture calendars, My work, event
   // tables and gap alerts never see them. A post's own media includes them.
   if (!f.contentItemId) where.push("ma.kind = 'collect'");
@@ -511,7 +536,7 @@ const MEDIA_COLUMNS: Record<string, string> = {
   description: "description", type: "type", gatherDate: "gather_date", gatherLocation: "gather_location",
   assigneeEmail: "assignee_email", status: "status", fileLink: "file_link", notes: "notes",
   approvalId: "approval_id", approvalTitle: "approval_title", fileName: "file_name", fileType: "file_type",
-  position: "position",
+  position: "position", graphicType: "graphic_type",
 };
 
 export async function createMedia(
@@ -531,16 +556,39 @@ export async function createMedia(
   const pos = (await db.query("SELECT COALESCE(max(position), -1) + 1 AS p FROM media_assets WHERE content_item_id = $1", [contentItemId])).rows[0].p;
   const r = await db.query(
     `INSERT INTO media_assets (content_item_id, description, type, gather_date, gather_location,
-                               assignee_email, status, file_link, notes, approval_id, approval_title, file_name, file_type, kind, position)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id`,
+                               assignee_email, status, file_link, notes, approval_id, approval_title, file_name, file_type, kind, position,
+                               graphic_type)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id`,
     [contentItemId, input.description, input.type || "photo", input.gatherDate ?? null,
      input.gatherLocation || "", input.assigneeEmail || "", status.value, input.fileLink || "", input.notes || "",
      input.approvalId ?? null, input.approvalTitle || "", input.fileName || "", input.fileType || "",
-     attachment ? "attachment" : "collect", pos],
+     attachment ? "attachment" : "collect", pos, input.graphicType ?? null],
   );
   const media = (await getMediaRow(db, r.rows[0].id))!;
   const w = lateMediaWarning(media.gatherDate, media.itemPublishDate);
   return { ok: true, value: { media, warnings: w ? [w] : [] } };
+}
+
+/**
+ * A graphic that belongs to the event itself (a Facebook cover, a slide), not
+ * to any post. Always a thing to collect; there is no post date to warn against.
+ */
+export async function createEventMedia(
+  db: Db, eventId: string, input: MediaInput,
+): Promise<Result<{ media: MediaRow; warnings: string[] }>> {
+  if (!eventId || !(await eventExists(db, eventId))) return fail("Event not found.");
+  const status = resolveMediaStatus({ status: "needed", gatherDate: null, fileLink: "", approvalId: null }, input);
+  if (!status.ok) return status;
+  const r = await db.query(
+    `INSERT INTO media_assets (event_id, description, type, gather_date, gather_location, assignee_email, status,
+                               file_link, notes, approval_id, approval_title, file_name, file_type, kind, position, graphic_type)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'collect',0,$14) RETURNING id`,
+    [eventId, input.description, input.type || "graphic", input.gatherDate ?? null,
+     input.gatherLocation || "", input.assigneeEmail || "", status.value, input.fileLink || "", input.notes || "",
+     input.approvalId ?? null, input.approvalTitle || "", input.fileName || "", input.fileType || "",
+     input.graphicType ?? null],
+  );
+  return { ok: true, value: { media: (await getMediaRow(db, r.rows[0].id))!, warnings: [] } };
 }
 
 export async function updateMedia(
@@ -553,6 +601,8 @@ export async function updateMedia(
   const patch: Record<string, unknown> = { ...input, status: status.value };
   const vals: unknown[] = [];
   const sets = setClause(patch, MEDIA_COLUMNS, vals);
+  // A date moved by hand stays put when the event's date moves later.
+  if ("gatherDate" in input && (input.gatherDate ?? null) !== current.gatherDate) sets.push("due_edited = true");
   vals.push(id);
   await db.query(`UPDATE media_assets SET ${sets.join(", ")}, updated_at = now() WHERE id = $${vals.length}`, vals);
   const media = (await getMediaRow(db, id))!;

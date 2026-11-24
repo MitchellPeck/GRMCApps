@@ -295,4 +295,56 @@ CREATE TABLE IF NOT EXISTS youtube_captions (
   text text NOT NULL, fetched_at timestamptz NOT NULL DEFAULT now()); -- the styled email versions, made once every suggestion is decided
 ALTER TABLE events ADD COLUMN IF NOT EXISTS image_url text NOT NULL DEFAULT '';
 ALTER TABLE events ADD COLUMN IF NOT EXISTS review_note text NOT NULL DEFAULT '';
+
+-- Breeze event sync and event checklists
+-- (docs/superpowers/specs/2026-11-24-breeze-event-sync-design.md).
+-- An event made by the sync keeps its Breeze ids; a repeating Breeze event
+-- synced as one series row has breeze_instance_id NULL and an anchor date.
+ALTER TABLE events ADD COLUMN IF NOT EXISTS source text NOT NULL DEFAULT 'manual';
+ALTER TABLE events ADD COLUMN IF NOT EXISTS breeze_event_id text;
+ALTER TABLE events ADD COLUMN IF NOT EXISTS breeze_instance_id text;
+ALTER TABLE events ADD COLUMN IF NOT EXISTS breeze_calendar_id text;
+ALTER TABLE events ADD COLUMN IF NOT EXISTS breeze_missing_since timestamptz;
+ALTER TABLE events ADD COLUMN IF NOT EXISTS synced_at timestamptz;
+ALTER TABLE events ADD COLUMN IF NOT EXISTS anchor_date date;
+ALTER TABLE events ADD COLUMN IF NOT EXISTS anchor_instance_id text;
+CREATE UNIQUE INDEX IF NOT EXISTS events_breeze_instance_idx ON events (breeze_instance_id) WHERE breeze_instance_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS events_breeze_series_idx ON events (breeze_event_id) WHERE source = 'breeze' AND breeze_instance_id IS NULL;
+-- How each repeating Breeze event is handled, and who decided it.
+CREATE TABLE IF NOT EXISTS breeze_series (
+  breeze_event_id  text PRIMARY KEY,
+  name             text NOT NULL,
+  calendar_id      text NOT NULL,
+  mode             text NOT NULL CHECK (mode IN ('series','each','ignore','single')),
+  mode_source      text NOT NULL DEFAULT 'auto' CHECK (mode_source IN ('auto','rule','user')),
+  became_series_at timestamptz,
+  first_seen_at    timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS checklist_rules (
+  id           text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  match        text NOT NULL CHECK (match IN ('calendar','name')),
+  calendar_id  text,
+  name_pattern text NOT NULL DEFAULT '',
+  effect       text NOT NULL DEFAULT 'add' CHECK (effect IN ('add','replace')),
+  repeat_mode  text CHECK (repeat_mode IN ('series','each','ignore')),
+  items        jsonb NOT NULL DEFAULT '[]',
+  position     integer NOT NULL DEFAULT 0,
+  active       boolean NOT NULL DEFAULT true,
+  created_at   timestamptz NOT NULL DEFAULT now()
+);
+-- A graphic can belong to an event directly instead of a post: exactly one owner.
+ALTER TABLE media_assets ALTER COLUMN content_item_id DROP NOT NULL;
+ALTER TABLE media_assets ADD COLUMN IF NOT EXISTS event_id text REFERENCES events(id) ON DELETE CASCADE;
+ALTER TABLE media_assets ADD COLUMN IF NOT EXISTS graphic_type text;
+-- The offset a checklist rule made the item with, and whether its date was since moved by hand.
+ALTER TABLE media_assets ADD COLUMN IF NOT EXISTS rule_days_before integer;
+ALTER TABLE media_assets ADD COLUMN IF NOT EXISTS due_edited boolean NOT NULL DEFAULT false;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'media_assets_owner_chk') THEN
+    ALTER TABLE media_assets ADD CONSTRAINT media_assets_owner_chk CHECK ((content_item_id IS NULL) <> (event_id IS NULL));
+  END IF;
+END $$;
+CREATE INDEX IF NOT EXISTS media_assets_event_idx ON media_assets (event_id);
+ALTER TABLE content_items ADD COLUMN IF NOT EXISTS rule_days_before integer;
+ALTER TABLE content_items ADD COLUMN IF NOT EXISTS due_edited boolean NOT NULL DEFAULT false;
 `;
