@@ -141,7 +141,7 @@ test("filters and gaps read the same records", async () => {
   assert.ok((await listContent(pool, { includeCancelled: true })).some((i) => i.id === p.value.id));
 
   const { gaps } = await dashboardGaps(pool, REF);
-  assert.equal(gaps.length, 9);
+  assert.equal(gaps.length, 8);
   for (const g of gaps) assert.equal(g.count, g.ids.length);
 });
 
@@ -202,6 +202,20 @@ test("one-off edits detach; series edits reach only untouched later posts", asyn
   const renamed = Object.fromEntries((await occ(r.value.id)).map((x) => [x.id, x]));
   assert.equal(renamed[first.id].title, "Friday verse");
   assert.equal(renamed[second.id].title, "Verse — Thanksgiving edition", "detached keeps its own title");
+});
+
+test("clearing one occurrence's date for 'this and future' leaves the series' time alone", async () => {
+  const r = await createRecurrence(pool, { title: "Timed verse", rule: weekly([5]), publishTime: "09:30" }, "me@x.org", REF);
+  assert.ok(r.ok);
+  const [, second, third] = await occ(r.value.id);
+  const res = await updateContent(pool, second.id, { publishDate: null }, "future");
+  assert.ok(res.ok, res.ok ? "" : res.error);
+  assert.equal(res.value.item.publishDate, null);
+  assert.equal(res.value.item.publishTime, null, "the cleared post's time goes with its date");
+  const rec = (await pool.query("SELECT publish_time FROM recurrences WHERE id = $1", [r.value.id])).rows[0];
+  assert.equal(String(rec.publish_time).slice(0, 5), "09:30", "the series keeps its time");
+  const later = (await pool.query("SELECT publish_time FROM content_items WHERE id = $1", [third.id])).rows[0];
+  assert.equal(String(later.publish_time).slice(0, 5), "09:30", "later posts keep their time");
 });
 
 test("skipping a date sticks; changing the rule moves untouched posts only", async () => {
@@ -2077,6 +2091,11 @@ test("posts can be undated; clearing the date clears the time; Scheduled/Publish
   const made = await createContent(pool, { title: "Someday post" }, "t@x.org");
   assert.ok(made.ok);
   assert.equal(made.value.publishDate, null);
+  // A time with no day isn't stored.
+  const timeOnly = await createContent(pool, { title: "Time only", publishTime: "10:00" }, "t@x.org");
+  assert.ok(timeOnly.ok);
+  assert.equal(timeOnly.value.publishDate, null);
+  assert.equal(timeOnly.value.publishTime, null);
 
   const sched = await createContent(pool, { title: "No day", status: "scheduled" }, "t@x.org");
   assert.ok(!sched.ok);

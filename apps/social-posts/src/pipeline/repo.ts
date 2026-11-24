@@ -388,8 +388,9 @@ export async function createContent(db: Db, input: ContentInput, createdBy: stri
     `INSERT INTO content_items (title, event_id, platforms, publish_date, publish_time, status, owner_email,
                                 brief, caption, no_media_needed, caption_mode, captions, drafting, source_ref, phase, created_by)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id`,
+    // A time with no day means nothing, so an undated post keeps no time.
     [input.title, input.eventId ?? null, input.platforms ?? DEFAULT_PLATFORMS, input.publishDate ?? null,
-     input.publishTime ?? null, status, input.ownerEmail || "", input.brief || "", input.caption || "",
+     input.publishDate ? input.publishTime ?? null : null, status, input.ownerEmail || "", input.brief || "", input.caption || "",
      !!input.noMediaNeeded, input.captionMode || "same", input.captions || {}, input.drafting || {},
      input.sourceRef ?? null, input.phase || "", createdBy],
   );
@@ -428,7 +429,9 @@ export async function updateContent(
     : null;
   if (dateErr) return fail(dateErr);
   // A time with no day means nothing, so clearing the date clears the time too.
-  if ("publishDate" in input && !input.publishDate) { input.publishDate = null; input.publishTime = null; }
+  // That is this post's alone: it never becomes the series' time below.
+  const dateCleared = "publishDate" in input && !input.publishDate;
+  if (dateCleared) { input.publishDate = null; input.publishTime = null; }
 
   const media = await listMedia(db, { contentItemId: id });
   if (input.status && input.status !== current.status) {
@@ -457,7 +460,10 @@ export async function updateContent(
   if (current.recurrenceId && touchesTemplate) {
     if (scope === "future") {
       const tpl: Record<string, unknown> = {};
-      for (const k of TEMPLATE_KEYS) if (k !== "publishDate" && k in input) tpl[k] = (input as Record<string, unknown>)[k];
+      for (const k of TEMPLATE_KEYS) {
+        if (k === "publishDate" || (k === "publishTime" && dateCleared) || !(k in input)) continue;
+        tpl[k] = (input as Record<string, unknown>)[k];
+      }
       const map: Record<string, string> = {
         title: "title", brief: "brief", eventId: "event_id", platforms: "platforms", ownerEmail: "owner_email",
         publishTime: "publish_time", noMediaNeeded: "no_media_needed", drafting: "drafting", captionMode: "caption_mode",
