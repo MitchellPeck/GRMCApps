@@ -17,6 +17,7 @@ export interface Digest {
 const SEND_DAYS = [1, 4]; // Monday, Thursday
 const SEND_AT = "08:00";
 const FIRST_EMAIL_DAYS = 30;
+const OVERDUE_DAYS = 30; // older than this is history, not a reminder
 
 /** The date to send for, if a send is due now and not already done. A late start still sends the same day. */
 export function digestSlot(now: { date: string; time: string }, lastSlot: string): string | null {
@@ -32,6 +33,7 @@ export async function buildDigests(
 ): Promise<Digest[]> {
   const base = baseUrl.trim().replace(/\/+$/, "");
   const soon = addDays(today, GAP_THRESHOLDS.dueSoonDays);
+  const oldest = addDays(today, -OVERDUE_DAYS);
   const byOwner = new Map<string, Digest>();
   // Anything with nobody to send it to is left out: there is no one to remind.
   const add = (owner: string, list: ListKey, text: string, eventId: string | null) => {
@@ -48,14 +50,16 @@ export async function buildDigests(
   const when = (d: string) => formatMonthDayYear(d);
   const where = (name: string | null) => (name ? ` (${name})` : "");
 
-  // Posts: past publish date and not ready/scheduled/published, or due within the window.
+  // Posts: overdue is a day in the last 30 that passed without the post being scheduled or published (a Ready
+  // post nobody sent counts); due soon is not yet ready within the window.
   const posts = await db.query(
     `SELECT c.title, c.publish_date::text AS d, c.event_id, e.name AS event_name,
             COALESCE(NULLIF(c.owner_email, ''), e.owner_email, '') AS owner
        FROM content_items c LEFT JOIN events e ON e.id = c.event_id
-      WHERE c.status <> 'cancelled' AND c.status <> ALL($1) AND c.publish_date IS NOT NULL AND c.publish_date <= $2
+      WHERE c.status <> 'cancelled' AND c.publish_date BETWEEN $3 AND $2
+        AND CASE WHEN c.publish_date < $4 THEN c.status NOT IN ('scheduled', 'published') ELSE c.status <> ALL($1) END
         AND COALESCE(e.archived, false) = false
-      ORDER BY c.publish_date, c.title`, [READY_STATUSES, soon]);
+      ORDER BY c.publish_date, c.title`, [READY_STATUSES, soon, oldest, today]);
   for (const r of posts.rows) {
     const overdue = r.d < today;
     add(r.owner, overdue ? "overdue" : "dueSoon",
@@ -70,9 +74,9 @@ export async function buildDigests(
        FROM media_assets m
        LEFT JOIN content_items c ON c.id = m.content_item_id
        LEFT JOIN events e ON e.id = COALESCE(m.event_id, c.event_id)
-      WHERE m.kind = 'collect' AND m.gather_date IS NOT NULL AND m.gather_date <= $2 AND m.status <> ALL($1)
+      WHERE m.kind = 'collect' AND m.gather_date BETWEEN $3 AND $2 AND m.status <> ALL($1)
         AND (c.id IS NULL OR c.status <> 'cancelled') AND COALESCE(e.archived, false) = false
-      ORDER BY m.gather_date, m.description`, [DONE_MEDIA, soon]);
+      ORDER BY m.gather_date, m.description`, [DONE_MEDIA, soon, oldest]);
   for (const r of media.rows) {
     const overdue = r.d < today;
     add(r.owner, overdue ? "overdue" : "dueSoon",
@@ -107,7 +111,7 @@ export async function buildDigests(
     `SELECT e.id, e.name, e.owner_email, e.start_date::text AS d FROM events e
       WHERE e.source = 'breeze' AND NOT e.archived AND e.breeze_missing_since IS NULL
         AND e.start_date BETWEEN $1 AND $2
-        AND NOT EXISTS (SELECT 1 FROM content_items c WHERE c.event_id = e.id)
+        AND NOT EXISTS (SELECT 1 FROM content_items c WHERE c.event_id = e.id AND c.status <> 'cancelled')
         AND NOT EXISTS (SELECT 1 FROM media_assets m WHERE m.event_id = e.id)
       ORDER BY e.start_date, e.name`, [today, addDays(today, GAP_THRESHOLDS.noChecklistDays)]);
   for (const r of bare.rows) add(r.owner_email, "noChecklist", `${r.name}, ${when(r.d)}`, r.id);

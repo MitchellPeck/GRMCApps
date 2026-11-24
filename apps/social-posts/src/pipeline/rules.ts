@@ -381,8 +381,8 @@ export function computeGaps(
   const overdue = media.filter((m) => alive(m) && OPEN_MEDIA.includes(m.status)
     && !!m.gatherDate && m.gatherDate < today);
 
+  // Posts due soon are already not-ready's list; only graphics get their own.
   const dueBy = addDays(today, t.dueSoonDays);
-  const dueItems = items.filter((i) => i.status !== "cancelled" && within(i.publishDate, dueBy) && !READY_STATUSES.includes(i.status));
   const dueMedia = media.filter((m) => alive(m) && OPEN_MEDIA.includes(m.status) && within(m.gatherDate, dueBy));
 
   const missing = events.filter((e) => e.missing && !e.archived);
@@ -398,7 +398,6 @@ export function computeGaps(
     gap("unscheduled-media", `Media with no gather date for posts in the next ${t.unscheduledMediaDays} days`, "media", unscheduled),
     gap("late-media", "Media gathered after its post publishes", "media", late),
     gap("overdue-media", "Media past its gather date and not collected", "media", overdue),
-    gap("due-soon", `Posts due in the next ${t.dueSoonDays} days that aren't ready`, "content", dueItems),
     gap("due-soon-media", `Graphics and media due in the next ${t.dueSoonDays} days`, "media", dueMedia),
     gap("missing-from-breeze", "Events removed from Breeze", "event", missing),
     gap("no-checklist", "Breeze events with nothing planned", "event", noChecklist),

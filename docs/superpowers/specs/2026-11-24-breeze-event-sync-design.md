@@ -261,8 +261,9 @@ changed gaps:
 
 - **overdue-media** already covers "past its due date and not done"; it must
   include event-level graphics.
-- **due-soon** (new): posts not ready and graphics not done whose due date
-  (`publish_date` / `gather_date`) falls within the next 7 days.
+- **due-soon-media** (new): graphics not done whose `gather_date` falls
+  within the next 7 days. (Posts due soon are already the "not ready" gap, so
+  there is no separate posts list.)
 - **missing-from-breeze** (new): synced events flagged as removed in Breeze.
 - **no-checklist** (new): synced events in the next 30 days with no posts and
   no graphics — catches an event no rule covered.
@@ -284,13 +285,14 @@ per owner. An item's owner is the post's owner (posts) or the event's owner
 go to the default owner. It covers every event, hand-made or Breeze, and
 posts with no event:
 
-- overdue (posts past publish date not published/scheduled; graphics past due
-  not done)
+- overdue, limited to the last 30 days (posts past publish date not
+  published/scheduled, so a Ready post that never went out counts; graphics
+  past due not done)
 - due in the next 7 days
 - Breeze events added since the last email (the first email after connecting
   lists only those in the next 30 days), series that became repeating, and
   any flagged removed
-- events with no checklist
+- events with no checklist (cancelled posts don't count as planned)
 
 Event-level lines (new, removed, no checklist) go to the event owner. Each line links to the item in the app (`publicBaseUrl`). Nothing to report →
 no email. Last-sent time stored in `settings`. A "Send a test now" button on

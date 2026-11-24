@@ -148,7 +148,7 @@ test("the gap alerts", () => {
   assert.deepEqual(ids["unscheduled-media"], ["unsched-soon"]);
   assert.deepEqual(ids["late-media"], ["late"]);
   assert.deepEqual(ids["overdue-media"], ["overdue"]);
-  assert.equal(gaps.length, 9);
+  assert.equal(gaps.length, 8);
   assert.equal(gaps[0].count, 1);
 });
 
@@ -171,10 +171,10 @@ test("overdue-media includes an event-level graphic past its gather date", () =>
 test("an event-level graphic on an archived or missing event is not a gap", () => {
   const gaps = computeGaps([], [evMedia("g1", { eventLive: false })], "2026-11-01", T);
   assert.deepEqual(gapIds(gaps, "overdue-media"), []);
-  assert.deepEqual(gapIds(gaps, "due-soon"), []);
+  assert.deepEqual(gapIds(gaps, "due-soon-media"), []);
 });
 
-test("due-soon lists posts not ready and graphics not done due within 7 days", () => {
+test("due-soon-media lists graphics not done due within 7 days; posts due soon are not-ready's job", () => {
   const today = "2026-11-01";
   const item = (id: string, publishDate: string, status: GapItem["status"]): GapItem =>
     ({ id, publishDate, status, mediaCount: 1, noMediaNeeded: false });
@@ -186,9 +186,9 @@ test("due-soon lists posts not ready and graphics not done due within 7 days", (
     evMedia("g-far", { gatherDate: "2026-11-09" }),
   ];
   const gaps = computeGaps(items, media, today, T);
-  assert.deepEqual(gapIds(gaps, "due-soon"), ["p-today"]);
+  assert.deepEqual(gapIds(gaps, "not-ready"), ["p-today"]);
+  assert.equal(gaps.find((g) => g.key === "due-soon"), undefined, "no second list of the same posts");
   assert.deepEqual(gapIds(gaps, "due-soon-media").sort(), ["g-open", "g-today"]);
-  assert.equal(gaps.find((g) => g.key === "due-soon")!.kind, "content");
   assert.equal(gaps.find((g) => g.key === "due-soon-media")!.kind, "media");
 });
 

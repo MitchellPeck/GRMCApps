@@ -75,6 +75,34 @@ test("overdue, due soon, owners and links", async () => {
   assert.ok(!ds.some((x) => JSON.stringify(x).match(/Archived|Cancelled|Done post|Far post|Finished|Attachment/)));
 });
 
+test("overdue keeps to the last 30 days and counts a Ready post whose day passed", async () => {
+  const C = "c@grmc.test";
+  await post("Month-old post", { owner: C, date: "2026-10-31" });
+  await post("Thirty days back", { owner: C, date: "2026-11-01" });
+  await post("Ready but unsent", { owner: C, date: "2026-11-29", status: "ready" });
+  await post("Scheduled late", { owner: C, date: "2026-11-29", status: "scheduled" });
+  await post("Ready soon", { owner: C, date: "2026-12-03", status: "ready" });
+  const e = await ev("Fair", { owner: C });
+  await media("Month-old graphic", { event: e, date: "2026-10-31" });
+  await media("Recent graphic", { event: e, date: "2026-11-01" });
+
+  const c = find(await buildDigests(pool, TODAY, null, BASE, DEF), C)!;
+  const overdue = c.overdue.map((l) => l.text).join("\n");
+  assert.match(overdue, /Thirty days back/);
+  assert.match(overdue, /Ready but unsent/);
+  assert.match(overdue, /Recent graphic/);
+  assert.doesNotMatch(overdue, /Month-old|Scheduled late/);
+  assert.equal(c.overdue.length, 3);
+  assert.equal(c.dueSoon.length, 0, "a Ready post due soon is on track");
+});
+
+test("a Breeze event whose only post is cancelled has nothing planned", async () => {
+  const e = await ev("Carol sing", { source: "breeze", owner: A, start: "2026-12-12" });
+  await post("Dropped", { event: e, date: "2026-12-10", status: "cancelled" });
+  const a = find(await buildDigests(pool, TODAY, null, BASE, DEF), A)!;
+  assert.ok(a.noChecklist.some((l) => l.text.includes("Carol sing")));
+});
+
 test("Breeze lines", async () => {
   const since = "2026-11-24T12:00:00Z";
   const fresh = await ev("New one", { source: "breeze", owner: A, start: "2026-12-10", created: "2026-11-25T00:00:00Z" });
