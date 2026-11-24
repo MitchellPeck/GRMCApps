@@ -283,6 +283,7 @@ CREATE TABLE IF NOT EXISTS gn_reminders (
   kind text NOT NULL CHECK (kind IN ('monday','deadline','manual')),
   status text NOT NULL CHECK (status IN ('sent','failed','skipped')), error text NOT NULL DEFAULT '',
   created_at timestamptz NOT NULL DEFAULT now());
+ALTER TABLE gn_reminders ADD COLUMN IF NOT EXISTS attempts integer NOT NULL DEFAULT 1;
 CREATE UNIQUE INDEX IF NOT EXISTS gn_reminders_auto_once ON gn_reminders (issue_id, contributor_id, kind) WHERE kind <> 'manual';
 CREATE TABLE IF NOT EXISTS gn_letter_reviews (
   piece_id text PRIMARY KEY REFERENCES gn_pieces(id) ON DELETE CASCADE,
