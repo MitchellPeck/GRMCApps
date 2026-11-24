@@ -29,6 +29,10 @@ interface SaveBody {
   gnCreateAt?: string;
   gnRemindAt?: string;
   gnDeadlineAt?: string;
+  breezeSubdomain?: string;
+  breezeKey?: string;
+  breezeDefaultOwner?: string;
+  breezeCalendars?: string[];
 }
 
 function parseSchedule(s: SaveBody): string | { dow?: string; times: Record<string, string | undefined> } {
@@ -64,6 +68,12 @@ export async function settingsRoutes(app: FastifyInstance): Promise<void> {
       // Validate every schedule field before any write, so a bad request saves nothing.
       const schedule = parseSchedule(s);
       if (typeof schedule === "string") return { ok: false, error: schedule };
+      let calendars: string[] | undefined;
+      if (s.breezeCalendars !== undefined) {
+        if (!Array.isArray(s.breezeCalendars) || s.breezeCalendars.some((c) => typeof c !== "string"))
+          return { ok: false, error: "Calendars must be a list of calendar ids." };
+        calendars = s.breezeCalendars;
+      }
       if (s.anthropicKey && s.anthropicKey.trim())
         await setSetting(pool, "anthropic_api_key", s.anthropicKey.trim());
       if (s.mailchimpKey && s.mailchimpKey.trim())
@@ -109,6 +119,13 @@ export async function settingsRoutes(app: FastifyInstance): Promise<void> {
       if (s.publicBaseUrl && s.publicBaseUrl.trim())
         await setSetting(pool, "public_base_url", s.publicBaseUrl.trim().replace(/\/+$/, ""));
       for (const [key, v] of Object.entries(schedule.times)) if (v !== undefined) await setSetting(pool, key, v);
+      if (s.breezeSubdomain && s.breezeSubdomain.trim())
+        await setSetting(pool, "breeze_subdomain", s.breezeSubdomain.trim());
+      if (s.breezeKey && s.breezeKey.trim())
+        await setSetting(pool, "breeze_api_key", s.breezeKey.trim());
+      if (s.breezeDefaultOwner && s.breezeDefaultOwner.trim())
+        await setSetting(pool, "breeze_default_owner", s.breezeDefaultOwner.trim());
+      if (calendars) await setSetting(pool, "breeze_calendars", JSON.stringify(calendars));
       if (schedule.dow !== undefined) await setSetting(pool, "gn_send_dow", schedule.dow);
       return { ok: true };
     } catch (e) {

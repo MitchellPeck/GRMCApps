@@ -39,6 +39,10 @@ export interface SettingsView {
   gnCreateAt: string;
   gnRemindAt: string;
   gnDeadlineAt: string;
+  hasBreeze: boolean;
+  breezeSubdomain: string;
+  breezeCalendars: string[];
+  breezeDefaultOwner: string;
 }
 
 // Mirrors Code.gs getSettings(): never returns full keys, only a hint + flags.
@@ -53,6 +57,12 @@ export async function getSettingsView(pool: Pool): Promise<SettingsView> {
   const bzToken = await getSetting(pool, "buzzsprout_api_token");
   const bzPodcast = await getSetting(pool, "buzzsprout_podcast_id");
   const sched = await loadSchedule(pool);
+  const breezeSub = await getSetting(pool, "breeze_subdomain");
+  let breezeCalendars: string[] = [];
+  try {
+    const v = JSON.parse((await getSetting(pool, "breeze_calendars")) || "[]");
+    if (Array.isArray(v)) breezeCalendars = v.filter((x) => typeof x === "string");
+  } catch { /* bad JSON reads as none ticked */ }
   return {
     anthropicKeyHint: ak ? ak.substring(0, 10) + "..." : "",
     hasAnthropicKey: ak.length > 0,
@@ -79,5 +89,9 @@ export async function getSettingsView(pool: Pool): Promise<SettingsView> {
     gnCreateAt: sched.createAt,
     gnRemindAt: sched.remindAt,
     gnDeadlineAt: sched.deadlineAt,
+    hasBreeze: !!(breezeSub && (await getSetting(pool, "breeze_api_key"))),
+    breezeSubdomain: breezeSub,
+    breezeCalendars,
+    breezeDefaultOwner: await getSetting(pool, "breeze_default_owner"),
   };
 }
