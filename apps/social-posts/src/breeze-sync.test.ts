@@ -438,3 +438,147 @@ test("single becoming a series leaves exactly one series link", async () => {
   assert.equal(links[0].breeze_instance_id, null);
   assert.equal(links[0].breeze_event_id, "s10");
 });
+
+// ── The same Breeze event on several calendars ──────────────────────────────
+
+const linksOf = async (eventId: string) =>
+  (await pool.query("SELECT * FROM breeze_links WHERE event_id = $1 ORDER BY calendar_id, breeze_instance_id", [eventId])).rows;
+
+test("the same event on two calendars makes one event with both calendars' rules", async () => {
+  await calRule([post("A {event}", 7)], "10");
+  await calRule([post("B {event}", 3)], "20");
+  feed["10"] = [inst("i1", "s1", "Christmas Eve", "2026-12-24", "10")];
+  feed["20"] = [inst("i2", "s2", "christmas  eve", "2026-12-24", "20")];
+  const r = await sync();
+  assert.equal(r.created, 1);
+  const [ev] = await events();
+  assert.deepEqual((await postsOf(ev.id)).map((p) => p.title), ["A Christmas Eve", "B Christmas Eve"]);
+  assert.equal(await count("breeze_links"), 2);
+  assert.deepEqual((await linksOf(ev.id)).map((l) => [l.breeze_event_id, l.breeze_instance_id, l.calendar_id]),
+    [["s1", "i1", "10"], ["s2", "i2", "20"]]);
+  assert.deepEqual([ev.breeze_event_id, ev.breeze_instance_id, ev.breeze_calendar_id], ["s1", "i1", "10"]);
+});
+
+test("a second sync of merged copies creates nothing", async () => {
+  await calRule([post("A {event}", 7)], "10");
+  await calRule([post("B {event}", 3)], "20");
+  feed["10"] = [inst("i1", "s1", "Christmas Eve", "2026-12-24", "10")];
+  feed["20"] = [inst("i2", "s2", "christmas  eve", "2026-12-24", "20")];
+  await sync();
+  const r = await sync();
+  assert.deepEqual([r.created, r.updated, r.flaggedMissing], [0, 0, 0]);
+  assert.equal(await count("events"), 1);
+  assert.equal(await count("content_items"), 2);
+  assert.equal(await count("breeze_links"), 2);
+});
+
+test("same name different dates on two calendars makes two events", async () => {
+  feed["10"] = [inst("i1", "s1", "Christmas Eve", "2026-12-24", "10")];
+  feed["20"] = [inst("i2", "s2", "Christmas Eve", "2026-12-31", "20")];
+  const r = await sync();
+  assert.equal(r.created, 2);
+  assert.deepEqual((await events()).map((e) => [e.breeze_instance_id, e.start_date]),
+    [["i1", "2026-12-24"], ["i2", "2026-12-31"]]);
+});
+
+test("a copy appearing later links to the existing event without new posts", async () => {
+  await calRule([post("A {event}", 7)], "10");
+  await calRule([post("B {event}", 3)], "20");
+  feed["10"] = [inst("i1", "s1", "Christmas Eve", "2026-12-24", "10")];
+  await sync();
+  const [ev] = await events();
+  feed["20"] = [inst("i2", "s2", "Christmas Eve", "2026-12-24", "20")];
+  const r = await sync();
+  assert.equal(r.created, 0);
+  assert.equal(await count("events"), 1);
+  assert.equal((await linksOf(ev.id)).length, 2);
+  assert.deepEqual((await postsOf(ev.id)).map((p) => p.title), ["A Christmas Eve"]);
+  assert.equal((await series("s2")).merged_into, "s1");
+});
+
+test("a weekly series on two calendars is one series event", async () => {
+  await calRule([post("Invite", 3)], "10");
+  await calRule([post("Welcome", 1)], "20");
+  const sundays = ["12-06", "12-13", "12-20"];
+  feed["10"] = weekly("s1", "Worship", sundays, "10");
+  feed["20"] = weekly("s2", "Worship", sundays, "20");
+  const r = await sync();
+  assert.equal(r.created, 1);
+  const evs = await events();
+  assert.equal(evs.length, 1);
+  assert.equal(evs[0].breeze_instance_id, null);
+  assert.deepEqual((await postsOf(evs[0].id)).map((p) => p.title), ["Invite", "Welcome"]);
+  assert.deepEqual((await linksOf(evs[0].id)).map((l) => [l.breeze_event_id, l.breeze_instance_id]),
+    [["s1", null], ["s2", null]]);
+  const listed = await listSeries(pool);
+  assert.equal(listed.length, 1);
+  assert.deepEqual([listed[0].breezeEventId, listed[0].mode, listed[0].eventCount], ["s1", "series", 1]);
+  assert.equal((await series("s2")).merged_into, "s1");
+  assert.equal((await sync()).created, 0);
+});
+
+test("setting a merged series' mode applies to its copies", async () => {
+  const sundays = ["12-06", "12-13", "12-20"];
+  feed["10"] = weekly("s1", "Worship", sundays, "10");
+  feed["20"] = weekly("s2", "Worship", sundays, "20");
+  await sync();
+  assert.ok((await setSeriesMode(pool, "s1", "each")).ok);
+  assert.deepEqual([(await series("s1")).mode, (await series("s2")).mode], ["each", "each"]);
+  const r = await sync();
+  assert.equal(r.created, 3);
+  const each = await events("breeze_instance_id IS NOT NULL");
+  assert.deepEqual(each.map((e) => e.start_date), ["2026-12-06", "2026-12-13", "2026-12-20"]);
+  for (const [i, e] of each.entries()) {
+    assert.deepEqual((await linksOf(e.id)).map((l) => l.breeze_instance_id), [`s1-${i}`, `s2-${i}`]);
+  }
+  assert.deepEqual([(await series("s1")).mode, (await series("s2")).mode], ["each", "each"]);
+  assert.equal((await sync()).created, 0);
+});
+
+test("a failed calendar still lets the other calendar's events sync", async () => {
+  feed["10"] = [inst("i1", "s1", "Christmas Eve", "2026-12-24", "10")];
+  feed["20"] = 500;
+  const r = await sync();
+  assert.equal(r.created, 1);
+  assert.deepEqual(r.failedCalendars, ["20"]);
+  const [ev] = await events();
+  assert.equal(ev.breeze_instance_id, "i1");
+});
+
+test("a save that fails saves nothing and counts every calendar read as failed", async () => {
+  feed["10"] = [inst("i1", "s1", "Christmas Eve", "2026-12-24", "10")];
+  await sync();
+  await pool.query(`CREATE OR REPLACE FUNCTION boom() RETURNS trigger AS $$
+    BEGIN IF NEW.name = 'Boom' THEN RAISE EXCEPTION 'boom'; END IF; RETURN NEW; END $$ LANGUAGE plpgsql`);
+  await pool.query("CREATE TRIGGER boom BEFORE INSERT ON events FOR EACH ROW EXECUTE FUNCTION boom()");
+  try {
+    feed["10"] = [inst("i3", "s3", "Advent Supper", "2026-12-09", "10")];
+    feed["20"] = [inst("i2", "s2", "Boom", "2026-12-14", "20")];
+    const r = await sync();
+    assert.deepEqual(r.failedCalendars, ["10", "20"]);
+    assert.deepEqual([r.created, r.flaggedMissing], [0, 0]);
+    assert.deepEqual((await events()).map((e) => e.name), ["Christmas Eve"]);
+    assert.equal((await events("breeze_missing_since IS NOT NULL")).length, 0);
+    assert.deepEqual(JSON.parse((await getSetting(pool, "breeze_last_sync_failed"))!), ["10", "20"]);
+  } finally {
+    await pool.query("DROP TRIGGER boom ON events");
+  }
+});
+
+test("copies already on two events: a new copy joins the earlier one and neither is merged", async () => {
+  feed["10"] = [inst("i1", "s1", "Christmas Eve", "2026-12-24", "10")];
+  await sync();
+  feed = { "10": 500, "20": [inst("i2", "s2", "Christmas Eve", "2026-12-24", "20")] };
+  await sync();
+  const [e1, e2] = await events();
+  assert.ok(e1 && e2, "two events while calendar 10 was down");
+  feed = {
+    "10": [inst("i1", "s1", "Christmas Eve", "2026-12-24", "10"), inst("i3", "s3", "Christmas Eve", "2026-12-24", "10")],
+    "20": [inst("i2", "s2", "Christmas Eve", "2026-12-24", "20")],
+  };
+  const r = await sync();
+  assert.equal(r.created, 0);
+  assert.equal(await count("events"), 2);
+  assert.deepEqual((await linksOf(e1.id)).map((l) => l.breeze_instance_id), ["i1", "i3"]);
+  assert.deepEqual((await linksOf(e2.id)).map((l) => l.breeze_instance_id), ["i2"]);
+});
