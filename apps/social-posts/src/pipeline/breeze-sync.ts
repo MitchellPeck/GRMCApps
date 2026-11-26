@@ -161,12 +161,17 @@ async function rekeyToSeries(c: PoolClient, seriesId: string, group: BreezeInsta
     "SELECT 1 FROM events WHERE source = 'breeze' AND breeze_event_id = $1 AND breeze_instance_id IS NULL", [seriesId]);
   if (has.rowCount) return;
   const ids = group.map((i) => i.instanceId);
-  await c.query(
+  const r = await c.query(
     `UPDATE events SET breeze_instance_id = NULL WHERE id = (
        SELECT id FROM events WHERE source = 'breeze' AND breeze_event_id = $1 AND breeze_instance_id IS NOT NULL
-       ORDER BY (breeze_instance_id = ANY($2::text[])) DESC, created_at LIMIT 1)`,
+       ORDER BY (breeze_instance_id = ANY($2::text[])) DESC, created_at LIMIT 1) RETURNING id`,
     [seriesId, ids],
   );
+  // The copy's link follows: instance link becomes the series link.
+  if (r.rowCount) {
+    await c.query("UPDATE breeze_links SET breeze_instance_id = NULL WHERE event_id = $1 AND breeze_event_id = $2",
+      [r.rows[0].id, seriesId]);
+  }
 }
 
 async function createSynced(run: Run, o: { inst: BreezeInstance; instanceId: string | null }) {
@@ -193,6 +198,12 @@ async function refresh(
   const { c, tally } = run;
   await c.query("UPDATE events SET name = $2, start_date = $3, breeze_calendar_id = $4, synced_at = now() WHERE id = $1",
     [ev.id, name, startDate, cal]);
+  // The event's own copy (matched by the event's current Breeze key) follows a calendar move.
+  await c.query(
+    `UPDATE breeze_links l SET calendar_id = $2 FROM events e
+      WHERE e.id = $1 AND l.event_id = e.id AND l.breeze_event_id = e.breeze_event_id
+        AND l.breeze_instance_id IS NOT DISTINCT FROM e.breeze_instance_id AND l.calendar_id <> $2`,
+    [ev.id, cal]);
   if (ev.name !== name || ev.start_date !== startDate || ev.breeze_calendar_id !== cal) tally.updated++;
   // Only the anchored instance's own date moving is a move; a series rolling on to next week is not.
   const moved = ev.anchor_instance_id ? dates.get(ev.anchor_instance_id) : undefined;
@@ -290,7 +301,7 @@ export async function applyRulesToEvent(db: Db, eventId: string): Promise<Result
 export async function eventCalendarIds(db: Db, eventId: string): Promise<string[]> {
   const ids: string[] = (await db.query(
     "SELECT DISTINCT calendar_id FROM breeze_links WHERE event_id = $1", [eventId])).rows.map((r) => r.calendar_id);
-  const ticked = await tickedCalendars(db as Pool);
+  const ticked = await tickedCalendars(db);
   const rank = (id: string) => { const i = ticked.indexOf(id); return i < 0 ? Infinity : i; };
   return ids.sort((a, b) => (rank(a) - rank(b)) || (a < b ? -1 : a > b ? 1 : 0));
 }

@@ -1,4 +1,4 @@
-import { Pool } from "pg";
+import { Pool, PoolClient } from "pg";
 import { getSetting } from "./settings";
 import type { FetchFn } from "./gracenotes/mail";
 
@@ -23,7 +23,7 @@ export async function loadBreezeConfig(pool: Pool): Promise<BreezeConfig | null>
   return subdomain && apiKey ? { subdomain, apiKey } : null;
 }
 
-export async function tickedCalendars(pool: Pool): Promise<string[]> {
+export async function tickedCalendars(pool: Pool | PoolClient): Promise<string[]> {
   try {
     const v = JSON.parse((await getSetting(pool, "breeze_calendars")) || "[]");
     return Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];

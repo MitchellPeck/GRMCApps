@@ -414,3 +414,27 @@ test("schema backfills a link for a Breeze event made before links existed", asy
   await pool.query(SCHEMA_SQL);
   assert.equal(await count("breeze_links"), 1);
 });
+
+test("an event moved to another calendar in Breeze has its link follow", async () => {
+  feed["10"] = [inst("i1", "s1", "Christmas Eve", "2026-12-24")];
+  await sync();
+  feed = { "20": [inst("i1", "s1", "Christmas Eve", "2026-12-24", "20")] };
+  await sync();
+  const [ev] = await events();
+  const links = (await pool.query("SELECT * FROM breeze_links WHERE event_id = $1", [ev.id])).rows;
+  assert.equal(links.length, 1);
+  assert.equal(links[0].calendar_id, "20");
+});
+
+test("single becoming a series leaves exactly one series link", async () => {
+  feed["10"] = [inst("o1", "s10", "Men's Breakfast", "2026-12-12")];
+  await sync();
+  feed["10"] = [inst("o1", "s10", "Men's Breakfast", "2026-12-12"), inst("o2", "s10", "Men's Breakfast", "2027-01-09")];
+  await sync();
+  await pool.query(SCHEMA_SQL); // the boot backfill must not add a duplicate
+  const [ev] = await events();
+  const links = (await pool.query("SELECT * FROM breeze_links WHERE event_id = $1", [ev.id])).rows;
+  assert.equal(links.length, 1);
+  assert.equal(links[0].breeze_instance_id, null);
+  assert.equal(links[0].breeze_event_id, "s10");
+});

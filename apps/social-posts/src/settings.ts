@@ -1,8 +1,8 @@
-import { Pool } from "pg";
+import { Pool, PoolClient } from "pg";
 import { DEFAULT_VOICE } from "./pipeline/drafting-seed";
 import { loadSchedule } from "./gracenotes/clock";
 
-export async function getSetting(pool: Pool, key: string): Promise<string> {
+export async function getSetting(pool: Pool | PoolClient, key: string): Promise<string> {
   const r = await pool.query("SELECT value FROM settings WHERE key = $1", [key]);
   return r.rows[0] ? r.rows[0].value : "";
 }
