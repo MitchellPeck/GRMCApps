@@ -715,6 +715,8 @@ test("any one edit anywhere in the group keeps every row", async () => {
     ["graphic set back to needed", ({ newer }) => pool.query("UPDATE media_assets SET status = 'needed' WHERE event_id = $1", [newer])],
     ["graphic date cleared", ({ older }) => pool.query(
       "UPDATE media_assets SET gather_date = NULL, status = 'needed' WHERE content_item_id IN (SELECT id FROM content_items WHERE event_id = $1)", [older])],
+    ["post phase set", ({ newer }) => pool.query("UPDATE content_items SET phase = 'teaser' WHERE event_id = $1", [newer])],
+    ["post split from another", ({ older }) => pool.query("UPDATE content_items SET split_from = 'x' WHERE event_id = $1", [older])],
     ["post has a draft", ({ newer }) => pool.query(
       "INSERT INTO post_drafts (run, key, text, content_item_id) SELECT 'r', 'k', 't', id FROM content_items WHERE event_id = $1", [newer])],
   ];
@@ -746,6 +748,100 @@ test("archived duplicates are not grouped", async () => {
   assert.equal(r.merged, 0);
   assert.equal(await count("events"), 2);
   assert.deepEqual(await possibleDuplicates(), []);
+});
+
+// ── A touched pair left as two events still follows Breeze ──────────────────
+
+const moveTo = (date: string, name = "Christmas Eve") => {
+  feed["10"] = [inst("i1", "s1", name, date, "10")];
+  feed["20"] = [inst("i2", "s2", "christmas  eve", date, "20")];
+};
+
+test("a touched pair both follow a Breeze date move and shift their open posts", async () => {
+  const { older, newer } = await duplicatePair();
+  await pool.query("UPDATE events SET notes = 'ours' WHERE id = $1", [newer]);
+  moveTo("2026-12-27");
+  const r = await sync();
+  assert.equal(r.merged, 0);
+  assert.equal(r.shifted, 2);
+  const evs = await events();
+  assert.deepEqual(evs.map((e) => [e.id, e.start_date, e.anchor_date]).sort(),
+    [[older, "2026-12-27", "2026-12-27"], [newer, "2026-12-27", "2026-12-27"]].sort());
+  assert.deepEqual((await postsOf(older)).map((p) => p.publish_date), ["2026-12-20"]);
+  assert.deepEqual((await postsOf(newer)).map((p) => p.publish_date), ["2026-12-24"]);
+  assert.deepEqual(await possibleDuplicates(), [older, newer].sort());
+  // Each keeps its own copy; nothing moved between them.
+  assert.deepEqual((await linksOf(older)).map((l) => l.breeze_instance_id), ["i1"]);
+  assert.deepEqual((await linksOf(newer)).map((l) => l.breeze_instance_id), ["i2"]);
+});
+
+test("a touched pair of series both roll on to next week", async () => {
+  const older = await legacy("s1", null, "10", "Worship", "2026-12-06", 20);
+  const newer = await legacy("s2", null, "20", "Worship", "2026-12-06", 10);
+  await pool.query("UPDATE events SET notes = 'ours' WHERE id = $1", [newer]);
+  const next = (sid: string, cal: string) =>
+    weekly(sid, "Worship", ["12-13", "12-20", "12-27"], cal).map((x, i) => ({ ...x, id: `${sid}-${i + 1}` }));
+  feed["10"] = next("s1", "10");
+  feed["20"] = next("s2", "20");
+  const r = await sync("2026-12-07");
+  assert.equal(r.merged, 0);
+  const evs = await events();
+  assert.deepEqual(evs.map((e) => [e.id, e.start_date]).sort(),
+    [[older, "2026-12-13"], [newer, "2026-12-13"]].sort());
+  assert.deepEqual(await possibleDuplicates(), [older, newer].sort());
+});
+
+test("archive one of a touched pair and the live one follows a move; a new copy joins the live one", async () => {
+  const { older, newer } = await duplicatePair();
+  await pool.query("UPDATE events SET notes = 'ours' WHERE id = $1", [newer]);
+  await pool.query("UPDATE events SET archived = true WHERE id = $1", [older]);
+  moveTo("2026-12-27");
+  (feed["10"] as unknown[]).push(inst("i3", "s3", "Christmas Eve", "2026-12-27", "10"));
+  const r = await sync();
+  assert.equal(r.created, 0);
+  const [live] = await events("NOT archived");
+  assert.equal(live.id, newer);
+  assert.deepEqual([live.start_date, live.anchor_date], ["2026-12-27", "2026-12-27"]);
+  assert.deepEqual((await postsOf(newer)).map((p) => p.publish_date), ["2026-12-24"]);
+  assert.deepEqual((await linksOf(newer)).map((l) => l.breeze_instance_id), ["i3", "i2"]);
+  assert.deepEqual((await linksOf(older)).map((l) => l.breeze_instance_id), ["i1"]);
+});
+
+// ── Merging never deletes what it can't put back, or an edit made meanwhile ──
+
+test("duplicates are not merged when the rules would give the kept event nothing", async () => {
+  await duplicatePair();
+  await pool.query("DELETE FROM checklist_rules");
+  const before = (await pool.query("SELECT id FROM content_items UNION ALL SELECT id FROM media_assets ORDER BY 1")).rows;
+  const r = await sync();
+  assert.equal(r.merged, 0);
+  assert.equal(await count("events"), 2);
+  assert.deepEqual((await pool.query("SELECT id FROM content_items UNION ALL SELECT id FROM media_assets ORDER BY 1")).rows, before);
+});
+
+test("an edit saved while the sync is checking the group keeps the group", async () => {
+  const { newer } = await duplicatePair();
+  const [p] = await postsOf(newer);
+  const editor = await pool.connect();
+  try {
+    await editor.query("BEGIN");
+    await editor.query("UPDATE content_items SET brief = 'mine' WHERE id = $1", [p.id]);
+    const running = sync();
+    // Wait until the sync is blocked behind the edit's row lock, then save the edit.
+    for (let i = 0; i < 200; i++) {
+      const w = await pool.query(
+        "SELECT count(*) AS n FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'");
+      if (Number(w.rows[0].n) > 0) break;
+      await new Promise((res) => setTimeout(res, 25));
+    }
+    await editor.query("COMMIT");
+    const r = await running;
+    assert.equal(r.merged, 0);
+    assert.equal(await count("events"), 2);
+    assert.equal((await pool.query("SELECT brief FROM content_items WHERE id = $1", [p.id])).rows[0]?.brief, "mine");
+  } finally {
+    editor.release();
+  }
 });
 
 // ── Removed from Breeze, across copies ──────────────────────────────────────

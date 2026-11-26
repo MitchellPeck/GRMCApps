@@ -321,7 +321,7 @@ function renderGapList(main, key) {
         var evs = gap.ids.map(eventById).filter(Boolean);
         if (!evs.length) { main.innerHTML = head + '<p class="empty">Nothing here right now.</p>'; return; }
         var hint = gap.key === 'missing-from-breeze' ? 'Open each one to archive it, or keep it if it’s still happening.'
-          : gap.key === 'possible-duplicates' ? 'These share a name and date in Breeze but someone has worked on them, so the sync didn’t merge them. Keep the one you want and archive the others.'
+          : gap.key === 'possible-duplicates' ? 'These have the same name and date. Keep one and archive the others.'
           : 'Open each one to add its posts and graphics, or use Apply checklist rules.';
         main.innerHTML = head + '<p class="hint pl-under">'+hint+'</p><section class="card"><ul class="pl-events-mini">'
           + evs.map(function(e){

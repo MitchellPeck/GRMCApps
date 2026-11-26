@@ -3,8 +3,9 @@ import { test } from "node:test";
 import {
   checkStatusChange, computeGaps, isIsoDate, lateMediaWarning, parseContentInput, parseEventInput,
   parseMediaInput, readyBlockers, resolveMediaStatus, seriesStatusToPipeline,
-  GapEvent, GapItem, GapMedia,
+  GapEvent, GapItem, GapMedia, nameKey,
 } from "./pipeline/rules";
+import { matchKey } from "./pipeline/breeze-dedupe";
 import { captionWarnings, countChars, imageRuleError } from "./pipeline/platforms";
 
 test("isIsoDate accepts real calendar dates only", () => {
@@ -217,6 +218,12 @@ test("computeGaps lists Breeze events with the same name and date", () => {
   assert.equal(keys.indexOf("possible-duplicates"), keys.indexOf("no-checklist") + 1);
   const g = gaps.find((x) => x.key === "possible-duplicates")!;
   assert.deepEqual([g.label, g.kind], ["Breeze events that look like duplicates", "event"]);
+});
+
+test("the duplicates tile matches names exactly as the sync's matchKey does", () => {
+  for (const n of ["Christmas Eve", "CHRISTMAS EVE", "Christmas   Eve", "  Christmas Eve  ", "\tChristmas\n Eve", "Christmas Eve Service", ""]) {
+    assert.equal(nameKey(n), matchKey(n), JSON.stringify(n));
+  }
 });
 
 test("characters count the way each platform counts them", () => {

@@ -359,6 +359,11 @@ export interface Gap {
 const CLOSED: ContentStatus[] = ["published", "cancelled"];
 const OPEN_MEDIA: MediaStatus[] = ["needed", "scheduled"];
 
+/** breeze-dedupe's matchKey, copied so this file stays free of DB code; a test keeps the two the same. */
+export function nameKey(name: string): string {
+  return name.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
 export function computeGaps(
   items: GapItem[], media: GapMedia[], today: string,
   t: { readinessDays: number; unscheduledMediaDays: number; dueSoonDays: number; noChecklistDays: number },
@@ -391,8 +396,7 @@ export function computeGaps(
     && within(e.startDate, checklistBy) && e.itemCount === 0 && e.graphicCount === 0);
   // Same name (ignoring case and spacing) on the same date: the sync merges these
   // unless someone has worked on one, so the ones left need the user to decide.
-  // The key is breeze-dedupe's matchKey, inlined so this file stays free of DB code.
-  const sameKey = (e: GapEvent) => e.name.trim().replace(/\s+/g, " ").toLowerCase() + "\u0000" + e.startDate;
+  const sameKey = (e: GapEvent) => nameKey(e.name) + "\u0000" + e.startDate;
   const live = events.filter((e) => e.source === "breeze" && !e.archived && !!e.startDate);
   const perKey = new Map<string, number>();
   for (const e of live) perKey.set(sameKey(e), (perKey.get(sameKey(e)) ?? 0) + 1);

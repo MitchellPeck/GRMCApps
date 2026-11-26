@@ -128,7 +128,11 @@ export async function syncBreeze(pool: Pool, today: string, fetchFn: FetchFn = f
   return report;
 }
 
-/** One real-world event (or series) and all its Breeze copies across calendars. */
+/**
+ * One real-world event (or series) and all its Breeze copies across calendars.
+ * Copies already linked to two events (a touched pair the cleanup left alone)
+ * keep both: each event follows its own copies. New copies join the first one.
+ */
 async function syncCluster(run: Run, cluster: Cluster) {
   const { c } = run;
   const mode = await upsertSeries(run, cluster);
@@ -139,37 +143,63 @@ async function syncCluster(run: Run, cluster: Cluster) {
   if (mode === "series") {
     const calOf = new Map(copies.map((i) => [i.seriesId, i.calendarId]));
     const want: Copy[] = cluster.seriesIds.map((s) => ({ seriesId: s, instanceId: null, calendarId: calOf.get(s)! }));
-    const first = cluster.byDate.values().next().value![0];
-    const ev = await linkedEvent(c,
-      "l.breeze_instance_id IS NULL AND l.breeze_event_id = ANY($1::text[])", cluster.seriesIds)
-      ?? await joinSame(c, cluster, first.date, true);
-    if (!ev) await createSynced(run, first, null, want, cluster.calendarIds);
-    else {
-      await addLinks(c, ev.id, want);
-      await refresh(run, ev, first, copies, dates);
+    const first = copies[0];
+    const linked = await linkedEvents(c, "l.breeze_instance_id IS NULL AND l.breeze_event_id = ANY($1::text[])",
+      "l.breeze_event_id", cluster.seriesIds);
+    const primary = linked[0]?.ev ?? await joinSame(c, cluster, first.date, true);
+    if (!primary) return createSynced(run, first, null, want, cluster.calendarIds);
+    await addLinks(c, primary.id, want);
+    for (const { ev, keys } of await withNewLinks(c, linked, primary, cluster.seriesIds, true)) {
+      // Copies are in date order, so its first is its series' earliest date.
+      const own = copies.filter((i) => keys.has(i.seriesId));
+      if (own.length) await refresh(run, ev, own[0], own, dates);
     }
     return;
   }
   for (const group of cluster.byDate.values()) {
     const ids = group.map((i) => i.instanceId);
     const want: Copy[] = group.map((i) => ({ seriesId: i.seriesId, instanceId: i.instanceId, calendarId: i.calendarId }));
-    const ev = await linkedEvent(c, "l.breeze_instance_id = ANY($1::text[])", ids)
-      ?? await joinSame(c, cluster, group[0].date, false);
-    if (!ev) await createSynced(run, group[0], group[0].instanceId, want, [...new Set(group.map((i) => i.calendarId))]);
-    else {
-      await addLinks(c, ev.id, want);
-      await refresh(run, ev, group[0], group, dates);
+    const linked = await linkedEvents(c, "l.breeze_instance_id = ANY($1::text[])", "l.breeze_instance_id", ids);
+    const primary = linked[0]?.ev ?? await joinSame(c, cluster, group[0].date, false);
+    if (!primary) {
+      await createSynced(run, group[0], group[0].instanceId, want, [...new Set(group.map((i) => i.calendarId))]);
+      continue;
+    }
+    await addLinks(c, primary.id, want);
+    for (const { ev, keys } of await withNewLinks(c, linked, primary, ids, false)) {
+      const own = group.filter((i) => keys.has(i.instanceId));
+      if (own.length) await refresh(run, ev, own[0], own, dates);
     }
   }
 }
 
-// The event the earliest-linked of these copies points at. If copies point at
-// two events, new copies join the earlier one; merging is not done here.
-async function linkedEvent(c: PoolClient, where: string, ids: string[]): Promise<Record<string, any> | undefined> {
-  return (await c.query(
-    `SELECT e.* FROM breeze_links l JOIN events e ON e.id = l.event_id
-      WHERE e.source = 'breeze' AND ${where} ORDER BY l.created_at, e.created_at, l.id LIMIT 1`, [ids],
-  )).rows[0];
+interface Linked { ev: Record<string, any>; keys: Set<string> }
+
+// Every event these copies are linked to, with the copies (instance or series
+// ids, per `key`) each one holds. A live event comes first, then the earliest linked.
+async function linkedEvents(c: PoolClient, where: string, key: string, ids: string[]): Promise<Linked[]> {
+  const rows = (await c.query(
+    `SELECT e.*, array_agg(${key}) AS link_keys FROM breeze_links l JOIN events e ON e.id = l.event_id
+      WHERE e.source = 'breeze' AND ${where} GROUP BY e.id
+      ORDER BY e.archived, min(l.created_at), e.created_at, e.id`, [ids])).rows;
+  return rows.map(({ link_keys, ...ev }) => ({ ev, keys: new Set<string>(link_keys) }));
+}
+
+// After addLinks: which of `ids` each event now holds. The primary has the ones it
+// already held plus any that were linked to nothing; the others keep their own.
+async function withNewLinks(
+  c: PoolClient, linked: Linked[], primary: Record<string, any>, ids: string[], series: boolean,
+): Promise<Linked[]> {
+  const taken = new Set(linked.flatMap((l) => [...l.keys]));
+  const mine = new Set((await c.query(series
+    ? "SELECT breeze_event_id AS k FROM breeze_links WHERE event_id = $1 AND breeze_instance_id IS NULL"
+    : "SELECT breeze_instance_id AS k FROM breeze_links WHERE event_id = $1 AND breeze_instance_id IS NOT NULL",
+  [primary.id])).rows.map((r) => r.k as string));
+  const fresh = ids.filter((k) => !taken.has(k) && mine.has(k));
+  const out = linked.length ? linked.map((l) => ({ ev: l.ev, keys: new Set(l.keys) })) : [{ ev: primary, keys: new Set<string>() }];
+  const p = out.find((l) => l.ev.id === primary.id)!;
+  for (const k of fresh) p.keys.add(k);
+  return out;
 }
 
 // No copy is linked yet, but an event with this name and date may already

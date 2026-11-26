@@ -115,6 +115,7 @@ const TOUCHED = `
   OR EXISTS (SELECT 1 FROM gn_pieces g WHERE g.event_id = e.id)
   OR EXISTS (SELECT 1 FROM content_items ci WHERE ci.event_id = e.id AND (
        ci.rule_days_before IS NULL OR ci.status <> 'planned' OR ci.due_edited OR ci.brief <> '' OR ci.caption <> ''
+       OR ci.phase <> '' OR ci.split_from IS NOT NULL
        OR ci.draft_id IS NOT NULL OR ci.captions <> '{}'::jsonb OR ci.drafting <> '{}'::jsonb OR ci.source_ref IS NOT NULL
        OR ci.no_media_needed OR ci.publish_time IS NOT NULL OR ci.recurrence_id IS NOT NULL
        OR EXISTS (SELECT 1 FROM metricool_links ml WHERE ml.content_item_id = ci.id)
@@ -145,10 +146,31 @@ export async function mergeDuplicates(c: PoolClient, rules: ChecklistRule[], cal
     // A series event and a per-date event aren't the same shape; leave them to the user.
     if (new Set(group.map((e) => e.breeze_instance_id === null)).size > 1) continue;
     const ids = group.map((e) => e.id);
+    // Lock the group's rows first, so an edit saved meanwhile is waited for and
+    // then seen by the check below (each statement reads what is committed).
+    await c.query("SELECT 1 FROM events WHERE id = ANY($1::text[]) ORDER BY id FOR UPDATE", [ids]);
+    await c.query("SELECT 1 FROM content_items WHERE event_id = ANY($1::text[]) ORDER BY id FOR UPDATE", [ids]);
+    await c.query(
+      `SELECT 1 FROM media_assets WHERE event_id = ANY($1::text[])
+          OR content_item_id IN (SELECT id FROM content_items WHERE event_id = ANY($1::text[])) ORDER BY id FOR UPDATE`, [ids]);
     const touched = await c.query(`SELECT 1 FROM events e WHERE e.id = ANY($1::text[]) AND (${TOUCHED}) LIMIT 1`, [ids]);
     if (touched.rowCount) continue;
     const [keep, ...rest] = group;
     const others = rest.map((e) => e.id);
+
+    // The kept event gets one checklist from every copy's calendar. If the rules
+    // now give it nothing, merging would only remove posts, so leave the group.
+    const cals: string[] = (await c.query(
+      "SELECT DISTINCT calendar_id FROM breeze_links WHERE event_id = ANY($1::text[])", [ids])).rows.map((r) => r.calendar_id);
+    const rank = (id: string) => { const i = calendarOrder.indexOf(id); return i < 0 ? Infinity : i; };
+    cals.sort((a, b) => (rank(a) - rank(b)) || (a < b ? -1 : a > b ? 1 : 0));
+    const { items } = resolveChecklist(rules, { calendarIds: cals, name: keep.name });
+    if (!items.length) {
+      const has = await c.query(
+        `SELECT 1 FROM content_items WHERE event_id = ANY($1::text[])
+         UNION ALL SELECT 1 FROM media_assets WHERE event_id = ANY($1::text[]) LIMIT 1`, [ids]);
+      if (has.rowCount) continue;
+    }
 
     const moved = (await c.query(
       "UPDATE breeze_links SET event_id = $1 WHERE event_id = ANY($2::text[]) RETURNING breeze_event_id, breeze_instance_id",
@@ -162,11 +184,6 @@ export async function mergeDuplicates(c: PoolClient, rules: ChecklistRule[], cal
     await c.query("DELETE FROM events WHERE id = ANY($1::text[])", [others]);
     removed += others.length;
 
-    const cals: string[] = (await c.query(
-      "SELECT DISTINCT calendar_id FROM breeze_links WHERE event_id = $1", [keep.id])).rows.map((r) => r.calendar_id);
-    const rank = (id: string) => { const i = calendarOrder.indexOf(id); return i < 0 ? Infinity : i; };
-    cals.sort((a, b) => (rank(a) - rank(b)) || (a < b ? -1 : a > b ? 1 : 0));
-    const { items } = resolveChecklist(rules, { calendarIds: cals, name: keep.name });
     const date: string = keep.anchor_date ?? keep.start_date;
     if (items.length) await applyChecklist(c, keep.id, items, { name: keep.name, date, ownerEmail: keep.owner_email }, SYNC_BY);
   }
