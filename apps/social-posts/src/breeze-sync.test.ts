@@ -582,3 +582,51 @@ test("copies already on two events: a new copy joins the earlier one and neither
   assert.deepEqual((await linksOf(e1.id)).map((l) => l.breeze_instance_id), ["i1", "i3"]);
   assert.deepEqual((await linksOf(e2.id)).map((l) => l.breeze_instance_id), ["i2"]);
 });
+
+// ── Removed from Breeze, across copies ──────────────────────────────────────
+
+async function mergedPair() {
+  feed["10"] = [inst("i1", "s1", "Christmas Eve", "2026-12-24", "10")];
+  feed["20"] = [inst("i2", "s2", "Christmas Eve", "2026-12-24", "20")];
+  await sync();
+  assert.equal(await count("events"), 1);
+}
+const flaggedCount = async () => (await events("breeze_missing_since IS NOT NULL")).length;
+
+test("one copy gone while the other remains keeps the event unflagged", async () => {
+  await mergedPair();
+  feed["20"] = [];
+  const r = await sync();
+  assert.equal(r.flaggedMissing, 0);
+  assert.equal(await flaggedCount(), 0);
+});
+
+test("every copy gone flags the event", async () => {
+  await mergedPair();
+  feed["10"] = [];
+  feed["20"] = [];
+  const r = await sync();
+  assert.equal(r.flaggedMissing, 1);
+  assert.equal(await flaggedCount(), 1);
+});
+
+test("a copy on a failed calendar keeps the event unflagged", async () => {
+  await mergedPair();
+  feed["10"] = [];
+  feed["20"] = 500;
+  const r = await sync();
+  assert.equal(r.flaggedMissing, 0);
+  assert.equal(await flaggedCount(), 0);
+});
+
+test("a flagged merged event clears when either copy returns", async () => {
+  await mergedPair();
+  feed["10"] = [];
+  feed["20"] = [];
+  await sync();
+  assert.equal(await flaggedCount(), 1);
+  feed["20"] = [inst("i2", "s2", "Christmas Eve", "2026-12-24", "20")];
+  const r = await sync();
+  assert.equal(r.cleared, 1);
+  assert.equal(await flaggedCount(), 0);
+});
