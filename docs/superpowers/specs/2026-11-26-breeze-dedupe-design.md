@@ -51,3 +51,6 @@ The same event is often on more than one of the Breeze calendars that are ticked
 
 - Back up the host DB first (schema change, and the cleanup deletes duplicate events).
 - After deploy, run "Sync now" once and check that each duplicated event now appears once.
+- The Sync now message now mentions merges ("Merged N duplicate events."); that is the cleanup working, not an error.
+- A post a rule made, then deleted by hand from an untouched duplicate, comes back when the merged event's checklist is rebuilt. Delete it again from the merged event.
+- After the first sync, open the dashboard's "Breeze events that look like duplicates" tile. Those are groups someone had already worked on, so the sync left them alone: keep one and archive the others.
