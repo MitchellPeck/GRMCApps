@@ -148,7 +148,7 @@ test("the gap alerts", () => {
   assert.deepEqual(ids["unscheduled-media"], ["unsched-soon"]);
   assert.deepEqual(ids["late-media"], ["late"]);
   assert.deepEqual(ids["overdue-media"], ["overdue"]);
-  assert.equal(gaps.length, 8);
+  assert.equal(gaps.length, 9);
   assert.equal(gaps[0].count, 1);
 });
 
@@ -158,7 +158,7 @@ const evMedia = (id: string, over: Partial<GapMedia> = {}): GapMedia => ({
 });
 const gapIds = (gaps: ReturnType<typeof computeGaps>, key: string) => gaps.find((g) => g.key === key)!.ids;
 const ev = (id: string, over: Partial<GapEvent> = {}): GapEvent => ({
-  id, source: "breeze", startDate: "2026-11-10", missing: false, archived: false, itemCount: 0, graphicCount: 0, ...over,
+  id, name: id, source: "breeze", startDate: "2026-11-10", missing: false, archived: false, itemCount: 0, graphicCount: 0, ...over,
 });
 
 test("overdue-media includes an event-level graphic past its gather date", () => {
@@ -205,6 +205,18 @@ test("no-checklist lists Breeze events in the next 30 days with no posts and no 
     ev("past", { startDate: "2026-10-01" }), ev("undated", { startDate: null }),
   ]);
   assert.deepEqual(gapIds(gaps, "no-checklist").sort(), ["edge", "empty"]);
+});
+
+test("computeGaps lists Breeze events with the same name and date", () => {
+  const gaps = computeGaps([], [], "2026-11-01", T, [
+    ev("a", { name: "Christmas Eve" }), ev("b", { name: "  christmas   EVE " }), ev("c", { name: "Christmas Eve", startDate: "2026-11-11" }),
+    ev("d", { name: "Christmas Eve", source: "manual" }), ev("e", { name: "Christmas Eve", archived: true }),
+  ]);
+  assert.deepEqual(gapIds(gaps, "possible-duplicates").sort(), ["a", "b"]);
+  const keys = gaps.map((g) => g.key);
+  assert.equal(keys.indexOf("possible-duplicates"), keys.indexOf("no-checklist") + 1);
+  const g = gaps.find((x) => x.key === "possible-duplicates")!;
+  assert.deepEqual([g.label, g.kind], ["Breeze events that look like duplicates", "event"]);
 });
 
 test("characters count the way each platform counts them", () => {

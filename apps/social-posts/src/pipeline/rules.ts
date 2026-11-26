@@ -349,7 +349,7 @@ export interface GapMedia {
   eventLive: boolean;
 }
 export interface GapEvent {
-  id: string; source: string; startDate: string | null; missing: boolean; archived: boolean;
+  id: string; name: string; source: string; startDate: string | null; missing: boolean; archived: boolean;
   itemCount: number; graphicCount: number;
 }
 export interface Gap {
@@ -389,6 +389,14 @@ export function computeGaps(
   const checklistBy = addDays(today, t.noChecklistDays);
   const noChecklist = events.filter((e) => e.source === "breeze" && !e.archived && !e.missing
     && within(e.startDate, checklistBy) && e.itemCount === 0 && e.graphicCount === 0);
+  // Same name (ignoring case and spacing) on the same date: the sync merges these
+  // unless someone has worked on one, so the ones left need the user to decide.
+  // The key is breeze-dedupe's matchKey, inlined so this file stays free of DB code.
+  const sameKey = (e: GapEvent) => e.name.trim().replace(/\s+/g, " ").toLowerCase() + "\u0000" + e.startDate;
+  const live = events.filter((e) => e.source === "breeze" && !e.archived && !!e.startDate);
+  const perKey = new Map<string, number>();
+  for (const e of live) perKey.set(sameKey(e), (perKey.get(sameKey(e)) ?? 0) + 1);
+  const duplicates = live.filter((e) => perKey.get(sameKey(e))! > 1);
 
   const gap = (key: string, label: string, kind: Gap["kind"], rows: { id: string }[]): Gap =>
     ({ key, label, kind, count: rows.length, ids: rows.map((r) => r.id) });
@@ -401,6 +409,7 @@ export function computeGaps(
     gap("due-soon-media", `Graphics and media due in the next ${t.dueSoonDays} days`, "media", dueMedia),
     gap("missing-from-breeze", "Events removed from Breeze", "event", missing),
     gap("no-checklist", "Breeze events with nothing planned", "event", noChecklist),
+    gap("possible-duplicates", "Breeze events that look like duplicates", "event", duplicates),
   ];
 }
 

@@ -10,7 +10,7 @@ import { getSetting, setSetting } from "../settings";
 import { ChecklistRule, RuleRepeatMode, SeriesMode, resolveChecklist } from "./checklist";
 import { applyChecklist, listRules } from "./checklist-repo";
 import { createEvent } from "./repo";
-import { Cluster, clusterCopies } from "./breeze-dedupe";
+import { Cluster, clusterCopies, mergeDuplicates, mergeSeriesInto, sameEvent } from "./breeze-dedupe";
 import { DONE_MEDIA, Result } from "./rules";
 
 type Db = Pool | PoolClient;
@@ -22,7 +22,7 @@ const DONE_POSTS = ["scheduled", "published", "cancelled"];
 
 export interface SyncReport {
   calendars: number; created: number; updated: number; shifted: number;
-  flaggedMissing: number; cleared: number; becameSeries: number;
+  flaggedMissing: number; cleared: number; becameSeries: number; merged: number;
   failedCalendars: string[]; skipped?: "not-connected" | "no-calendars";
 }
 type Tally = Pick<SyncReport, "created" | "updated" | "shifted" | "becameSeries">;
@@ -61,7 +61,7 @@ interface Copy { seriesId: string; instanceId: string | null; calendarId: string
 
 export async function syncBreeze(pool: Pool, today: string, fetchFn: FetchFn = fetch): Promise<SyncReport> {
   const report: SyncReport = {
-    calendars: 0, created: 0, updated: 0, shifted: 0, flaggedMissing: 0, cleared: 0, becameSeries: 0, failedCalendars: [],
+    calendars: 0, created: 0, updated: 0, shifted: 0, flaggedMissing: 0, cleared: 0, becameSeries: 0, merged: 0, failedCalendars: [],
   };
   const cfg = await loadBreezeConfig(pool);
   if (!cfg) return { ...report, skipped: "not-connected" };
@@ -95,11 +95,13 @@ export async function syncBreeze(pool: Pool, today: string, fetchFn: FetchFn = f
     await c.query("BEGIN");
     // Two runs at once (timer and "Sync now") would otherwise both create the same event.
     await c.query("SELECT pg_advisory_xact_lock(hashtext('breeze_sync'))");
-    // (Merging duplicates already in the app goes here, before the clusters are saved.)
+    // Duplicates made before copies were merged go first, so the clusters below find one event.
+    const merged = await mergeDuplicates(c, rules, cals);
     const run: Run = { c, rules, owner, tally };
     for (const cluster of clusters) await syncCluster(run, cluster);
     await c.query("COMMIT");
     saved = true;
+    report.merged = merged;
   } catch (e) {
     await c.query("ROLLBACK").catch(() => undefined);
     console.warn("[breeze-sync] not saved:", (e as Error).message);
@@ -139,7 +141,8 @@ async function syncCluster(run: Run, cluster: Cluster) {
     const want: Copy[] = cluster.seriesIds.map((s) => ({ seriesId: s, instanceId: null, calendarId: calOf.get(s)! }));
     const first = cluster.byDate.values().next().value![0];
     const ev = await linkedEvent(c,
-      "l.breeze_instance_id IS NULL AND l.breeze_event_id = ANY($1::text[])", cluster.seriesIds);
+      "l.breeze_instance_id IS NULL AND l.breeze_event_id = ANY($1::text[])", cluster.seriesIds)
+      ?? await joinSame(c, cluster, first.date, true);
     if (!ev) await createSynced(run, first, null, want, cluster.calendarIds);
     else {
       await addLinks(c, ev.id, want);
@@ -150,7 +153,8 @@ async function syncCluster(run: Run, cluster: Cluster) {
   for (const group of cluster.byDate.values()) {
     const ids = group.map((i) => i.instanceId);
     const want: Copy[] = group.map((i) => ({ seriesId: i.seriesId, instanceId: i.instanceId, calendarId: i.calendarId }));
-    const ev = await linkedEvent(c, "l.breeze_instance_id = ANY($1::text[])", ids);
+    const ev = await linkedEvent(c, "l.breeze_instance_id = ANY($1::text[])", ids)
+      ?? await joinSame(c, cluster, group[0].date, false);
     if (!ev) await createSynced(run, group[0], group[0].instanceId, want, [...new Set(group.map((i) => i.calendarId))]);
     else {
       await addLinks(c, ev.id, want);
@@ -166,6 +170,14 @@ async function linkedEvent(c: PoolClient, where: string, ids: string[]): Promise
     `SELECT e.* FROM breeze_links l JOIN events e ON e.id = l.event_id
       WHERE e.source = 'breeze' AND ${where} ORDER BY l.created_at, e.created_at, l.id LIMIT 1`, [ids],
   )).rows[0];
+}
+
+// No copy is linked yet, but an event with this name and date may already
+// exist (its copy's calendar can be down this run): join it, don't make a twin.
+async function joinSame(c: PoolClient, cluster: Cluster, date: string, series: boolean) {
+  const ev = await sameEvent(c, cluster.key, date, series);
+  if (ev && series) await mergeSeriesInto(c, ev.breeze_event_id, cluster.seriesIds);
+  return ev;
 }
 
 /** Links the copies not linked to any event yet; a copy already on another event stays there. */

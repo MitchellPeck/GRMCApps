@@ -113,7 +113,7 @@ async function start() {
     breezeBusy = true;
     try {
       const r = await syncBreeze(pool, await referenceDate(pool));
-      if (r.created || r.updated || r.shifted || r.flaggedMissing || r.becameSeries || r.failedCalendars.length) app.log.info(r, "breeze sync");
+      if (r.created || r.updated || r.shifted || r.flaggedMissing || r.becameSeries || r.merged || r.failedCalendars.length) app.log.info(r, "breeze sync");
     } catch (e) {
       app.log.warn(e, "breeze sync failed");
     } finally {

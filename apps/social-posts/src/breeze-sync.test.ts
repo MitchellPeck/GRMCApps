@@ -2,8 +2,9 @@ import { strict as assert } from "node:assert";
 import { test, before, beforeEach, after } from "node:test";
 import { Pool } from "pg";
 import { SCHEMA_SQL } from "./schema";
-import { createEvent, updateContent } from "./pipeline/repo";
-import { createRule } from "./pipeline/checklist-repo";
+import { createEvent, dashboardGaps, updateContent } from "./pipeline/repo";
+import { resolveChecklist } from "./pipeline/checklist";
+import { applyChecklist, createRule, listRules } from "./pipeline/checklist-repo";
 import { applyRulesToEvent, listSeries, setSeriesMode, syncBreeze } from "./pipeline/breeze-sync";
 import { getSetting, getSettingsView, setSetting } from "./settings";
 
@@ -566,21 +567,185 @@ test("a save that fails saves nothing and counts every calendar read as failed",
 });
 
 test("copies already on two events: a new copy joins the earlier one and neither is merged", async () => {
-  feed["10"] = [inst("i1", "s1", "Christmas Eve", "2026-12-24", "10")];
-  await sync();
-  feed = { "10": 500, "20": [inst("i2", "s2", "Christmas Eve", "2026-12-24", "20")] };
-  await sync();
-  const [e1, e2] = await events();
-  assert.ok(e1 && e2, "two events while calendar 10 was down");
+  // Made before copies were merged; e2 has been edited, so the cleanup leaves both.
+  const e1 = await legacy("s1", "i1", "10", "Christmas Eve", "2026-12-24", 20);
+  const e2 = await legacy("s2", "i2", "20", "Christmas Eve", "2026-12-24", 10);
+  await pool.query("UPDATE events SET notes = 'ours' WHERE id = $1", [e2]);
   feed = {
     "10": [inst("i1", "s1", "Christmas Eve", "2026-12-24", "10"), inst("i3", "s3", "Christmas Eve", "2026-12-24", "10")],
     "20": [inst("i2", "s2", "Christmas Eve", "2026-12-24", "20")],
   };
   const r = await sync();
-  assert.equal(r.created, 0);
+  assert.deepEqual([r.created, r.merged], [0, 0]);
   assert.equal(await count("events"), 2);
-  assert.deepEqual((await linksOf(e1.id)).map((l) => l.breeze_instance_id), ["i1", "i3"]);
-  assert.deepEqual((await linksOf(e2.id)).map((l) => l.breeze_instance_id), ["i2"]);
+  assert.deepEqual((await linksOf(e1)).map((l) => l.breeze_instance_id), ["i1", "i3"]);
+  assert.deepEqual((await linksOf(e2)).map((l) => l.breeze_instance_id), ["i2"]);
+});
+
+test("a copy first seen while the other calendar is down joins the existing event", async () => {
+  await calRule([post("A {event}", 7)], "10");
+  await calRule([post("B {event}", 3)], "20");
+  feed["10"] = [inst("i1", "s1", "Christmas Eve", "2026-12-24", "10")];
+  feed["20"] = [];
+  await sync();
+  assert.equal(await count("events"), 1);
+  const posts = await count("content_items");
+  feed = { "10": 500, "20": [inst("i2", "s2", "Christmas Eve", "2026-12-24", "20")] };
+  const r = await sync();
+  assert.equal(r.created, 0);
+  const [ev] = await events();
+  assert.equal(await count("events"), 1);
+  assert.equal((await linksOf(ev.id)).length, 2);
+  assert.equal(await count("content_items"), posts);
+});
+
+test("a series first seen while the other calendar is down joins the existing series event", async () => {
+  const sundays = ["12-06", "12-13", "12-20"];
+  feed["10"] = weekly("s1", "Worship", sundays, "10");
+  await sync();
+  feed = { "10": 500, "20": weekly("s2", "Worship", sundays, "20") };
+  const r = await sync();
+  assert.equal(r.created, 0);
+  const [ev] = await events();
+  assert.equal(await count("events"), 1);
+  assert.deepEqual((await linksOf(ev.id)).map((l) => [l.breeze_event_id, l.breeze_instance_id]), [["s1", null], ["s2", null]]);
+  assert.equal((await series("s2")).merged_into, "s1");
+});
+
+// ── Merging duplicates made before copies were merged ───────────────────────
+
+/** An event as the sync made it before copies were merged: one copy, its own calendar's checklist. */
+async function legacy(sid: string, iid: string | null, cal: string, name: string, date: string, ageMinutes: number) {
+  const ev = await createEvent(pool, { name, kind: "event", startDate: date, ownerEmail: OWNER });
+  await pool.query(
+    `UPDATE events SET source = 'breeze', breeze_event_id = $2, breeze_instance_id = $3, breeze_calendar_id = $4,
+            synced_at = now(), anchor_date = $5, anchor_instance_id = $6,
+            created_at = now() - make_interval(mins => $7) WHERE id = $1`,
+    [ev.id, sid, iid, cal, date, iid ?? sid + "-0", ageMinutes]);
+  await pool.query("INSERT INTO breeze_links (event_id, breeze_event_id, breeze_instance_id, calendar_id) VALUES ($1,$2,$3,$4)",
+    [ev.id, sid, iid, cal]);
+  await pool.query(
+    `INSERT INTO breeze_series (breeze_event_id, name, calendar_id, mode, mode_source, first_seen_at)
+     VALUES ($1,$2,$3,$4,'auto', now() - make_interval(mins => $5))`, [sid, name, cal, iid ? "single" : "series", ageMinutes]);
+  const { items } = resolveChecklist(await listRules(pool), { calendarIds: [cal], name });
+  await applyChecklist(pool, ev.id, items, { name, date, ownerEmail: OWNER }, "Breeze sync");
+  return ev.id;
+}
+const graphic = (forPost?: number) => ({ kind: "graphic", graphicType: "ig-feed", daysBefore: 10, ...(forPost === undefined ? {} : { forPost }) });
+async function duplicatePair() {
+  await calRule([post("Ten {event}", 7), graphic(0)], "10");
+  await calRule([post("Twenty {event}", 3), graphic()], "20");
+  const older = await legacy("s1", "i1", "10", "Christmas Eve", "2026-12-24", 20);
+  const newer = await legacy("s2", "i2", "20", "christmas  eve", "2026-12-24", 10);
+  feed["10"] = [inst("i1", "s1", "Christmas Eve", "2026-12-24", "10")];
+  feed["20"] = [inst("i2", "s2", "christmas  eve", "2026-12-24", "20")];
+  return { older, newer };
+}
+const possibleDuplicates = async () =>
+  (await dashboardGaps(pool, TODAY)).gaps.find((g) => g.key === "possible-duplicates")!.ids.sort();
+
+test("untouched duplicates merge into the oldest with every calendar's rules", async () => {
+  const { older } = await duplicatePair();
+  assert.equal(await count("content_items"), 2);
+  const r = await sync();
+  assert.equal(r.merged, 1);
+  assert.equal(r.created, 0);
+  const evs = await events();
+  assert.deepEqual(evs.map((e) => e.id), [older]);
+  assert.deepEqual((await linksOf(older)).map((l) => [l.breeze_event_id, l.breeze_instance_id, l.calendar_id]),
+    [["s1", "i1", "10"], ["s2", "i2", "20"]]);
+  const posts = await postsOf(older);
+  assert.deepEqual(posts.map((p) => [p.title, p.publish_date, p.rule_days_before, p.created_by]),
+    [["Ten Christmas Eve", "2026-12-17", 7, "Breeze sync"], ["Twenty Christmas Eve", "2026-12-21", 3, "Breeze sync"]]);
+  assert.equal(await count("content_items"), 2, "no orphaned posts");
+  const media = (await pool.query("SELECT * FROM media_assets ORDER BY event_id NULLS FIRST")).rows;
+  assert.equal(media.length, 2);
+  assert.equal(media[0].content_item_id, posts[0].id);
+  assert.equal(media[1].event_id, older);
+  assert.ok(media.every((m) => m.rule_days_before === 10 && m.gather_date === "2026-12-14"));
+  assert.deepEqual(await possibleDuplicates(), []);
+});
+
+test("untouched duplicate series merge, and the moved series follows the kept one", async () => {
+  await calRule([post("Invite", 3)], "10");
+  await calRule([post("Welcome", 1)], "20");
+  const sundays = ["12-06", "12-13", "12-20"];
+  const older = await legacy("s1", null, "10", "Worship", "2026-12-06", 20);
+  await legacy("s2", null, "20", "Worship", "2026-12-06", 10);
+  feed["10"] = weekly("s1", "Worship", sundays, "10");
+  feed["20"] = weekly("s2", "Worship", sundays, "20");
+  const r = await sync();
+  assert.deepEqual([r.merged, r.created], [1, 0]);
+  assert.deepEqual((await events()).map((e) => e.id), [older]);
+  assert.deepEqual((await linksOf(older)).map((l) => [l.breeze_event_id, l.breeze_instance_id]), [["s1", null], ["s2", null]]);
+  assert.deepEqual((await postsOf(older)).map((p) => p.title), ["Invite", "Welcome"]);
+  assert.equal((await series("s2")).merged_into, "s1");
+  assert.equal((await listSeries(pool)).length, 1);
+});
+
+test("a touched group is left alone and shown as possible duplicates", async () => {
+  const { older, newer } = await duplicatePair();
+  const [p] = await postsOf(newer);
+  assert.ok((await updateContent(pool, p.id, { status: "drafted" })).ok);
+  const before = (await pool.query("SELECT id FROM content_items UNION ALL SELECT id FROM media_assets ORDER BY 1")).rows;
+  const r = await sync();
+  assert.equal(r.merged, 0);
+  assert.equal(await count("events"), 2);
+  assert.deepEqual((await pool.query("SELECT id FROM content_items UNION ALL SELECT id FROM media_assets ORDER BY 1")).rows, before);
+  assert.deepEqual(await possibleDuplicates(), [older, newer].sort());
+});
+
+test("any one edit anywhere in the group keeps every row", async () => {
+  const edits: Array<[string, (ids: { older: string; newer: string }) => Promise<unknown>]> = [
+    ["event notes", ({ newer }) => pool.query("UPDATE events SET notes = 'x' WHERE id = $1", [newer])],
+    ["event image", ({ older }) => pool.query("UPDATE events SET image_url = 'https://x' WHERE id = $1", [older])],
+    ["event kept", ({ newer }) => pool.query("UPDATE events SET breeze_kept = true WHERE id = $1", [newer])],
+    ["a hand-added post", ({ newer }) => pool.query("UPDATE content_items SET rule_days_before = NULL WHERE event_id = $1", [newer])],
+    ["post date edited", ({ newer }) => pool.query("UPDATE content_items SET due_edited = true WHERE event_id = $1", [newer])],
+    ["post brief", ({ older }) => pool.query("UPDATE content_items SET brief = 'b' WHERE event_id = $1", [older])],
+    ["post caption", ({ newer }) => pool.query("UPDATE content_items SET caption = 'c' WHERE event_id = $1", [newer])],
+    ["sent to Metricool", ({ newer }) => pool.query(
+      "INSERT INTO metricool_links (content_item_id, metricool_post_id, network) SELECT id, 'm1', 'instagram' FROM content_items WHERE event_id = $1", [newer])],
+    ["post's graphic assigned", ({ older }) => pool.query(
+      "UPDATE media_assets SET assignee_email = 'a@b' WHERE content_item_id IN (SELECT id FROM content_items WHERE event_id = $1)", [older])],
+    ["event graphic filed", ({ newer }) => pool.query("UPDATE media_assets SET file_link = 'https://f' WHERE event_id = $1", [newer])],
+    ["event graphic captured", ({ newer }) => pool.query("UPDATE media_assets SET status = 'captured' WHERE event_id = $1", [newer])],
+    ["graphic notes", ({ newer }) => pool.query("UPDATE media_assets SET notes = 'n' WHERE event_id = $1", [newer])],
+    ["graphic date edited", ({ newer }) => pool.query("UPDATE media_assets SET due_edited = true WHERE event_id = $1", [newer])],
+    ["graphic set back to needed", ({ newer }) => pool.query("UPDATE media_assets SET status = 'needed' WHERE event_id = $1", [newer])],
+    ["graphic date cleared", ({ older }) => pool.query(
+      "UPDATE media_assets SET gather_date = NULL, status = 'needed' WHERE content_item_id IN (SELECT id FROM content_items WHERE event_id = $1)", [older])],
+    ["post has a draft", ({ newer }) => pool.query(
+      "INSERT INTO post_drafts (run, key, text, content_item_id) SELECT 'r', 'k', 't', id FROM content_items WHERE event_id = $1", [newer])],
+  ];
+  for (const [what, edit] of edits) {
+    await pool.query("TRUNCATE media_assets, content_items, events, breeze_links, breeze_series, checklist_rules CASCADE");
+    const ids = await duplicatePair();
+    await edit(ids);
+    const before = Number((await pool.query("SELECT (SELECT count(*) FROM content_items) + (SELECT count(*) FROM media_assets) AS n")).rows[0].n);
+    const r = await sync();
+    assert.equal(r.merged, 0, what);
+    assert.equal(await count("events"), 2, what);
+    assert.equal(Number((await pool.query("SELECT (SELECT count(*) FROM content_items) + (SELECT count(*) FROM media_assets) AS n")).rows[0].n), before, what);
+  }
+});
+
+test("cleanup is a no-op on the second run", async () => {
+  await duplicatePair();
+  assert.equal((await sync()).merged, 1);
+  const before = (await pool.query("SELECT id, publish_date FROM content_items ORDER BY id")).rows;
+  const r = await sync();
+  assert.deepEqual([r.merged, r.created], [0, 0]);
+  assert.deepEqual((await pool.query("SELECT id, publish_date FROM content_items ORDER BY id")).rows, before);
+});
+
+test("archived duplicates are not grouped", async () => {
+  const { newer } = await duplicatePair();
+  await pool.query("UPDATE events SET archived = true WHERE id = $1", [newer]);
+  const r = await sync();
+  assert.equal(r.merged, 0);
+  assert.equal(await count("events"), 2);
+  assert.deepEqual(await possibleDuplicates(), []);
 });
 
 // ── Removed from Breeze, across copies ──────────────────────────────────────

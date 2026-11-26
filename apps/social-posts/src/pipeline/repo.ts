@@ -665,13 +665,13 @@ export async function dashboardGaps(db: Db, today: string): Promise<{ today: str
   }));
   // One row per event: its post and event-level graphic counts, for the event gaps.
   const evRows = (await db.query(
-    `SELECT e.id, e.source, e.start_date, e.archived, e.breeze_missing_since,
+    `SELECT e.id, e.name, e.source, e.start_date, e.archived, e.breeze_missing_since,
             (SELECT count(*) FROM content_items ci WHERE ci.event_id = e.id AND ci.status <> 'cancelled')::int AS items,
             (SELECT count(*) FROM media_assets ma WHERE ma.event_id = e.id)::int AS graphics
        FROM events e`,
   )).rows;
   const events: GapEvent[] = evRows.map((r) => ({
-    id: r.id, source: r.source, startDate: r.start_date ?? null, missing: !!r.breeze_missing_since,
+    id: r.id, name: r.name, source: r.source, startDate: r.start_date ?? null, missing: !!r.breeze_missing_since,
     archived: !!r.archived, itemCount: r.items, graphicCount: r.graphics,
   }));
   const live = new Map(events.map((e) => [e.id, !e.archived && !e.missing]));
