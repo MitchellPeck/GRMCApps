@@ -37,6 +37,8 @@ export interface EventRow {
   drafting: Profile;
   /** "breeze" when the Breeze sync made it; its flag when Breeze no longer lists it. */
   source: "manual" | "breeze"; breezeMissingSince: string | null; breezeCalendarId: string | null;
+  /** Every calendar a Breeze copy of this event came from (empty for a manual event). */
+  breezeCalendarIds: string[];
   /** The user chose Keep, so the sync no longer flags it as removed. */
   breezeKept: boolean;
   /** A repeating Breeze event's current date (the series row's own dates are its span). */
@@ -91,7 +93,7 @@ function eventOf(r: any): EventRow {
     drafting: r.drafting || {},
     source: r.source === "breeze" ? "breeze" : "manual",
     breezeMissingSince: r.breeze_missing_since ? new Date(r.breeze_missing_since).toISOString() : null,
-    breezeCalendarId: r.breeze_calendar_id ?? null, breezeKept: !!r.breeze_kept, anchorDate: r.anchor_date ?? null,
+    breezeCalendarId: r.breeze_calendar_id ?? null, breezeCalendarIds: r.breeze_calendar_ids ?? [], breezeKept: !!r.breeze_kept, anchorDate: r.anchor_date ?? null,
   };
   if (r.item_count != null) e.itemCount = Number(r.item_count);
   if (r.in_grace_notes != null) e.inGraceNotes = !!r.in_grace_notes;
@@ -196,7 +198,8 @@ export async function nextEventColor(db: Db): Promise<string> {
 export async function listEvents(db: Db, opts: { archived?: boolean } = {}): Promise<EventRow[]> {
   const where = opts.archived === undefined ? "" : "WHERE e.archived = $1";
   const r = await db.query(
-    `SELECT e.*, (SELECT count(*) FROM content_items ci WHERE ci.event_id = e.id AND ci.status <> 'cancelled') AS item_count,
+    `SELECT e.*, (SELECT COALESCE(array_agg(DISTINCT l.calendar_id ORDER BY l.calendar_id), '{}') FROM breeze_links l WHERE l.event_id = e.id) AS breeze_calendar_ids,
+            (SELECT count(*) FROM content_items ci WHERE ci.event_id = e.id AND ci.status <> 'cancelled') AS item_count,
             EXISTS (SELECT 1 FROM gn_pieces p JOIN gn_issues i ON i.id = p.issue_id
                      WHERE p.event_id = e.id AND p.status <> 'dropped' AND i.status = 'collecting') AS in_grace_notes
        FROM events e ${where}
@@ -232,7 +235,7 @@ export async function updateEvent(db: Db, id: string, input: EventInput): Promis
     }
     return { ok: true, value: e };
   }
-  const r = await db.query("SELECT * FROM events WHERE id = $1", [id]);
+  const r = await db.query(`SELECT e.*, (SELECT COALESCE(array_agg(DISTINCT l.calendar_id ORDER BY l.calendar_id), '{}') FROM breeze_links l WHERE l.event_id = e.id) AS breeze_calendar_ids FROM events e WHERE e.id = $1`, [id]);
   return r.rowCount ? { ok: true, value: eventOf(r.rows[0]) } : fail("Event not found.");
 }
 
@@ -275,7 +278,7 @@ export async function deleteEvent(db: Db, id: string): Promise<Result<true>> {
 }
 
 export async function getEvent(db: Db, id: string): Promise<Result<{ event: EventRow; items: ContentRow[]; media: MediaRow[] }>> {
-  const e = await db.query("SELECT * FROM events WHERE id = $1", [id]);
+  const e = await db.query(`SELECT e.*, (SELECT COALESCE(array_agg(DISTINCT l.calendar_id ORDER BY l.calendar_id), '{}') FROM breeze_links l WHERE l.event_id = e.id) AS breeze_calendar_ids FROM events e WHERE e.id = $1`, [id]);
   if (!e.rowCount) return fail("Event not found.");
   const items = await listContent(db, { eventId: id, includeCancelled: true });
   const media = await listMedia(db, { eventId: id });
@@ -648,9 +651,9 @@ export async function dashboardSummary(db: Db, today: string) {
   const posts = await listContent(db, { from: today, to: until });
   const capture = await listMedia(db, { from: today, to: until });
   const upcomingEvents = (await db.query(
-    `SELECT * FROM events
-      WHERE NOT archived AND kind = 'event' AND COALESCE(end_date, start_date) >= $1
-      ORDER BY start_date NULLS LAST LIMIT 8`,
+    `SELECT e.*, (SELECT COALESCE(array_agg(DISTINCT l.calendar_id ORDER BY l.calendar_id), '{}') FROM breeze_links l WHERE l.event_id = e.id) AS breeze_calendar_ids FROM events e
+      WHERE NOT e.archived AND e.kind = 'event' AND COALESCE(e.end_date, e.start_date) >= $1
+      ORDER BY e.start_date NULLS LAST LIMIT 8`,
     [today],
   )).rows.map(eventOf);
   return { today, until, byStatus, posts, capture, upcomingEvents };
@@ -696,7 +699,7 @@ const shift = (d: string | null, n: number) => (d ? addDays(d, n) : null);
 export async function duplicateEvent(
   db: Db, id: string, input: { name: string; startDate?: string | null; shiftDays?: number | null }, createdBy: string,
 ): Promise<Result<{ event: EventRow; items: number; media: number }>> {
-  const src = await db.query("SELECT * FROM events WHERE id = $1", [id]);
+  const src = await db.query(`SELECT e.*, (SELECT COALESCE(array_agg(DISTINCT l.calendar_id ORDER BY l.calendar_id), '{}') FROM breeze_links l WHERE l.event_id = e.id) AS breeze_calendar_ids FROM events e WHERE e.id = $1`, [id]);
   if (!src.rowCount) return fail("Event not found.");
   const e = eventOf(src.rows[0]);
   if (!input.name) return fail("Give the copy a name.");

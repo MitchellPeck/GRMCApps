@@ -23,7 +23,7 @@ const REF = "2026-11-01";
 
 before(async () => {
   // gn_pieces points at events, so the Grace Notes tables go too (SCHEMA_SQL rebuilds them).
-  await pool.query("DROP TABLE IF EXISTS gn_letter_reviews, gn_reminders, gn_pieces, gn_issues, gn_section_owners, gn_sections, gn_contributors, metricool_links, media_assets, content_items, recurrences, events");
+  await pool.query("DROP TABLE IF EXISTS gn_letter_reviews, gn_reminders, gn_pieces, gn_issues, gn_section_owners, gn_sections, gn_contributors, metricool_links, media_assets, content_items, recurrences, events, breeze_links");
   await pool.query(SCHEMA_SQL);
   await pool.query("DELETE FROM series_posts");
   await pool.query("DELETE FROM series");

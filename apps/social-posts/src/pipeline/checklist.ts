@@ -103,18 +103,18 @@ export function parseRuleInput(raw: unknown, mode: "create" | "patch"): Result<P
 }
 
 /**
- * Calendar rule(s) first, then name rules in position order. `add` appends,
+ * Calendar rules first (for each linked calendar, in the order given), then name rules in position order. `add` appends,
  * `replace` throws away everything so far. Repeat mode follows the same
  * stacking: the most specific (last) matching rule that sets one wins.
  * Name matching is a literal, case-insensitive "contains" — never a regex.
  */
 export function resolveChecklist(
-  rules: ChecklistRule[], ev: { calendarId: string; name: string },
+  rules: ChecklistRule[], ev: { calendarIds: string[]; name: string },
 ): { items: ChecklistItem[]; repeatMode: RuleRepeatMode | null } {
   const name = ev.name.toLowerCase();
   const active = rules.filter((r) => r.active).sort((a, b) => a.position - b.position);
   const matching = [
-    ...active.filter((r) => r.match === "calendar" && r.calendarId === ev.calendarId),
+    ...ev.calendarIds.flatMap((id) => active.filter((r) => r.match === "calendar" && r.calendarId === id)),
     ...active.filter((r) => r.match === "name" && r.namePattern && name.includes(r.namePattern.toLowerCase())),
   ];
   // Each entry remembers the post its graphic was written against, by object identity.

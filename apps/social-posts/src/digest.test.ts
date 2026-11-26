@@ -12,7 +12,7 @@ const A = "a@grmc.test", B = "b@grmc.test", DEF = "def@grmc.test";
 const KEYS = ["resend_api_key", "mail_from", "public_base_url", "default_timezone", "breeze_default_owner", "digest_last_slot", "digest_last_sent_at"];
 
 before(async () => {
-  await pool.query("DROP TABLE IF EXISTS gn_letter_reviews, gn_reminders, gn_pieces, gn_issues, gn_section_owners, gn_sections, gn_contributors, metricool_links, media_assets, content_items, recurrences, events, breeze_series, checklist_rules");
+  await pool.query("DROP TABLE IF EXISTS gn_letter_reviews, gn_reminders, gn_pieces, gn_issues, gn_section_owners, gn_sections, gn_contributors, metricool_links, media_assets, content_items, recurrences, events, breeze_links, breeze_series, checklist_rules");
   await pool.query(SCHEMA_SQL);
 });
 beforeEach(async () => {

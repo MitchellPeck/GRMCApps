@@ -140,7 +140,7 @@ async function upsertSeries(c: PoolClient, cal: string, seriesId: string, group:
   const name = group[0].name;
   const cur = (await c.query("SELECT mode, mode_source FROM breeze_series WHERE breeze_event_id = $1", [seriesId])).rows[0];
   if (!cur) {
-    const { mode, source } = newSeriesMode(resolveChecklist(run.rules, { calendarId: cal, name }).repeatMode, group.length);
+    const { mode, source } = newSeriesMode(resolveChecklist(run.rules, { calendarIds: [cal], name }).repeatMode, group.length);
     await c.query(
       "INSERT INTO breeze_series (breeze_event_id, name, calendar_id, mode, mode_source) VALUES ($1,$2,$3,$4,$5)",
       [seriesId, name, cal, mode, source],
@@ -178,7 +178,11 @@ async function createSynced(run: Run, o: { inst: BreezeInstance; instanceId: str
             synced_at = now(), anchor_date = $5, anchor_instance_id = $6 WHERE id = $1`,
     [ev.id, inst.seriesId, o.instanceId, inst.calendarId, inst.date, inst.instanceId],
   );
-  const { items } = resolveChecklist(run.rules, { calendarId: inst.calendarId, name: inst.name });
+  await c.query(
+    "INSERT INTO breeze_links (event_id, breeze_event_id, breeze_instance_id, calendar_id) VALUES ($1,$2,$3,$4)",
+    [ev.id, inst.seriesId, o.instanceId, inst.calendarId],
+  );
+  const { items } = resolveChecklist(run.rules, { calendarIds: [inst.calendarId], name: inst.name });
   if (items.length) await applyChecklist(c, ev.id, items, { name: inst.name, date: inst.date, ownerEmail: owner }, SYNC_BY);
   run.tally.created++;
 }
@@ -282,6 +286,15 @@ export async function applyRulesToEvent(db: Db, eventId: string): Promise<Result
   }
 }
 
+/** The event's linked calendars, in the ticked-list order; unticked ones last, by id. */
+export async function eventCalendarIds(db: Db, eventId: string): Promise<string[]> {
+  const ids: string[] = (await db.query(
+    "SELECT DISTINCT calendar_id FROM breeze_links WHERE event_id = $1", [eventId])).rows.map((r) => r.calendar_id);
+  const ticked = await tickedCalendars(db as Pool);
+  const rank = (id: string) => { const i = ticked.indexOf(id); return i < 0 ? Infinity : i; };
+  return ids.sort((a, b) => (rank(a) - rank(b)) || (a < b ? -1 : a > b ? 1 : 0));
+}
+
 async function applyRulesIn(c: PoolClient, eventId: string): Promise<Result<{ posts: number; graphics: number }>> {
   // The row lock makes a double click wait, then see the first click's checklist.
   const ev = (await c.query("SELECT * FROM events WHERE id = $1 FOR UPDATE", [eventId])).rows[0];
@@ -292,7 +305,7 @@ async function applyRulesIn(c: PoolClient, eventId: string): Promise<Result<{ po
   if (has.rowCount) return fail("This event already has posts or graphics, so rules can't be applied again.");
   const date: string | null = ev.anchor_date ?? ev.start_date;
   if (!date) return fail("Give the event a date first.");
-  const { items } = resolveChecklist(await listRules(c), { calendarId: ev.breeze_calendar_id ?? "", name: ev.name });
+  const { items } = resolveChecklist(await listRules(c), { calendarIds: await eventCalendarIds(c, eventId), name: ev.name });
   if (!items.length) return fail("No checklist rule matches this event.");
   const counts = await applyChecklist(c, eventId, items, { name: ev.name, date, ownerEmail: ev.owner_email }, "Checklist rules");
   await c.query("UPDATE events SET anchor_date = COALESCE(anchor_date, $2::date) WHERE id = $1", [eventId, date]);

@@ -733,7 +733,7 @@ function renderEvent(main, id) {
       + '<section class="pl-evhead" style="--ev:'+esc(e.color)+'"><div><h2 class="pl-h2">'+esc(e.name)+(e.archived ? ' <span class="muted">(archived)</span>' : '')+'</h2>'
       + '<p class="muted">'+esc(label(e.kind))+(e.startDate || e.endDate ? ' · '+esc(rangeLabel(e.startDate, e.endDate)) : '')
       + (e.ownerEmail ? ' · Owner: '+esc(personName(e.ownerEmail)) : '')
-      + (e.source === 'breeze' ? ' <span class="pl-breeze">From Breeze'+(e.breezeCalendarId ? ' · '+esc(calendarName(e.breezeCalendarId)) : '')+'</span>' : '')+'</p>'
+      + (e.source === 'breeze' ? ' <span class="pl-breeze">From Breeze'+(function(ids){ return ids.length ? ' · '+esc(ids.map(calendarName).join(', ')) : ''; })(e.breezeCalendarIds && e.breezeCalendarIds.length ? e.breezeCalendarIds : (e.breezeCalendarId ? [e.breezeCalendarId] : []))+'</span>' : '')+'</p>'
       + (eventBadges(e) ? '<p class="pl-gnrow">'+eventBadges(e)
           + (e.reviewNote ? ' <button class="btn-sm" type="button" data-act="mark-reviewed" data-id="'+esc(e.id)+'">Mark reviewed</button>' : '')+'</p>' : '')
       + (e.notes ? '<p class="pl-notes">'+esc(e.notes)+'</p>' : '')

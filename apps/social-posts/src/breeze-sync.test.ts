@@ -12,7 +12,7 @@ const TODAY = "2026-12-01";
 const OWNER = "owner@grmc.test";
 
 before(async () => {
-  await pool.query("DROP TABLE IF EXISTS gn_letter_reviews, gn_reminders, gn_pieces, gn_issues, gn_section_owners, gn_sections, gn_contributors, metricool_links, media_assets, content_items, recurrences, events, breeze_series, checklist_rules");
+  await pool.query("DROP TABLE IF EXISTS gn_letter_reviews, gn_reminders, gn_pieces, gn_issues, gn_section_owners, gn_sections, gn_contributors, metricool_links, media_assets, content_items, recurrences, events, breeze_links, breeze_series, checklist_rules");
   await pool.query(SCHEMA_SQL);
 });
 
@@ -32,7 +32,7 @@ const inst = (id: string, eventId: string, name: string, date: string, cal = "10
 const sync = (today = TODAY) => syncBreeze(pool, today, fakeFetch);
 
 beforeEach(async () => {
-  await pool.query("TRUNCATE media_assets, content_items, events, breeze_series, checklist_rules CASCADE");
+  await pool.query("TRUNCATE media_assets, content_items, events, breeze_links, breeze_series, checklist_rules CASCADE");
   await pool.query("DELETE FROM settings WHERE key LIKE 'breeze_%'");
   await setSetting(pool, "breeze_subdomain", "grmc");
   await setSetting(pool, "breeze_api_key", "KEY");
@@ -395,4 +395,22 @@ test("applyRulesToEvent works once on an empty event and refuses a second time",
   const none = await createEvent(pool, { name: "Board meeting", startDate: "2027-03-27" });
   assert.equal((await applyRulesToEvent(pool, none.id)).ok, false);
   assert.equal((await applyRulesToEvent(pool, "missing-id")).ok, false);
+});
+
+test("a synced event gets one link per Breeze copy", async () => {
+  feed["10"] = [inst("i1", "s1", "Christmas Eve", "2026-12-24")];
+  await sync();
+  const [ev] = await events();
+  const links = (await pool.query("SELECT * FROM breeze_links WHERE event_id = $1", [ev.id])).rows;
+  assert.equal(links.length, 1);
+  assert.equal(links[0].breeze_instance_id, "i1");
+  assert.equal(links[0].calendar_id, "10");
+});
+
+test("schema backfills a link for a Breeze event made before links existed", async () => {
+  feed["10"] = [inst("i1", "s1", "Christmas Eve", "2026-12-24")];
+  await sync();
+  await pool.query("TRUNCATE breeze_links");
+  await pool.query(SCHEMA_SQL);
+  assert.equal(await count("breeze_links"), 1);
 });

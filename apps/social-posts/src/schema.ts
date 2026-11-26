@@ -334,6 +334,24 @@ CREATE TABLE IF NOT EXISTS checklist_rules (
   active       boolean NOT NULL DEFAULT true,
   created_at   timestamptz NOT NULL DEFAULT now()
 );
+-- One row per Breeze copy of an event: the same Breeze event on several calendars is one Social Posts event.
+-- events.breeze_* keep the first copy's ids so existing code keeps working.
+CREATE TABLE IF NOT EXISTS breeze_links (
+  id                 text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  event_id           text NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  breeze_event_id    text NOT NULL,
+  breeze_instance_id text,
+  calendar_id        text NOT NULL,
+  created_at         timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS breeze_links_instance_idx ON breeze_links (breeze_instance_id) WHERE breeze_instance_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS breeze_links_series_idx ON breeze_links (breeze_event_id) WHERE breeze_instance_id IS NULL;
+CREATE INDEX IF NOT EXISTS breeze_links_event_idx ON breeze_links (event_id);
+ALTER TABLE breeze_series ADD COLUMN IF NOT EXISTS merged_into text; -- the primary series' breeze_event_id; NULL for a primary
+INSERT INTO breeze_links (event_id, breeze_event_id, breeze_instance_id, calendar_id)
+  SELECT id, breeze_event_id, breeze_instance_id, breeze_calendar_id FROM events
+   WHERE source = 'breeze' AND breeze_event_id IS NOT NULL AND breeze_calendar_id IS NOT NULL
+  ON CONFLICT DO NOTHING;
 -- A graphic can belong to an event directly instead of a post: exactly one owner.
 ALTER TABLE media_assets ALTER COLUMN content_item_id DROP NOT NULL;
 ALTER TABLE media_assets ADD COLUMN IF NOT EXISTS event_id text REFERENCES events(id) ON DELETE CASCADE;

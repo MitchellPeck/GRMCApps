@@ -9,7 +9,7 @@ import { applyChecklist, createRule, deleteRule, listRules, updateRule } from ".
 const pool = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
 
 before(async () => {
-  await pool.query("DROP TABLE IF EXISTS gn_letter_reviews, gn_reminders, gn_pieces, gn_issues, gn_section_owners, gn_sections, gn_contributors, metricool_links, media_assets, content_items, recurrences, events, breeze_series, checklist_rules");
+  await pool.query("DROP TABLE IF EXISTS gn_letter_reviews, gn_reminders, gn_pieces, gn_issues, gn_section_owners, gn_sections, gn_contributors, metricool_links, media_assets, content_items, recurrences, events, breeze_links, breeze_series, checklist_rules");
   await pool.query(SCHEMA_SQL);
 });
 
@@ -26,7 +26,8 @@ const rule = (o: Partial<ChecklistRule>): ChecklistRule => ({
   id: "r" + n++, match: "name", calendarId: null, namePattern: "x", effect: "add", repeatMode: null,
   items: [], position: 0, active: true, ...o,
 });
-const EV = { calendarId: "cal1", name: "Summer VBS (Kids) week" };
+const EV = { calendarIds: ["cal1"], name: "Summer VBS (Kids) week" };
+const p = (title: string): ChecklistItem => ({ kind: "post", title, platforms: ["instagram"], daysBefore: 1 });
 const titles = (items: ChecklistItem[]) => items.map((i) => (i.kind === "post" ? i.title : "g:" + i.graphicType));
 
 test("calendar rule then name rules in position order; add appends, replace replaces", () => {
@@ -54,8 +55,8 @@ test("name pattern is literal", () => {
   const rules = [rule({ namePattern: "VBS (Kids)", items: [post("A")] })];
   assert.equal(resolveChecklist(rules, EV).items.length, 1);
   const dot = [rule({ namePattern: "St. Mark's", items: [post("A")] })];
-  assert.equal(resolveChecklist(dot, { calendarId: "c", name: "StX Mark's" }).items.length, 0);
-  assert.equal(resolveChecklist(dot, { calendarId: "c", name: "st. mark's picnic" }).items.length, 1);
+  assert.equal(resolveChecklist(dot, { calendarIds: ["c"], name: "StX Mark's" }).items.length, 0);
+  assert.equal(resolveChecklist(dot, { calendarIds: ["c"], name: "st. mark's picnic" }).items.length, 1);
 });
 
 test("forPost is rewritten to the resolved list", () => {
@@ -189,4 +190,11 @@ test("a rule-made post with its graphic attached is not a no-media gap", async (
   assert.ok(noMedia, "control: the post with no graphic should produce a no-media gap");
   assert.ok(noMedia.ids.includes(without.id));
   assert.ok(!noMedia.ids.includes(withG.id));
+});
+
+test("calendar rules for every linked calendar apply, in the given order", () => {
+  const rules = [rule({ match: "calendar", calendarId: "b", items: [p("B")] }),
+                 rule({ match: "calendar", calendarId: "a", items: [p("A")] })];
+  assert.deepEqual(titles(resolveChecklist(rules, { calendarIds: ["a", "b"], name: "x" }).items), ["A", "B"]);
+  assert.deepEqual(titles(resolveChecklist(rules, { calendarIds: ["b"], name: "x" }).items), ["B"]);
 });

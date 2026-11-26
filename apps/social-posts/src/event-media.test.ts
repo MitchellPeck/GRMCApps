@@ -12,7 +12,7 @@ const pool = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
 
 before(async () => {
   // Same rebuild as pipeline.test.ts, plus the Breeze and checklist tables.
-  await pool.query("DROP TABLE IF EXISTS gn_letter_reviews, gn_reminders, gn_pieces, gn_issues, gn_section_owners, gn_sections, gn_contributors, metricool_links, media_assets, content_items, recurrences, events, breeze_series, checklist_rules");
+  await pool.query("DROP TABLE IF EXISTS gn_letter_reviews, gn_reminders, gn_pieces, gn_issues, gn_section_owners, gn_sections, gn_contributors, metricool_links, media_assets, content_items, recurrences, events, breeze_links, breeze_series, checklist_rules");
   await pool.query(SCHEMA_SQL);
 });
 

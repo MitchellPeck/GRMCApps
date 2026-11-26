@@ -17,7 +17,7 @@ const fakeFetch = (async (url: any, init: any) => {
 }) as unknown as typeof fetch;
 
 before(async () => {
-  await pool.query("DROP TABLE IF EXISTS gn_letter_reviews, gn_reminders, gn_pieces, gn_issues, gn_section_owners, gn_sections, gn_contributors, metricool_links, media_assets, content_items, recurrences, events, breeze_series, checklist_rules");
+  await pool.query("DROP TABLE IF EXISTS gn_letter_reviews, gn_reminders, gn_pieces, gn_issues, gn_section_owners, gn_sections, gn_contributors, metricool_links, media_assets, content_items, recurrences, events, breeze_links, breeze_series, checklist_rules");
   await pool.query(SCHEMA_SQL);
   app = Fastify();
   await app.register(pipelineRoutes, { db: pool, fetchFn: fakeFetch });
